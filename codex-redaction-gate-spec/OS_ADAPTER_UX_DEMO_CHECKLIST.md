@@ -57,7 +57,7 @@ Manual steps:
 
 1. Start `--os-demo-local-target`.
 2. Start `--os-demo-hotkey` in another console.
-3. Focus the demo composer and trigger Ctrl+Shift+F9.
+3. Focus the demo composer and trigger Ctrl+Enter.
 4. Verify dry-run shows the overlay/status and the composer text is unchanged.
 5. Stop dry-run, start `--os-demo-hotkey-apply`, repeat the hotkey and confirm.
 6. Verify the demo composer contains only `sanitized_text` and nothing is submitted.
@@ -72,9 +72,9 @@ Try a real Codex/ChatGPT app only after the disposable target works:
 3. Run `--os-composer-diagnostic-delay 5` from the terminal, immediately switch back to the Codex/ChatGPT composer, and wait for the diagnostic to finish.
 4. Continue only if it reports `status: supported_composer`.
 5. Start `--os-demo-hotkey`.
-6. Trigger Ctrl+Shift+F9 and verify dry-run does not modify selection, clipboard, focus or composer text.
+6. Trigger Ctrl+Enter and verify dry-run does not modify selection, clipboard, focus or composer text.
 7. Stop dry-run, start `--os-demo-hotkey-apply`.
-8. Trigger Ctrl+Shift+F9, confirm, and verify the composer contains exactly `sanitized_text`. For Electron composers without writable `ValuePattern`, this write-back can use verified keyboard paste after confirmation.
+8. Trigger Ctrl+Enter, confirm, and verify the composer contains exactly `sanitized_text`. For Electron composers without writable `ValuePattern`, this write-back can use verified keyboard paste after confirmation.
 9. Verify cancel, block, focus loss, stale element, write failure and verification mismatch leave the app unsubmitted.
 
 Record app/channel/version evidence without prompt text:

@@ -162,7 +162,7 @@ internal static class TrayMenuContent
         Environment.NewLine,
         "Local rule management commands:",
         "--hotkey-show",
-        "--hotkey-set \"Ctrl+Shift+F9\"",
+        "--hotkey-set \"Ctrl+Enter\"",
         "--send-mode-show",
         "--send-mode-enable",
         "--send-mode-disable",

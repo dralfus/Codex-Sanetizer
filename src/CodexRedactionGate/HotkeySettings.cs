@@ -30,7 +30,7 @@ internal static class HotkeySettingsStore
 {
     private const string SettingsFileName = "tray-settings.json";
 
-    public static HotkeyDefinition DefaultProtectionHotkey { get; } = HotkeyParser.Parse("Ctrl+Shift+F9").Hotkey!;
+    public static HotkeyDefinition DefaultProtectionHotkey { get; } = HotkeyParser.Parse("Ctrl+Enter").Hotkey!;
 
     public static HotkeyDefinition InvalidConfiguredHotkey { get; } = new(
         new HotkeyBinding("windows-tray-invalid", "configured_invalid", "windows"),
@@ -208,7 +208,8 @@ internal static class HotkeyParser
 
     private static string NormalizeKey(string value)
     {
-        return value.Trim().ToUpperInvariant();
+        var normalized = value.Trim().ToUpperInvariant();
+        return normalized == "RETURN" ? "ENTER" : normalized;
     }
 
     private static bool TryParseVirtualKey(string key, out uint virtualKey)
@@ -225,6 +226,12 @@ internal static class HotkeyParser
         if (key.Length == 1 && key[0] is >= 'A' and <= 'Z')
         {
             virtualKey = key[0];
+            return true;
+        }
+
+        if (key is "ENTER" or "RETURN")
+        {
+            virtualKey = 0x0D;
             return true;
         }
 
@@ -255,7 +262,12 @@ internal static class HotkeyParser
             parts.Add("Win");
         }
 
-        parts.Add(key);
+        parts.Add(FormatKeyDisplayText(key));
         return string.Join("+", parts);
+    }
+
+    private static string FormatKeyDisplayText(string key)
+    {
+        return key == "ENTER" ? "Enter" : key;
     }
 }

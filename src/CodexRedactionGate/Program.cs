@@ -1248,7 +1248,7 @@ public static class Program
         Console.WriteLine("  --dictionary-import terms.csv");
         Console.WriteLine("  --dictionary-remove id [id]...");
         Console.WriteLine("  --hotkey-show");
-        Console.WriteLine("  --hotkey-set \"Ctrl+Shift+F9\"");
+        Console.WriteLine("  --hotkey-set \"Ctrl+Enter\"");
         Console.WriteLine("  --send-mode-show");
         Console.WriteLine("  --send-mode-enable");
         Console.WriteLine("  --send-mode-disable");

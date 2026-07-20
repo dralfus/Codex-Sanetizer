@@ -92,7 +92,7 @@ Configure hotkey and optional autostart:
 
 ```powershell
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --hotkey-show
-dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --hotkey-set "Ctrl+Shift+F9"
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --hotkey-set "Ctrl+Enter"
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --autostart-enable
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --autostart-disable
 ```

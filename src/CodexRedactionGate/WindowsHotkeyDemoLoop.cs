@@ -9,11 +9,10 @@ public static class WindowsHotkeyDemoLoop
     private const int HotkeyId = 0x5247;
     private const int WmHotkey = 0x0312;
     private const uint ModControl = 0x0002;
-    private const uint ModShift = 0x0004;
-    private const uint VkF9 = 0x78;
+    private const uint VkEnter = 0x0D;
 
     internal static string LiveAdapterKind => "verified-composer";
-    internal static string DefaultHotkeyDisplayText => "Ctrl+Shift+F9";
+    internal static string DefaultHotkeyDisplayText => "Ctrl+Enter";
 
     public static int Run(ISanitizer sanitizer, WindowsHotkeyDemoMode mode)
     {
@@ -35,7 +34,7 @@ public static class WindowsHotkeyDemoLoop
             }
         }
 
-        if (!NativeMethods.RegisterHotKey(IntPtr.Zero, HotkeyId, ModControl | ModShift, VkF9))
+        if (!NativeMethods.RegisterHotKey(IntPtr.Zero, HotkeyId, ModControl, VkEnter))
         {
             Console.WriteLine("status: hotkey_register_failed");
             Console.WriteLine($"win32_error: {Marshal.GetLastPInvokeError()}");

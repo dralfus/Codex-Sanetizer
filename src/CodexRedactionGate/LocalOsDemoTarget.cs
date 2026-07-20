@@ -49,7 +49,7 @@ public static class LocalOsDemoTarget
                 Height = 32,
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(8, 0, 8, 0),
-                Text = "Focus this composer, then trigger Ctrl+Shift+F9 from a separate hotkey loop."
+                Text = "Focus this composer, then trigger Ctrl+Enter from a separate hotkey loop."
             };
 
             Controls.Add(composer);

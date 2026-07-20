@@ -341,7 +341,7 @@ public partial class SanitizerTests
     public void WindowsHotkeyDemoLoop_UsesVerifiedComposerAdapterByDefault()
     {
         Assert.That(WindowsHotkeyDemoLoop.LiveAdapterKind, Is.EqualTo("verified-composer"));
-        Assert.That(WindowsHotkeyDemoLoop.DefaultHotkeyDisplayText, Is.EqualTo("Ctrl+Shift+F9"));
+        Assert.That(WindowsHotkeyDemoLoop.DefaultHotkeyDisplayText, Is.EqualTo("Ctrl+Enter"));
     }
 
     [Test]

@@ -59,11 +59,11 @@ public static class ProductSmokeRunner
             && Directory.Exists(layout.AuditDirectory)
             && Directory.Exists(layout.SettingsDirectory);
 
-        var hotkey = HotkeySettingsStore.SaveProtectionHotkey(layout, "Ctrl+Shift+F9");
+        var hotkey = HotkeySettingsStore.SaveProtectionHotkey(layout, "Ctrl+Enter");
         var loadedHotkey = HotkeySettingsStore.Load(layout);
         var hotkeyPassed = hotkey.Succeeded
             && loadedHotkey.Usable
-            && loadedHotkey.Settings.ProtectionHotkey.Binding.DisplayText == "Ctrl+Shift+F9";
+            && loadedHotkey.Settings.ProtectionHotkey.Binding.DisplayText == "Ctrl+Enter";
 
         var dictionary = new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout));
         var dictionaryResult = dictionary.Add("customer", "Product Smoke Customer", null);

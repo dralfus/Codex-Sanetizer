@@ -1252,7 +1252,7 @@ public partial class SanitizerTests
         Assert.That(host.Started, Is.False);
         Assert.That(runningState.Enabled, Is.True);
         Assert.That(runningState.Mode, Is.EqualTo("ApplyOnly"));
-        Assert.That(runningState.Hotkey, Is.EqualTo("Ctrl+Shift+F9"));
+        Assert.That(runningState.Hotkey, Is.EqualTo("Ctrl+Enter"));
         Assert.That(runningState.LastStatus, Is.EqualTo("enabled"));
         Assert.That(stoppedState.Enabled, Is.False);
         Assert.That(stoppedState.LastStatus, Is.EqualTo("disabled"));
@@ -1261,7 +1261,7 @@ public partial class SanitizerTests
     [Test]
     public void TrayProtectionController_RegistrationFailureLeavesProtectionDisabledWithRawFreeCode()
     {
-        var host = new FailingTrayHotkeyHost("Ctrl+Shift+F9", "hotkey_register_failed:1409");
+        var host = new FailingTrayHotkeyHost("Ctrl+Enter", "hotkey_register_failed:1409");
         var controller = new TrayProtectionController(host, () => throw new InvalidOperationException("Should not run."));
 
         var started = controller.Start();
@@ -1269,9 +1269,9 @@ public partial class SanitizerTests
 
         Assert.That(started, Is.False);
         Assert.That(controller.State.Enabled, Is.False);
-        Assert.That(statusText, Does.Contain("hotkey=Ctrl+Shift+F9"));
+        Assert.That(statusText, Does.Contain("hotkey=Ctrl+Enter"));
         Assert.That(statusText, Does.Contain("last=hotkey_register_failed:1409"));
-        Assert.That(TrayStatusFormatter.FormatStartupError(controller.State), Does.Contain("hotkey=Ctrl+Shift+F9"));
+        Assert.That(TrayStatusFormatter.FormatStartupError(controller.State), Does.Contain("hotkey=Ctrl+Enter"));
         Assert.That(TrayStatusFormatter.FormatStartupError(controller.State), Does.Contain("error=hotkey_register_failed:1409"));
         Assert.That(statusText, Does.Not.Contain("ACME Banking"));
         Assert.That(statusText, Does.Not.Contain("SENSITIVE_MARKER"));
@@ -1348,7 +1348,7 @@ public partial class SanitizerTests
         Assert.That(text, Does.Contain("--product-smoke"));
         Assert.That(text, Does.Contain("--os-composer-diagnostic"));
         Assert.That(text, Does.Contain("--hotkey-show"));
-        Assert.That(text, Does.Contain("--hotkey-set \"Ctrl+Shift+F9\""));
+        Assert.That(text, Does.Contain("--hotkey-set \"Ctrl+Enter\""));
         Assert.That(text, Does.Contain("--send-mode-show"));
         Assert.That(text, Does.Contain("--send-mode-enable"));
         Assert.That(text, Does.Contain("--send-mode-disable"));
@@ -1378,7 +1378,7 @@ public partial class SanitizerTests
             TrayStatusFormatter.FormatMenuStatus(new TrayProtectionState(
                 Enabled: true,
                 Mode: "ApplyOnly",
-                Hotkey: "Ctrl+Shift+F9",
+                Hotkey: "Ctrl+Enter",
                 LastStatus: OsInteractionStatusIds.Applied,
                 LastDecision: "confirm",
                 LastReplacementCount: 1,
@@ -1432,7 +1432,7 @@ public partial class SanitizerTests
     {
         var hotkey = HotkeySettingsStore.DefaultProtectionHotkey;
 
-        Assert.That(hotkey.Binding.DisplayText, Is.EqualTo("Ctrl+Shift+F9"));
+        Assert.That(hotkey.Binding.DisplayText, Is.EqualTo("Ctrl+Enter"));
         Assert.That(hotkey.Binding.DisplayText, Does.Not.Contain("F12"));
         Assert.That(hotkey.Modifiers, Is.Not.Zero);
         Assert.That(hotkey.VirtualKey, Is.Not.Zero);
@@ -1442,6 +1442,9 @@ public partial class SanitizerTests
     public void HotkeyParser_RejectsInvalidAndReservedCombinations()
     {
         Assert.That(HotkeyParser.Parse("F9").Code, Is.EqualTo("hotkey_invalid_missing_modifier"));
+        Assert.That(HotkeyParser.Parse("Enter").Code, Is.EqualTo("hotkey_invalid_missing_modifier"));
+        Assert.That(HotkeyParser.Parse("Ctrl+Enter").Hotkey!.Binding.DisplayText, Is.EqualTo("Ctrl+Enter"));
+        Assert.That(HotkeyParser.Parse("Ctrl+Return").Hotkey!.Binding.DisplayText, Is.EqualTo("Ctrl+Enter"));
         Assert.That(HotkeyParser.Parse("Ctrl+Shift+F12").Code, Is.EqualTo("hotkey_reserved"));
         Assert.That(HotkeyParser.Parse("Win+F9").Code, Is.EqualTo("hotkey_reserved_windows_modifier"));
         Assert.That(HotkeyParser.Parse("Ctrl+Shift+Mouse1").Code, Is.EqualTo("hotkey_invalid_key"));
@@ -4127,7 +4130,7 @@ public partial class SanitizerTests
     {
         private Action? _onTriggered;
 
-        public HotkeyBinding Binding { get; } = new("test-hotkey", "Ctrl+Shift+F9", "tests");
+        public HotkeyBinding Binding { get; } = new("test-hotkey", "Ctrl+Enter", "tests");
 
         public string? LastErrorCode { get; private set; }
 
@@ -5095,7 +5098,7 @@ public class CliTests
             Assert.That(stderr, Is.Empty);
             Assert.That(stdout, Does.Contain("status: hotkey_reserved"));
             Assert.That(stdout, Does.Not.Contain("Ctrl+Shift+F12"));
-            Assert.That(loaded.ProtectionHotkey.Binding.DisplayText, Is.EqualTo("Ctrl+Shift+F9"));
+            Assert.That(loaded.ProtectionHotkey.Binding.DisplayText, Is.EqualTo("Ctrl+Enter"));
         }
         finally
         {
@@ -5125,7 +5128,7 @@ public class CliTests
             Assert.That(stderr, Is.Empty);
             Assert.That(stdout, Does.Contain("status: hotkey_reserved"));
             Assert.That(stdout, Does.Contain("hotkey: configured_invalid"));
-            Assert.That(stdout, Does.Not.Contain("Ctrl+Shift+F9"));
+            Assert.That(stdout, Does.Not.Contain("Ctrl+Enter"));
         }
         finally
         {
@@ -5419,7 +5422,7 @@ public class CliTests
         Assert.That(stdout, Does.Contain("--restore-view"));
         Assert.That(stdout, Does.Contain("--policy-test \"text\" [--show-sanitized]"));
         Assert.That(stdout, Does.Contain("--hotkey-show"));
-        Assert.That(stdout, Does.Contain("--hotkey-set \"Ctrl+Shift+F9\""));
+        Assert.That(stdout, Does.Contain("--hotkey-set \"Ctrl+Enter\""));
         Assert.That(stdout, Does.Contain("--send-mode-show"));
         Assert.That(stdout, Does.Contain("--send-mode-enable"));
         Assert.That(stdout, Does.Contain("--send-mode-disable"));
