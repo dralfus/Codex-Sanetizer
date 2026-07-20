@@ -13,6 +13,8 @@ Guard mode is the first enforceable safety slice. The MVP user experience requir
 
 For the Windows Codex/ChatGPT desktop app workflow, the primary product UX is OS-level native submit interception. The user keeps typing in the normal app composer and presses the same Send shortcut configured in the selected AI app. Code Sanitizer intercepts that submit input before cloud submission, suppresses the original send, sanitizes locally, and then either replays the verified submit binding for safe prompts or applies/sends only `sanitized_text` after confirmation. A dedicated sanitizer hotkey remains a secondary manual/diagnostic feature, not the main safety mechanism.
 
+The resident application must be installed and launched as a normal Windows tray app. The user should not need a console window for protection. Exiting, stopping protection, or unloading the tray app requires explicit confirmation because it removes the local guard from selected AI apps.
+
 ## Verified Codex Hook Behavior
 
 As of 2026-07-15, the published Codex hooks documentation says `UserPromptSubmit` receives a `prompt` field containing the user prompt that is about to be sent. The same documentation describes adding extra developer context or blocking the prompt with `decision: "block"` for this event. It does not describe `updatedInput` or prompt rewriting for `UserPromptSubmit`; documented rewriting is shown for `PreToolUse`, not for `UserPromptSubmit`.
@@ -226,6 +228,8 @@ If the configured AI app cannot be matched or its submit binding cannot be disco
 As of 2026-07-20, no stable local configuration source is confirmed for the prompt submit shortcut in Windows Codex/ChatGPT Desktop. The product must therefore treat `user_verified` binding capture as the release path. Config discovery can be added only when the source is documented by the vendor or proven empirically across app updates.
 
 Binding verification must be local and non-cloud. Onboarding records the submit gesture and newline gesture against the selected AI surface, verifies that the focused element still matches the known composer shape, and stores raw-free evidence. If submit and newline cannot be separated, the profile remains `binding_unknown` or `surface_unverified`.
+
+The protected trigger shown in the product UI is the selected AI app's verified `submit_binding`. It must not be confused with the secondary manual scan/apply hotkey. If the selected AI app uses `Enter` for Send and `Ctrl+Enter` for newline, native interception protects `Enter` in that verified composer and passes `Ctrl+Enter` through.
 
 ## Emergency Escape And Enterprise Enforcement
 

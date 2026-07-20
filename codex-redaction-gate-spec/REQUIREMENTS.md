@@ -13,6 +13,8 @@
 - The system must discover the selected AI app's configured submit binding from local app configuration when available, or require explicit user binding selection/verification when it is not available.
 - The system must not silently assume `Enter` or any other hardcoded shortcut as the active submit binding.
 - The system must suppress the original submit input while local sanitization is running for a selected protected surface.
+- The primary Code Sanitizer trigger for protected AI apps must be the selected app's verified submit binding, not a separate global CS hotkey.
+- If Codex/ChatGPT uses `Enter` to send and `Ctrl+Enter` for newline, Code Sanitizer must intercept `Enter` only in the verified selected composer and must pass `Ctrl+Enter` through as newline.
 - The system should integrate with Codex hooks when available.
 - The system must support an integration strategy that can replace the submitted prompt, not only block it.
 - The system must inspect text attachments, large pasted file contents and file snippets when the adapter can access their text before cloud submission.
@@ -66,6 +68,7 @@ The detector must identify at least:
 - The confirmation screen must not require the user to manually run commands.
 - Confirming a sanitized prompt must submit only `sanitized_text`, never the original prompt.
 - Hotkey-triggered scan/apply may exist as a secondary manual feature, but it must not be the default protection claim.
+- Any secondary manual CS hotkey must be labeled as manual scan/apply and must not be shown as proof that native submit interception is protected.
 - The system should avoid showing full original values in the confirmation by default.
 - The system may provide a reveal control for local inspection, protected by an explicit action.
 
@@ -125,7 +128,10 @@ The detector must identify at least:
 ## Usability Requirements
 
 - Normal operation must not require manual script execution.
+- Normal operation must use an installed resident tray application, launched by the installer and optionally configured for user-scope autostart.
 - Normal operation must not require remembering a separate sanitizer hotkey before pressing Send.
+- The tray app must require explicit confirmation before stop protection, exit, unload, or any action that disables the resident protection process.
+- The unload confirmation must clearly state that selected AI apps will no longer be protected while Code Sanitizer is stopped.
 - The user should be able to keep the system always on.
 - The confirmation flow should be short and predictable.
 - False positives must be tunable through allowlists.
@@ -144,6 +150,8 @@ The detector must identify at least:
 - Confirming a sanitized prompt sends the sanitized prompt and does not send the original prompt.
 - Pressing the configured Send shortcut in a selected protected AI app does not send raw sensitive data; Code Sanitizer intercepts before cloud submission.
 - Pressing the same shortcut in an unselected application is not intercepted by Code Sanitizer.
+- The tray status shows the selected AI app's protected Send binding and separately shows any secondary manual scan/apply hotkey.
+- Attempting to exit the resident tray app shows a confirmation prompt and keeps protection running if the user cancels.
 - If the selected AI app's submit binding cannot be discovered or verified, the product does not show `Protected`.
 - Audit logs show that a URL and secret were detected without storing the raw URL or secret.
 - If the redaction engine crashes, the original prompt is not sent.

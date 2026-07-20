@@ -10,7 +10,7 @@ Manual cleanup with a separate script before every prompt is not acceptable. It 
 
 Build a local Redaction Gate for Codex: a system layer before prompt submission that intercepts input, detects sensitive data, replaces detected values with stable pseudonyms, shows a diff/confirmation step, submits only sanitized text, and later offers local restoration of real values.
 
-The MVP is a Windows-first local .NET application/adapter. The main user workflow is not manual copy/paste and not a separate sanitizer hotkey. It is native submit interception for selected AI apps: the user writes in Codex/ChatGPT Desktop, presses that app's configured Send shortcut, Code Sanitizer intercepts the submit before cloud submission, and the adapter sends only a safe original prompt or approved `sanitized_text`.
+The MVP is a Windows-first local .NET application/adapter installed as a resident desktop app. The main user workflow is not manual copy/paste and not a separate sanitizer hotkey. It is native submit interception for selected AI apps: the user writes in Codex/ChatGPT Desktop, presses that app's configured Send shortcut, Code Sanitizer intercepts the submit before cloud submission, and the adapter sends only a safe original prompt or approved `sanitized_text`.
 
 The mapping table must be user-global across projects. The same real URL, domain, IP, email, product name, or customer name should always receive the same pseudonym. High-sensitivity secrets such as passwords, tokens, and keys are non-restorable by default: they are replaced with `SECRET_REDACTED` or stored only after an explicit temporary user approval.
 
@@ -54,6 +54,9 @@ The mapping table must be user-global across projects. The same real URL, domain
 36. As a Codex/ChatGPT Desktop user, I want a visible emergency disable action, so that I can recover local input if interception misbehaves without sending a raw prompt.
 37. As a Codex/ChatGPT Desktop user, I want a clear warning when my installed app version no longer matches a verified protected profile, so that I know protection is not active.
 38. As an enterprise admin, I want protected AI profiles to be lockable by policy, so that managed users cannot silently downgrade to hotkey-only protection.
+39. As a Windows user, I want Code Sanitizer to install and launch as a normal resident tray application, so that protection is running without manual `dotnet run` commands.
+40. As a Windows user, I want exiting or unloading Code Sanitizer to require explicit confirmation, so that I do not accidentally turn protection off.
+41. As a Codex/ChatGPT Desktop user, I want Code Sanitizer's primary trigger to be the same Send shortcut I use in the selected AI app, so that pressing the normal Codex/ChatGPT send key is what activates protection.
 
 ## Implementation Decisions
 
@@ -71,7 +74,11 @@ The mapping table must be user-global across projects. The same real URL, domain
   - Gateway/adapter mode: a local composer/proxy/desktop layer owns the submit action and can send sanitized text after user confirmation.
 - Guard mode is acceptable as a baseline but does not fully satisfy the desired UX unless it can programmatically replace the submitted prompt.
 - Native submit interception for selected Windows Codex/ChatGPT Desktop surfaces is the primary gateway/adapter path. A minimal confirm-and-send adapter is part of MVP because it implements the desired `Confirm sanitized prompt` flow. A polished full composer is later.
+- The product must ship as a Windows installer that installs the resident tray app, can launch it at the end of setup, and can configure user-scope autostart. Normal protected operation must not require a console or `dotnet run`.
+- Stopping protection, exiting the tray app, or unloading the resident process must require an explicit confirmation dialog that names the consequence: selected AI apps will no longer be protected. Enterprise policy may block unload or require administrator approval.
 - Hotkey-triggered scan/apply is a secondary diagnostic/manual feature. It must not be presented as the main protection path.
+- In native protected mode, Code Sanitizer's effective trigger is the selected AI app's verified `submit_binding`. The tray/status text must show this as the protected Send binding, not as a separate CS hotkey. For example, if Codex sends with `Enter` and inserts a newline with `Ctrl+Enter`, Code Sanitizer must intercept `Enter` only in the verified Codex composer and must let `Ctrl+Enter` pass through.
+- Any separate manual CS hotkey must be clearly labeled as `manual scan/apply`, must not be used as evidence that native submit protection is active, and should avoid conflicting with the selected AI app's newline binding.
 - The adapter must maintain enabled AI surface profiles and must protect only explicitly selected AI apps.
 - The adapter must discover the selected AI app's submit binding from local app configuration when available. If not available, onboarding must ask the user to choose or record the binding and verify it.
 - The adapter must not silently assume that `Enter` is the active Send shortcut.
@@ -101,6 +108,8 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Gateway/adapter integration tests should simulate the full lifecycle: input -> sanitize -> confirm -> send sanitized -> receive sanitized answer -> restore locally.
 - Submit interception tests should simulate selected and unselected AI surfaces, matching and non-matching submit bindings, input suppression, sanitizer allow/confirm/block and fail-closed behavior.
 - Binding verifier tests should cover submit vs newline separation, unknown binding status, IME/dead-key pass-through, and user-verified binding persistence without cloud submission.
+- Installer/tray tests should cover install, launch-after-install, user-scope autostart, resident startup status, explicit unload confirmation and local data retention.
+- Trigger wording tests should prove the product reports the protected AI app Send binding separately from any secondary manual scan/apply hotkey.
 - Emergency escape tests should cover temporary disable, tray status changes, hook watchdog downgrade, and raw-free audit events.
 - Enterprise enforcement tests should cover locked profiles, forbidden hotkey-only degradation, and configured fail behavior for unverified surfaces.
 - Compatibility tests should cover app/package version mismatch, UIA composer mismatch, and `surface_unverified` diagnostics without raw prompt capture.
