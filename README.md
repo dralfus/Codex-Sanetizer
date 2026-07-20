@@ -2,7 +2,7 @@
 
 Codex Redaction Gate is a Windows-first local privacy guard for Codex and ChatGPT Desktop workflows. It detects sensitive data before cloud submission, replaces local identifiers with stable pseudonyms, keeps the mapping vault on the user's machine, and provides local restoration for sanitized responses.
 
-The current product slice focuses on the Windows Codex/ChatGPT desktop composer. Browser, Chrome, PWA, whole-window capture, and unsupported surfaces fail closed by design.
+The current product slice focuses on the Windows Codex/ChatGPT desktop composer. The target product workflow is native submit interception for selected AI apps: the user presses the AI app's normal Send shortcut, Code Sanitizer intercepts it before cloud submission, and only safe or approved sanitized text is sent. Hotkeys remain secondary diagnostics/manual features. Browser, Chrome, PWA, whole-window capture, and unsupported surfaces fail closed by design.
 
 ## What It Protects
 
@@ -88,7 +88,7 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --aud
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --audit-verify
 ```
 
-Configure hotkey and optional autostart:
+Configure the secondary hotkey and optional autostart:
 
 ```powershell
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --hotkey-show
@@ -100,6 +100,8 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --aut
 ## Windows Desktop Flow
 
 Supported v1 targets are Codex Desktop and ChatGPT Desktop on Windows.
+
+The production direction is selected-AI native submit interception, not hotkey-first operation. A surface is `protected` only when the selected AI app, focused composer and active submit binding are verified. If submit binding discovery is unavailable, the app must show `binding_unknown` or `degraded_hotkey_only` instead of claiming protection.
 
 Recommended validation sequence:
 

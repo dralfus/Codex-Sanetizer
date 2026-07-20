@@ -7,6 +7,12 @@
 - The system must inspect user input before it is sent to Codex/OpenAI.
 - The system must support a global mode that applies across projects.
 - The system must prevent sending the original prompt when sensitive data is detected and has not been approved in sanitized form.
+- The primary Windows desktop workflow must intercept the selected AI app's native Send shortcut before cloud submission.
+- The system must let the user select which AI app surfaces are protected.
+- The system must protect only selected and verified AI app surfaces, not arbitrary applications.
+- The system must discover the selected AI app's configured submit binding from local app configuration when available, or require explicit user binding selection/verification when it is not available.
+- The system must not silently assume `Enter` or any other hardcoded shortcut as the active submit binding.
+- The system must suppress the original submit input while local sanitization is running for a selected protected surface.
 - The system should integrate with Codex hooks when available.
 - The system must support an integration strategy that can replace the submitted prompt, not only block it.
 - The system must inspect text attachments, large pasted file contents and file snippets when the adapter can access their text before cloud submission.
@@ -59,6 +65,7 @@ The detector must identify at least:
   - action buttons: confirm sanitized prompt, cancel, edit sanitized.
 - The confirmation screen must not require the user to manually run commands.
 - Confirming a sanitized prompt must submit only `sanitized_text`, never the original prompt.
+- Hotkey-triggered scan/apply may exist as a secondary manual feature, but it must not be the default protection claim.
 - The system should avoid showing full original values in the confirmation by default.
 - The system may provide a reveal control for local inspection, protected by an explicit action.
 
@@ -112,10 +119,13 @@ The detector must identify at least:
 - The system must protect against accidental leakage through crash dumps where practical.
 - The system must distinguish reversible identifiers from non-reversible secrets.
 - The system must make bypass visible when operating in guard mode.
+- The system must make `degraded_hotkey_only`, `binding_unknown` and `surface_unverified` states visible when native submit interception is unavailable.
+- If native submit interception fails after a protected surface and submit binding have matched, the system must fail closed and send nothing.
 
 ## Usability Requirements
 
 - Normal operation must not require manual script execution.
+- Normal operation must not require remembering a separate sanitizer hotkey before pressing Send.
 - The user should be able to keep the system always on.
 - The confirmation flow should be short and predictable.
 - False positives must be tunable through allowlists.
@@ -132,5 +142,8 @@ The detector must identify at least:
 - A text attachment containing an API key or internal URL is blocked or sanitized before cloud submission.
 - An unsupported binary attachment is blocked or explicitly warned before cloud submission, not silently allowed.
 - Confirming a sanitized prompt sends the sanitized prompt and does not send the original prompt.
+- Pressing the configured Send shortcut in a selected protected AI app does not send raw sensitive data; Code Sanitizer intercepts before cloud submission.
+- Pressing the same shortcut in an unselected application is not intercepted by Code Sanitizer.
+- If the selected AI app's submit binding cannot be discovered or verified, the product does not show `Protected`.
 - Audit logs show that a URL and secret were detected without storing the raw URL or secret.
 - If the redaction engine crashes, the original prompt is not sent.

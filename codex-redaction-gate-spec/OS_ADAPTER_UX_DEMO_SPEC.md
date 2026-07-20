@@ -8,14 +8,16 @@ The desired demo must show the sanitizer in the user's normal writing surface, w
 
 ## Solution
 
-Build an OS-level interaction adapter demo. For the first demo, the target surface is the Windows Codex/ChatGPT desktop app. The user writes in the existing app composer, triggers the sanitizer through a dedicated hotkey or guarded submit action, sees a local confirmation overlay, and can apply or send only the sanitized prompt.
+Build an OS-level interaction adapter demo that grows into the production workflow. For the first production-targeted path, the target surface is the Windows Codex/ChatGPT desktop app. The user writes in the existing app composer and presses that app's configured Send shortcut. Code Sanitizer intercepts the submit input for the selected AI surface, suppresses the raw submit, shows a local confirmation overlay when needed, and sends only the original safe prompt or approved `sanitized_text`.
+
+A dedicated sanitizer hotkey may still exist for manual scan/apply, diagnostics and recovery, but it is no longer the primary workflow.
 
 The core architecture must be adapter-based so the same sanitizer can later support other AI tools, Linux desktop environments, and CLI wrappers without changing the sanitizer pipeline.
 
 ## User Stories
 
 1. As a Codex/ChatGPT desktop user, I want to type in the normal app composer, so that the sanitizer does not force me into a separate prompt editor.
-2. As a Codex/ChatGPT desktop user, I want a dedicated hotkey to run the sanitizer, so that the first demo does not depend on fragile hidden app hooks.
+2. As a Codex/ChatGPT desktop user, I want Code Sanitizer to intercept my normal Send shortcut, so that I cannot forget to run a separate sanitizer hotkey.
 3. As a Codex/ChatGPT desktop user, I want the adapter to read the active composer text, so that I can review the exact prompt I was about to submit.
 4. As a Codex/ChatGPT desktop user, I want a local overlay when sensitive data is detected, so that I can inspect the sanitized prompt before anything leaves the machine.
 5. As a Codex/ChatGPT desktop user, I want replacements highlighted in the sanitized prompt, so that I can understand what changed.
@@ -34,15 +36,21 @@ The core architecture must be adapter-based so the same sanitizer can later supp
 18. As a future Linux user, I want the core interaction contracts to be platform-neutral, so that Linux support does not require a sanitizer rewrite.
 19. As a future CLI user, I want wrapper-mode integration to use the same interaction flow, so that `safe-codex` or `safe-claude` can sanitize before invoking a model CLI.
 20. As a product owner, I want a visible UX demo before production hardening, so that menus, overlays, wording and safety states can be judged by feel.
+21. As a user, I want to choose which AI apps are protected, so that Code Sanitizer intercepts only the intended Codex/ChatGPT surfaces.
+22. As a user, I want Code Sanitizer to read or verify the selected AI app's configured Send shortcut, so that it protects my actual workflow rather than a hardcoded assumption.
+23. As a security reviewer, I want `Protected` status to mean native submit interception is active for the selected app, so that hotkey-only mode is not mistaken for enforcement.
 
 ## Implementation Decisions
 
-- The primary UX direction is an OS-level adapter, not a browser extension.
+- The primary UX direction is OS-level native submit interception for selected AI desktop apps, not a browser extension and not a hotkey-first workflow.
 - The first demo targets Windows Codex/ChatGPT desktop app only.
 - Hook-only `UserPromptSubmit` remains guard mode because prompt rewriting is not treated as verified.
-- The demo should start with a hotkey-triggered workflow rather than intercepting the app's native Send button invisibly.
-- The first safe workflow is dry-run and apply-only; automatic send is a later explicit mode.
+- Hotkey-triggered workflow is secondary: useful for diagnostics, manual apply and rescue, but insufficient as the main protection.
+- The first production-safe workflow suppresses native submit, sanitizes locally, then replays the verified submit binding only after allow or explicit confirmation.
 - The adapter owns cloud-bound submission only after confirmation. If the adapter cannot prove the sanitized text was applied, it must not submit.
+- The adapter must protect only explicitly enabled AI profiles and must not intercept shortcuts in unrelated applications.
+- Submit binding discovery must prefer the selected AI app's local configuration when available; otherwise onboarding must ask the user to choose/record the binding and verify it.
+- If the active AI profile, composer shape or submit binding is unknown, the status is not `protected`; it is `not_configured`, `binding_unknown`, `surface_unverified` or `degraded_hotkey_only`.
 - The sanitizer core remains app-agnostic and platform-agnostic.
 - Introduce interaction contracts for active surface discovery, text capture, text replacement, submit action, hotkey trigger and confirmation overlay.
 - Windows-specific implementation uses UI Automation and keyboard/clipboard fallback only inside the Windows adapter boundary.
@@ -56,12 +64,14 @@ The core architecture must be adapter-based so the same sanitizer can later supp
 ```text
 Idle
   -> SurfaceDiscovery
+  -> SubmitBindingMatch
+  -> SuppressNativeSubmit
   -> CaptureText
   -> Sanitize
-  -> AllowApplyOrSend
+  -> AllowReplaySubmit
   -> NeedsConfirmationOverlay
   -> ApplySanitizedText
-  -> OptionalSubmit
+  -> ReplayVerifiedSubmit
   -> Completed
   -> Blocked
   -> FailedClosed
@@ -73,7 +83,7 @@ Idle
 - Add Windows UI Automation smoke diagnostics separately from unit tests, because real desktop focus and accessibility trees are environment-dependent.
 - Test at the highest seam: the interaction orchestrator should prove capture, sanitize, confirm, apply and submit decisions end to end.
 - Keep raw-leak regression tests around adapter diagnostics and overlay models.
-- Test failure states explicitly: no active supported app, unreadable text surface, failed write-back, failed submit and sanitizer block.
+- Test failure states explicitly: no active supported app, disabled profile, unknown submit binding, shortcut in unrelated app, unreadable text surface, failed suppression, failed write-back, failed submit and sanitizer block.
 - A manual usability checklist is required for the Windows Codex/ChatGPT app demo.
 
 ## Out of Scope
@@ -90,4 +100,4 @@ Idle
 
 This spec does not replace the sanitizer MVP. It adds a UX frontier around the implemented core. The critical product bet is that the adapter layer, not the sanitizer, owns app-specific capture/apply/submit behavior.
 
-The first implementation slice now includes platform-neutral interaction contracts, fake-adapter orchestration tests, Windows surface profile diagnostics, CLI preview commands, a WinForms confirmation overlay, explicit Windows hotkey modes and a manual checklist. The demo remains Windows Codex/ChatGPT desktop only; Linux desktop and CLI wrappers are documented future adapters behind the same contracts.
+The first implementation slice currently includes platform-neutral interaction contracts, fake-adapter orchestration tests, Windows surface profile diagnostics, CLI preview commands, a WinForms confirmation overlay, explicit Windows hotkey modes and a manual checklist. The next slice must promote native submit interception and AI profile configuration to the primary path. The demo remains Windows Codex/ChatGPT desktop only; Linux desktop and CLI wrappers are documented future adapters behind the same contracts.

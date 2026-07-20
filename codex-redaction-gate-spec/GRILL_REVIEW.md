@@ -109,3 +109,33 @@ Decision: defer LlamaFirewall as a later adjacent guardrail layer after the priv
 The architecture direction is clear, but implementation still needs concrete choices for runtime, Gitleaks distribution, scanner timeouts, policy file format, mapping vault storage, local handoff UI and audit fields.
 
 Decision: record these in `IMPLEMENTATION_READINESS_REVIEW.md` and treat them as pre-ticket clarifications.
+
+## 19. Is a sanitizer hotkey enough protection?
+
+No. A hotkey protects only the path where the user remembers to press it. The normal failure case is simple: the user types sensitive data into Codex, presses the usual Send shortcut, and the raw prompt leaves the machine.
+
+Decision: hotkey-triggered scan/apply is a secondary feature. The primary desktop UX must intercept the selected AI app's native submit shortcut before cloud submission.
+
+## 20. How does Code Sanitizer know which AI app to protect?
+
+Global keyboard interception is too broad and can break unrelated applications. Protecting every focused text box is not acceptable.
+
+Decision: require explicit AI surface profiles. The user chooses protected targets such as Codex Desktop or ChatGPT Desktop. Interception is allowed only when the foreground app, window/profile signals and focused composer shape match an enabled profile.
+
+## 21. How does Code Sanitizer know the user's Send shortcut?
+
+Hardcoding `Enter` or `Ctrl+Enter` is not reliable. The target AI app may let the user choose a different submit shortcut or may change behavior between versions.
+
+Decision: each AI surface profile needs submit-binding discovery. Prefer reading a stable local config source from the selected AI app. If no stable config source exists, onboarding must ask the user to choose or record the binding and then verify it. Unknown binding means `binding_unknown`, not `protected`.
+
+## 22. What must happen when the user presses Send in a protected AI app?
+
+If the native Send event is allowed to continue while sanitization runs, the cloud boundary is already crossed.
+
+Decision: once the selected profile and submit binding match, Code Sanitizer must suppress the original submit input, capture composer text, sanitize locally and then either replay the verified submit binding for `allow`, apply and submit approved `sanitized_text` for `confirm`, or send nothing for `block` and failures.
+
+## 23. What is the highest-risk implementation bug?
+
+False confidence. A tray icon that says "enabled" while native Send is not actually intercepted is worse than a clearly manual tool, because it changes user behavior.
+
+Decision: product status must distinguish `protected`, `not_configured`, `binding_unknown`, `surface_unverified` and `degraded_hotkey_only`. Only verified native submit interception may be called `protected`.

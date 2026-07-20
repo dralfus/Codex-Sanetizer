@@ -4,6 +4,10 @@
 
 The integration layer that receives a prompt event from Codex, a local composer, browser, desktop overlay, or hook. It does not decide redaction policy itself; it enforces the sanitizer result.
 
+## AI Surface Profile
+
+A local configuration entry for a protected AI application surface, such as Codex Desktop or ChatGPT Desktop. It records app identity signals, composer shape, enabled state, submit binding source/value and capability status.
+
 ## Audit Event
 
 A local record of a sanitizer decision. It contains timestamps, counts, entity types, policy profile, and action taken. It must not contain raw prompts, original values, normalized values, or secrets.
@@ -35,6 +39,10 @@ An integration mode that can inspect and block unsafe prompts but cannot necessa
 ## Gateway Mode
 
 An integration mode where the local system owns the submit action. It can sanitize, confirm, and submit only the sanitized prompt.
+
+## Native Submit Interception
+
+The desktop adapter mode where Code Sanitizer intercepts the selected AI app's normal Send shortcut, suppresses the original submit input, sanitizes locally, and replays the verified submit binding only when it is safe to send.
 
 ## Mapping Vault
 
@@ -71,6 +79,10 @@ The prompt text after all approved replacements have been applied and verified. 
 ## Sanitizer
 
 The local engine that detects sensitive spans, resolves overlaps, applies policy, allocates replacements, renders sanitized text, verifies the result, and returns an allow/confirm/block decision.
+
+## Submit Binding
+
+The key or gesture configured in a target AI app to send the prompt, such as `Enter`, `Ctrl+Enter`, or another user-selected shortcut. Code Sanitizer must discover or verify this binding before claiming protected native submit interception.
 
 ## Span Resolver
 

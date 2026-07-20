@@ -10,7 +10,7 @@ Manual cleanup with a separate script before every prompt is not acceptable. It 
 
 Build a local Redaction Gate for Codex: a system layer before prompt submission that intercepts input, detects sensitive data, replaces detected values with stable pseudonyms, shows a diff/confirmation step, submits only sanitized text, and later offers local restoration of real values.
 
-The MVP is a Windows-first local .NET application/adapter. The main user workflow is not manual copy/paste. It is `Confirm sanitized prompt`: the user sees the highlighted sanitized version, confirms it, and the adapter sends only `sanitized_text` to the cloud.
+The MVP is a Windows-first local .NET application/adapter. The main user workflow is not manual copy/paste and not a separate sanitizer hotkey. It is native submit interception for selected AI apps: the user writes in Codex/ChatGPT Desktop, presses that app's configured Send shortcut, Code Sanitizer intercepts the submit before cloud submission, and the adapter sends only a safe original prompt or approved `sanitized_text`.
 
 The mapping table must be user-global across projects. The same real URL, domain, IP, email, product name, or customer name should always receive the same pseudonym. High-sensitivity secrets such as passwords, tokens, and keys are non-restorable by default: they are replaced with `SECRET_REDACTED` or stored only after an explicit temporary user approval.
 
@@ -47,6 +47,9 @@ The mapping table must be user-global across projects. The same real URL, domain
 29. As a Codex user, I want text attachments and large pasted file contents to pass through the same sanitizer pipeline, so that large logs and config dumps do not bypass redaction.
 30. As a Codex user, I want unsupported binary attachments to be blocked or explicitly warned, so that unreadable files are not silently treated as safe.
 31. As a Codex user, I want replaced spans highlighted before confirmation, so that I can understand what will be sent without inspecting raw secrets.
+32. As a Codex/ChatGPT Desktop user, I want Code Sanitizer to intercept my normal Send shortcut, so that I cannot forget a separate hotkey and accidentally send raw sensitive data.
+33. As a Codex/ChatGPT Desktop user, I want to choose which AI app surfaces are protected, so that Code Sanitizer does not intercept unrelated applications.
+34. As a Codex/ChatGPT Desktop user, I want Code Sanitizer to read or verify my selected AI app's configured Send shortcut, so that it protects the keys I actually use.
 
 ## Implementation Decisions
 
@@ -63,7 +66,12 @@ The mapping table must be user-global across projects. The same real URL, domain
   - Guard mode: a Codex hook or equivalent pre-submit checker blocks unsafe prompts and offers a sanitized replacement.
   - Gateway/adapter mode: a local composer/proxy/desktop layer owns the submit action and can send sanitized text after user confirmation.
 - Guard mode is acceptable as a baseline but does not fully satisfy the desired UX unless it can programmatically replace the submitted prompt.
-- A minimal confirm-and-send adapter is part of MVP because it implements the desired `Confirm sanitized prompt` flow. A polished full composer is later.
+- Native submit interception for selected Windows Codex/ChatGPT Desktop surfaces is the primary gateway/adapter path. A minimal confirm-and-send adapter is part of MVP because it implements the desired `Confirm sanitized prompt` flow. A polished full composer is later.
+- Hotkey-triggered scan/apply is a secondary diagnostic/manual feature. It must not be presented as the main protection path.
+- The adapter must maintain enabled AI surface profiles and must protect only explicitly selected AI apps.
+- The adapter must discover the selected AI app's submit binding from local app configuration when available. If not available, onboarding must ask the user to choose or record the binding and verify it.
+- The adapter must not silently assume that `Enter` is the active Send shortcut.
+- The tray/menu status must distinguish `protected` from `not_configured`, `binding_unknown`, `surface_unverified` and `degraded_hotkey_only`.
 - The system must never send the mapping table or HMAC secret to the cloud.
 - The system must show an explicit confirmation step when sensitive data was replaced.
 - The system must use a 10-second total hard cap for sanitizer work, target under 2 seconds for ordinary prompts, and fail closed on timeout.
@@ -82,6 +90,7 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Mapping tests should verify deterministic pseudonyms across sessions and projects.
 - Vault tests should verify that raw originals are not present in audit logs or exported policy files.
 - Gateway/adapter integration tests should simulate the full lifecycle: input -> sanitize -> confirm -> send sanitized -> receive sanitized answer -> restore locally.
+- Submit interception tests should simulate selected and unselected AI surfaces, matching and non-matching submit bindings, input suppression, sanitizer allow/confirm/block and fail-closed behavior.
 - Timeout tests should verify fail-closed behavior at the 10-second hard cap and scanner-level errors.
 - Security regression tests should include near-miss samples and false-positive samples.
 - The highest-value seam is the redaction engine API: it can be tested without depending on Codex UI internals.
@@ -95,6 +104,7 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Full DLP classification for arbitrary documents in the first version.
 - Full binary/PDF/Office/image parsing, OCR and recursive archive scanning in the first version.
 - Silent mutation of Codex prompts using unsupported private APIs.
+- Claiming protection for a target AI app when its submit shortcut or composer surface cannot be verified.
 - Storing real passwords or long-lived secrets for restoration by default.
 
 ## Further Notes

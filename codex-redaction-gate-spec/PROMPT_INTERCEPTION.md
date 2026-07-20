@@ -11,7 +11,7 @@ There are two implementation modes:
 
 Guard mode is the first enforceable safety slice. The MVP user experience requires a gateway/composer/desktop adapter that can submit sanitized text after confirmation; hook-only clipboard handoff is fallback behavior.
 
-For the Windows Codex/ChatGPT desktop app workflow, the primary next UX path is an OS-level desktop adapter. The user keeps typing in the normal app composer, triggers the sanitizer with a dedicated hotkey or guarded submit action, reviews a local overlay, and then applies or sends only the sanitized prompt. Browser extension integration is not part of this demo path.
+For the Windows Codex/ChatGPT desktop app workflow, the primary product UX is OS-level native submit interception. The user keeps typing in the normal app composer and presses the same Send shortcut configured in the selected AI app. Code Sanitizer intercepts that submit input before cloud submission, suppresses the original send, sanitizes locally, and then either replays the verified submit binding for safe prompts or applies/sends only `sanitized_text` after confirmation. A dedicated sanitizer hotkey remains a secondary manual/diagnostic feature, not the main safety mechanism.
 
 ## Verified Codex Hook Behavior
 
@@ -175,7 +175,7 @@ capture prompt
 
 If the verifier detects any selected raw span in `sanitized_text`, the adapter receives `block`.
 
-## OS-Level Desktop Adapter Flow
+## OS-Level Native Submit Interception Flow
 
 ```mermaid
 sequenceDiagram
@@ -186,25 +186,38 @@ sequenceDiagram
     participant Overlay as Local Confirmation Overlay
 
     User->>App: Type prompt in normal composer
-    User->>Adapter: Press sanitizer hotkey
-    Adapter->>App: Discover active text surface
+    User->>App: Press configured Send shortcut
+    Adapter->>Adapter: Match selected AI profile and submit binding
+    Adapter->>App: Suppress original submit input
     Adapter->>App: Capture composer text
     Adapter->>Engine: sanitize(prompt, context)
     Engine-->>Adapter: allow | confirm | block
 
     alt allow
-        Adapter->>App: Optionally submit original/sanitized-equivalent text
+        Adapter->>App: Replay verified submit binding
     else confirm
         Adapter->>Overlay: Show highlighted sanitized prompt
         User->>Overlay: Confirm sanitized prompt
         Adapter->>App: Replace composer text with sanitized_text
-        Adapter->>App: Submit only when explicit send mode is enabled
+        Adapter->>App: Replay verified submit binding
     else block or failure
         Adapter->>Overlay: Show raw-free block/failure status
     end
 ```
 
-The first UX demo should prefer dry-run and apply-only modes before enabling automatic submit. The adapter must fail closed if it cannot confidently read or write the active composer.
+The adapter must fail closed if it cannot confidently match the selected AI app, read the composer, write back sanitized text when needed, or verify the active submit binding. Hotkey-triggered dry-run/apply-only remains a diagnostic path but is not sufficient for production protection.
+
+## Selected AI Surface Profiles
+
+Code Sanitizer must protect only user-selected AI surfaces. Each profile records:
+
+- application identity, process/window signals and UI Automation composer shape;
+- whether the profile is enabled;
+- how the profile's submit binding is discovered: app config, user-selected fallback or verified probe;
+- the active submit binding, such as `Enter`, `Ctrl+Enter` or another user-configured shortcut;
+- current capability status: `protected`, `not_configured`, `binding_unknown`, `surface_unverified`, or `degraded_hotkey_only`.
+
+If the configured AI app cannot be matched or its submit binding cannot be discovered/verified, the tray/menu must show that the app is not protected. The system must not silently fall back to assuming `Enter`.
 
 ## MVP Recommendation
 
@@ -213,9 +226,10 @@ Implement in this order:
 1. Local sanitizer library and CLI tester.
 2. Global policy/dictionary files.
 3. `UserPromptSubmit` guard hook that blocks unsafe prompts.
-4. OS-level Windows adapter demo for Codex/ChatGPT desktop app with hotkey capture, overlay confirmation and apply-only sanitized write-back.
-5. Explicit adapter-owned send mode after apply-only behavior is verified.
-6. Future Linux desktop and CLI wrapper adapters behind the same interaction contracts.
+4. AI profile manager for Windows Codex/ChatGPT Desktop, including submit-binding discovery/verification and explicit user selection.
+5. OS-level Windows adapter with native submit interception for selected protected AI surfaces.
+6. Hotkey-triggered dry-run/apply-only as secondary diagnostics and rescue.
+7. Future Linux desktop and CLI wrapper adapters behind the same interaction contracts.
 
 This gives immediate protection without pretending that hook-only replacement is already available.
 

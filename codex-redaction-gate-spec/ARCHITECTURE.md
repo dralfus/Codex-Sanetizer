@@ -37,9 +37,9 @@ Possible implementations:
 
 The detailed interception design is described in `PROMPT_INTERCEPTION.md`. The current architecture treats Codex `UserPromptSubmit` as guard mode because documented behavior supports prompt inspection and blocking, while prompt rewriting for this event is not assumed. The MVP replacement flow requires a minimal gateway/composer, desktop adapter, browser extension, or future verified rewrite API that owns the submit action and can implement `Confirm sanitized prompt`.
 
-For the user's current workflow, the next UX frontier is not a browser adapter or a separate composer. It is an OS-level desktop adapter for the Windows Codex/ChatGPT app: the user types in the normal app composer, triggers sanitization locally, reviews an overlay and applies or sends only `sanitized_text`. The detailed decision is captured in `OS_ADAPTER_UX_DEMO_SPEC.md`.
+For the user's current workflow, the next UX frontier is not a browser adapter, a separate composer or a hotkey-first workflow. It is an OS-level desktop adapter for the Windows Codex/ChatGPT app: the user types in the normal app composer, presses the selected AI app's configured Send shortcut, Code Sanitizer intercepts and suppresses that submit input locally, then sends only a safe original prompt or approved `sanitized_text`. The detailed decision is captured in `OS_ADAPTER_UX_DEMO_SPEC.md` and `adr/ADR-004-native-submit-interception-primary.md`.
 
-The OS adapter seam is intentionally platform-neutral above the concrete adapter: active surface discovery, text capture, text replacement, submit action, hotkey trigger and confirmation overlay are separate contracts. Windows uses a Windows-specific adapter and Codex/ChatGPT surface profiles first. Future Linux desktop support should replace the platform adapter only. Future CLI support should be wrapper mode, not terminal keystroke interception.
+The OS adapter seam is intentionally platform-neutral above the concrete adapter: enabled AI profile selection, active surface discovery, submit binding discovery, submit input interception, text capture, text replacement, submit action, secondary hotkey trigger and confirmation overlay are separate contracts. Windows uses a Windows-specific adapter and Codex/ChatGPT surface profiles first. Future Linux desktop support should replace the platform adapter only. Future CLI support should be wrapper mode, not terminal keystroke interception.
 
 ### Redaction Engine
 
@@ -207,6 +207,7 @@ Implemented modules:
 - `PlainTextAttachmentIntake` reads supported UTF-8 plain-text files into content parts with size/type caps; unsupported types remain fail-closed.
 - Readiness, policy activation, policy precedence, audit summary and release smoke components provide raw-free operational diagnostics around the sanitizer core.
 - Package smoke checks cover sanitizer allow/confirm, scanner-backed secret redaction, guard blocking, local restore, storage defaults, scanner artifact provenance, scanner config validation, confirm handoff and attachment ingestion boundary.
+- Native submit interception is now the primary target UX for the Windows desktop adapter. Existing hotkey paths are treated as diagnostic/manual secondary features until the submit-binding profile manager and input suppression path are implemented.
 
 Current sanitizer pipeline responsibilities:
 
@@ -323,9 +324,10 @@ Pure hook-only guard mode is safer than nothing, but it does not fully satisfy t
 
 ### Phase 2: Polished Gateway UX
 
-- Add a local composer or desktop overlay.
-- Own the submit action.
-- Refine full approve-and-send flow.
+- Add selected AI surface profiles for Windows Codex/ChatGPT Desktop.
+- Discover or verify the selected app's configured submit binding.
+- Intercept and suppress native submit input only for enabled verified AI profiles.
+- Refine full approve-and-send flow using the verified submit binding.
 - Add response restoration UI.
 
 ### Phase 3: Managed Enforcement
@@ -333,6 +335,7 @@ Pure hook-only guard mode is safer than nothing, but it does not fully satisfy t
 - Package as a Codex plugin or managed hook bundle if supported.
 - Add organization policy distribution.
 - Add tamper-evident audit logs.
+- Optionally lock protected AI profiles and disallow hotkey-only degradation in managed environments.
 
 ## Boundary With Codex Hooks
 
@@ -358,4 +361,7 @@ Raw originals must never be stored in project repositories.
 - Confirmation UI unavailable: block submission and show recovery instructions.
 - HMAC secret missing: block submission until initialized.
 - Pseudonym collision: extend suffix length or add deterministic collision suffix.
-- User bypass: log only if detectable; otherwise out of scope.
+- Selected AI submit binding unknown: show `binding_unknown`; do not claim protected mode.
+- Selected AI surface no longer matches verified profile: show `surface_unverified`; do not claim protected mode.
+- Native submit interception fails after matching a protected profile: suppress original submit and fail closed.
+- User bypass outside selected AI apps: log only if detectable; otherwise out of scope.
