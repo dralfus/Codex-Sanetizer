@@ -213,11 +213,25 @@ Code Sanitizer must protect only user-selected AI surfaces. Each profile records
 
 - application identity, process/window signals and UI Automation composer shape;
 - whether the profile is enabled;
-- how the profile's submit binding is discovered: app config, user-selected fallback or verified probe;
+- how the profile's submit binding is discovered: `documented_config`, `empirical_config` or `user_verified`;
 - the active submit binding, such as `Enter`, `Ctrl+Enter` or another user-configured shortcut;
+- the active newline binding, such as `Shift+Enter`, `Ctrl+Enter` or another user-configured shortcut;
+- the app/package version compatibility evidence and last raw-free verification result;
 - current capability status: `protected`, `not_configured`, `binding_unknown`, `surface_unverified`, or `degraded_hotkey_only`.
 
 If the configured AI app cannot be matched or its submit binding cannot be discovered/verified, the tray/menu must show that the app is not protected. The system must not silently fall back to assuming `Enter`.
+
+## Submit Binding Verification
+
+As of 2026-07-20, no stable local configuration source is confirmed for the prompt submit shortcut in Windows Codex/ChatGPT Desktop. The product must therefore treat `user_verified` binding capture as the release path. Config discovery can be added only when the source is documented by the vendor or proven empirically across app updates.
+
+Binding verification must be local and non-cloud. Onboarding records the submit gesture and newline gesture against the selected AI surface, verifies that the focused element still matches the known composer shape, and stores raw-free evidence. If submit and newline cannot be separated, the profile remains `binding_unknown` or `surface_unverified`.
+
+## Emergency Escape And Enterprise Enforcement
+
+Native interception must provide a visible emergency escape: a tray action and a hard-to-trigger local chord such as `Ctrl+Alt+Shift+Pause` that temporarily disables protection for the current app. This action is audited raw-free and never replays the original submit input.
+
+Enterprise policy may lock protected profiles, block user removal, and forbid silent `degraded_hotkey_only` fallback. If a required profile is open but unverified, the policy decides whether submit is blocked or allowed only with a visible unprotected warning.
 
 ## MVP Recommendation
 

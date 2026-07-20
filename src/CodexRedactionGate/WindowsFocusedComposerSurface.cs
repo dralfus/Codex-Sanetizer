@@ -612,12 +612,27 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                     return new SubmitActionResult(false, OsInteractionStatusIds.NotComposer, new Dictionary<string, string>());
                 }
 
-                SendKeys.SendWait("{ENTER}");
+                if (!surface.Metadata.TryGetValue("submit_binding_sendkeys", out var sendKeysText)
+                    || string.IsNullOrWhiteSpace(sendKeysText))
+                {
+                    return new SubmitActionResult(
+                        false,
+                        OsInteractionStatusIds.BindingUnknown,
+                        new Dictionary<string, string> { ["submit_binding"] = "unknown" });
+                }
+
+                SendKeys.SendWait(sendKeysText);
                 Thread.Sleep(120);
                 return new SubmitActionResult(
                     true,
                     OsInteractionStatusIds.Submitted,
-                    new Dictionary<string, string> { ["submit_strategy"] = "verified-composer-enter" });
+                    new Dictionary<string, string>
+                    {
+                        ["submit_strategy"] = "verified-composer-binding",
+                        ["submit_binding"] = surface.Metadata.TryGetValue("submit_binding", out var binding)
+                            ? binding
+                            : "configured"
+                    });
             });
         }
         catch (InvalidOperationException)

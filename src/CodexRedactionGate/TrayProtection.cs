@@ -11,7 +11,9 @@ public sealed record TrayProtectionState(
     int? LastReplacementCount,
     string? LastProfileId,
     bool LastApplied,
-    bool LastSubmitted);
+    bool LastSubmitted,
+    bool NativeSubmitEnabled = false,
+    string NativeSubmitStatus = OsInteractionStatusIds.NotConfigured);
 
 internal interface ITrayHotkeyHost
 {
@@ -28,11 +30,27 @@ internal sealed class TrayProtectionController
 {
     private readonly ITrayHotkeyHost _hotkeyHost;
     private readonly Func<OsInteractionResult> _applyOnlyRunner;
+    private readonly INativeSubmitHookHost? _nativeSubmitHookHost;
+    private readonly NativeSubmitInterceptionController? _nativeSubmitController;
+    private readonly Func<OsInteractionResult>? _nativeSubmitRunner;
 
     public TrayProtectionController(ITrayHotkeyHost hotkeyHost, Func<OsInteractionResult> applyOnlyRunner)
+        : this(hotkeyHost, applyOnlyRunner, null, null, null)
+    {
+    }
+
+    public TrayProtectionController(
+        ITrayHotkeyHost hotkeyHost,
+        Func<OsInteractionResult> applyOnlyRunner,
+        INativeSubmitHookHost? nativeSubmitHookHost,
+        NativeSubmitInterceptionController? nativeSubmitController,
+        Func<OsInteractionResult>? nativeSubmitRunner)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
+        _nativeSubmitHookHost = nativeSubmitHookHost;
+        _nativeSubmitController = nativeSubmitController;
+        _nativeSubmitRunner = nativeSubmitRunner;
         State = CreateState(enabled: false, lastStatus: "disabled");
     }
 
@@ -51,13 +69,19 @@ internal sealed class TrayProtectionController
             return false;
         }
 
-        State = CreateState(enabled: true, lastStatus: "enabled");
+        var nativeStarted = StartNativeSubmitHook();
+        State = CreateState(
+            enabled: true,
+            lastStatus: "enabled",
+            nativeSubmitEnabled: nativeStarted,
+            nativeSubmitStatus: nativeStarted ? OsInteractionStatusIds.Protected : NativeSubmitUnavailableStatus());
         StateChanged?.Invoke(this, EventArgs.Empty);
         return true;
     }
 
     public void Stop()
     {
+        _nativeSubmitHookHost?.Stop();
         _hotkeyHost.Stop();
         State = CreateState(enabled: false, lastStatus: "disabled");
         StateChanged?.Invoke(this, EventArgs.Empty);
@@ -77,11 +101,62 @@ internal sealed class TrayProtectionController
             LastReplacementCount: result.SanitizationResult?.Replacements.Count,
             LastProfileId: result.Surface?.ProfileId,
             LastApplied: result.Applied,
-            LastSubmitted: result.Submitted);
+            LastSubmitted: result.Submitted,
+            NativeSubmitEnabled: State.NativeSubmitEnabled,
+            NativeSubmitStatus: State.NativeSubmitStatus);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private TrayProtectionState CreateState(bool enabled, string lastStatus)
+    private bool StartNativeSubmitHook()
+    {
+        if (_nativeSubmitHookHost is null || _nativeSubmitController is null || _nativeSubmitRunner is null)
+        {
+            return false;
+        }
+
+        return _nativeSubmitHookHost.Start(
+            gesture => _nativeSubmitController.HandleGesture(gesture),
+            RunNativeSubmitOnce);
+    }
+
+    private void RunNativeSubmitOnce(NativeKeyGesture gesture)
+    {
+        if (_nativeSubmitController is null || _nativeSubmitRunner is null)
+        {
+            return;
+        }
+
+        var result = _nativeSubmitController.HandleGesture(gesture, _nativeSubmitRunner);
+        State = new TrayProtectionState(
+            Enabled: true,
+            Mode: "NativeSubmit",
+            Hotkey: _hotkeyHost.Binding.DisplayText,
+            LastStatus: result.Status,
+            LastDecision: null,
+            LastReplacementCount: null,
+            LastProfileId: result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
+            LastApplied: result.Applied,
+            LastSubmitted: result.Submitted,
+            NativeSubmitEnabled: result.Status != OsInteractionStatusIds.DegradedHotkeyOnly,
+            NativeSubmitStatus: result.Status);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private string NativeSubmitUnavailableStatus()
+    {
+        if (_nativeSubmitHookHost is null || _nativeSubmitController is null || _nativeSubmitRunner is null)
+        {
+            return OsInteractionStatusIds.NotConfigured;
+        }
+
+        return _nativeSubmitHookHost.LastErrorCode ?? OsInteractionStatusIds.DegradedHotkeyOnly;
+    }
+
+    private TrayProtectionState CreateState(
+        bool enabled,
+        string lastStatus,
+        bool nativeSubmitEnabled = false,
+        string nativeSubmitStatus = OsInteractionStatusIds.NotConfigured)
     {
         return new TrayProtectionState(
             Enabled: enabled,
@@ -92,7 +167,9 @@ internal sealed class TrayProtectionController
             LastReplacementCount: null,
             LastProfileId: null,
             LastApplied: false,
-            LastSubmitted: false);
+            LastSubmitted: false,
+            NativeSubmitEnabled: nativeSubmitEnabled,
+            NativeSubmitStatus: nativeSubmitStatus);
     }
 }
 
@@ -106,7 +183,7 @@ internal static class TrayStatusFormatter
         var replacements = state.LastReplacementCount is null
             ? "n/a"
             : state.LastReplacementCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return $"status={enabled} mode={state.Mode} hotkey={state.Hotkey} last={state.LastStatus} replacements={replacements}";
+        return $"status={enabled} mode={state.Mode} hotkey={state.Hotkey} native_submit={state.NativeSubmitStatus} last={state.LastStatus} replacements={replacements}";
     }
 
     public static string FormatNotifyIconText(TrayProtectionState state)

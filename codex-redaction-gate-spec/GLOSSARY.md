@@ -8,6 +8,14 @@ The integration layer that receives a prompt event from Codex, a local composer,
 
 A local configuration entry for a protected AI application surface, such as Codex Desktop or ChatGPT Desktop. It records app identity signals, composer shape, enabled state, submit binding source/value and capability status.
 
+## Binding Source
+
+The evidence category used to trust a submit or newline binding. `documented_config` means the target app vendor documents a stable setting, `empirical_config` means Code Sanitizer has verified a local schema across versions, and `user_verified` means onboarding recorded and tested the binding locally.
+
+## Degraded Hotkey Only
+
+A capability status where the secondary sanitizer hotkey may still work, but native submit interception is not protected. Enterprise policy may forbid this status for managed protected AI apps.
+
 ## Audit Event
 
 A local record of a sanitizer decision. It contains timestamps, counts, entity types, policy profile, and action taken. It must not contain raw prompts, original values, normalized values, or secrets.
@@ -83,6 +91,10 @@ The local engine that detects sensitive spans, resolves overlaps, applies policy
 ## Submit Binding
 
 The key or gesture configured in a target AI app to send the prompt, such as `Enter`, `Ctrl+Enter`, or another user-selected shortcut. Code Sanitizer must discover or verify this binding before claiming protected native submit interception.
+
+## Surface Unverified
+
+A capability status where a selected AI app is present but its current app identity, version, window signals, composer UI Automation shape or binding evidence no longer matches the verified profile. The product must warn visibly and must not claim protected native submit interception.
 
 ## Span Resolver
 

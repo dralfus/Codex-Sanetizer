@@ -17,7 +17,7 @@ These rules are part of every ticket.
 - If verification fails twice with the same error, stop and report the exact error instead of rewriting the project.
 - Keep implementation small. Prefer boring, explicit code over clever abstractions.
 
-Work the **frontier**: any ticket whose blockers are all done. After the sanitizer pipeline refactor, the next frontier starts at ticket 49.
+Work the **frontier**: any ticket whose blockers are all done. After product smoke, the next frontier starts at ticket 102.
 
 ## Current Review Status
 
@@ -2427,4 +2427,196 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 - [x] Smoke uses disposable local target first and a throwaway Codex/ChatGPT task for live compatibility.
 - [x] Smoke artifacts contain only raw-free diagnostics and sanitized placeholders.
 - [x] Smoke clearly states that Windows Codex/ChatGPT desktop is the only supported v1 target.
+- [x] Build, tests and self-test are green.
+
+## 102. Add submit binding profile model and raw-free status
+
+**What to build:** Add the durable profile state needed for native submit interception: selected AI app identity, binding source, submit binding, newline binding, compatibility evidence and current protection status.
+
+**Blocked by:** 101. Create end-to-end product smoke.
+
+**Do not:** Install a low-level keyboard hook, suppress input, submit prompts, or assume `Enter`/`Ctrl+Enter` as protected defaults.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-20:** build green with 0 warnings/0 errors; focused native submit/tray tests passed 12/12; unit tests passed 314/314; `--self-test` printed `Self-test passed.`; native submit profiles now persist `documented_config`, `empirical_config`, `user_verified`, submit/newline bindings, compatibility evidence and raw-free capability status.
+
+- [x] Profiles can represent `documented_config`, `empirical_config` and `user_verified` binding sources.
+- [x] Profiles store both submit and newline bindings.
+- [x] Raw-free status can report `protected`, `not_configured`, `binding_unknown`, `surface_unverified` and `degraded_hotkey_only`.
+- [x] Persisted profile diagnostics include app/version/UIA evidence but no raw prompt text.
+- [x] Build, tests and self-test are green.
+
+## 103. Add local submit and newline binding onboarding verifier
+
+**What to build:** Let the user record and verify the selected AI app's submit and newline gestures locally before Code Sanitizer claims native protection.
+
+**Blocked by:** 102. Add submit binding profile model and raw-free status.
+
+**Do not:** Send a real cloud prompt, write raw prompt text to diagnostics, or mark a profile `protected` when submit and newline cannot be separated.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-20:** build green with 0 warnings/0 errors; focused native submit/tray tests passed 12/12; unit tests passed 314/314; `--self-test` printed `Self-test passed.`; onboarding verifier records submit/newline bindings in `user_verified` mode, requires distinct gestures, stores `cloud_submission=false`, and fails to `binding_unknown`/`surface_unverified`.
+
+- [x] Onboarding records a user-verified submit binding for a selected protected AI surface.
+- [x] Onboarding records a newline binding and verifies it is distinct from submit.
+- [x] Verification uses dry-run/local test behavior and does not submit to the cloud.
+- [x] Failure leaves the profile in `binding_unknown` or `surface_unverified` with actionable raw-free status.
+- [x] Build, tests and self-test are green.
+
+## 104. Add safe native submit interception guard mode
+
+**What to build:** Add the first low-level interception slice that recognizes a verified protected AI surface and suppresses only the matching submit gesture, then fails closed without sending.
+
+**Blocked by:** 103. Add local submit and newline binding onboarding verifier.
+
+**Do not:** Replay submit, auto-send sanitized text, intercept unselected apps, or perform sanitizer work inside the keyboard hook callback.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-20:** build green with 0 warnings/0 errors; focused native submit/tray tests passed 12/12; unit tests passed 314/314; `--self-test` printed `Self-test passed.`; native submit controller now guards only the verified submit gesture, passes newline/non-submit/IME/dead-key paths through, and suppresses matched protected submits before any send flow. A Windows `WH_KEYBOARD_LL` host is present for live callback classification/suppression; sanitizer work is queued outside the hook callback.
+
+- [x] Matching submit on a verified selected surface is suppressed and reported as guarded.
+- [x] Newline gestures, unselected apps, unknown bindings and unverified surfaces pass through without claiming protection.
+- [x] Hook callback performs only fast classification and hands work off safely.
+- [x] Sanitizer/policy/vault/profile failures for matched protected submit produce fail-closed raw-free status.
+- [x] Build, tests and self-test are green.
+
+## 105. Complete native submit confirm-and-send flow
+
+**What to build:** Turn guarded native submit into the primary product flow: capture composer text, sanitize locally, confirm when needed, replace with verified sanitized text and replay only the verified submit binding.
+
+**Blocked by:** 104. Add safe native submit interception guard mode.
+
+**Do not:** Submit after cancel/block/failure, hide verification mismatches, or enable the flow for unsupported browser/PWA surfaces.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-20:** build green with 0 warnings/0 errors; focused native submit/tray tests passed 12/12; unit tests passed 314/314; `--native-submit-smoke` printed `native_submit_smoke_passed`; confirm-and-send now runs behind verified submit interception and suppresses the original input while the orchestrator handles allow/confirm/block/fail-closed paths.
+
+- [x] Allow path replays the verified submit binding only after composer/profile verification.
+- [x] Confirm path shows sanitized preview, writes sanitized text, verifies exact composer content and then submits.
+- [x] Block, cancel, focus loss, capture failure, write failure and verification mismatch submit nothing.
+- [x] Audit records action, profile status, entity counts and timings without raw prompt text.
+- [x] Build, tests and self-test are green.
+
+## 106. Add native interception emergency escape and watchdog
+
+**What to build:** Add user-visible recovery controls so native interception can be temporarily disabled without leaking a raw prompt if input interception misbehaves.
+
+**Blocked by:** 104. Add safe native submit interception guard mode.
+
+**Do not:** Use an easy-to-hit chord, silently send the suppressed prompt, or leave tray status claiming protection after the hook is unhealthy.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-20:** build green with 0 warnings/0 errors; focused native submit/tray tests passed 12/12; unit tests passed 314/314; `--native-submit-smoke` printed `emergency_disable: true`; `Ctrl+Alt+Shift+Pause` is modeled as a temporary raw-free disable path and hook-health failure degrades to `degraded_hotkey_only` unless enterprise policy blocks. Tray controller starts/stops the native submit hook when a protected profile exists and exposes native submit status.
+
+- [x] A hard-to-trigger local chord temporarily disables native interception for the current app.
+- [x] Tray actions can disable, re-enable and show the current native interception status.
+- [x] Hook health failure unregisters the hook and moves status to `degraded_hotkey_only` or policy-controlled blocked state.
+- [x] Emergency actions are audited raw-free and never replay the original submit input.
+- [x] Build, tests and self-test are green.
+
+## 107. Add enterprise protected profile enforcement
+
+**What to build:** Add managed policy controls that can require protected AI profiles, lock them from user removal, and forbid silent hotkey-only degradation.
+
+**Blocked by:** 102. Add submit binding profile model and raw-free status; 106. Add native interception emergency escape and watchdog.
+
+**Do not:** Store admin policy in the mapping vault, expose raw prompt text in compliance output, or make consumer/local mode unnecessarily rigid.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-20:** build green with 0 warnings/0 errors; focused native submit/tray tests passed 12/12; unit tests passed 314/314; `--native-submit-smoke` printed `enterprise_enforcement: true`; managed policy can require profiles, forbid hotkey-only degradation and block required unverified profiles raw-free. Regression coverage proves enterprise enforcement does not suppress non-submit keys.
+
+- [x] Admin policy can require specific protected AI surface profiles.
+- [x] Required profiles cannot be removed or downgraded by normal user actions.
+- [x] Enterprise mode can choose between blocking submit or allowing only with a visible unprotected warning when a required profile is unverified.
+- [x] Compliance/status export is raw-free and names profile state, not prompt contents.
+- [x] Build, tests and self-test are green.
+
+## 108. Add profile compatibility mismatch warnings
+
+**What to build:** Detect when the selected AI app is open but no longer matches the verified profile, and show a visible raw-free warning with re-verification guidance.
+
+**Blocked by:** 102. Add submit binding profile model and raw-free status; 103. Add local submit and newline binding onboarding verifier.
+
+**Do not:** Capture whole-window text, store screenshots, or claim protection for mismatched versions/surfaces.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-20:** build green with 0 warnings/0 errors; focused native submit/tray tests passed 12/12; unit tests passed 314/314; `--native-profiles-status` reports raw-free profile states; compatibility evaluator turns profile/version/surface mismatches into `surface_unverified` with reason codes and onboarding can upsert re-verified profiles.
+
+- [x] Version, package identity, executable/process, window and UIA composer mismatches produce `surface_unverified`.
+- [x] Tray and confirmation UI show that the selected AI app is open but not protected.
+- [x] `--doctor` or equivalent diagnostics report raw-free mismatch reason codes.
+- [x] Re-verification can update the compatibility evidence after the user approves it.
+- [x] Build, tests and self-test are green.
+
+## 109. Add native submit interception product smoke
+
+**What to build:** Add an end-to-end product smoke that proves native submit interception can be configured, verified, exercised and recovered safely for Windows Codex/ChatGPT Desktop.
+
+**Blocked by:** 105. Complete native submit confirm-and-send flow; 106. Add native interception emergency escape and watchdog; 107. Add enterprise protected profile enforcement; 108. Add profile compatibility mismatch warnings.
+
+**Do not:** Depend on real sensitive data, use raw prompts in artifacts, or expand support beyond Windows Codex/ChatGPT Desktop.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-20:** build green with 0 warnings/0 errors; focused native submit/tray tests passed 12/12; unit tests passed 314/314; `--native-submit-smoke` printed `native_submit_smoke_passed`; `--product-smoke` printed `product_smoke_passed` and `native_submit_interception: true`. Automated smoke uses disposable local surfaces; live Codex/ChatGPT Desktop compatibility remains a user-run verification step before enabling a protected profile.
+
+- [x] Smoke covers profile setup, submit/newline binding verification, native submit interception, allow/confirm/block, emergency disable and profile mismatch warning.
+- [x] Smoke starts with a disposable local target before any real Codex/ChatGPT Desktop compatibility step.
+- [x] Smoke artifacts contain only raw-free diagnostics, placeholders and status codes.
+- [x] Smoke clearly states that Windows Codex/ChatGPT Desktop is the only supported v1 native interception target.
 - [x] Build, tests and self-test are green.

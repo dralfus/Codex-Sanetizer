@@ -26,6 +26,15 @@ public static class OsInteractionStatusIds
     public const string NotComposer = "not_composer";
     public const string SupportedComposer = "supported_composer";
     public const string EvidenceMissing = "evidence_missing";
+    public const string Protected = "protected";
+    public const string NotConfigured = "not_configured";
+    public const string BindingUnknown = "binding_unknown";
+    public const string SurfaceUnverified = "surface_unverified";
+    public const string DegradedHotkeyOnly = "degraded_hotkey_only";
+    public const string NativeSubmitGuarded = "native_submit_guarded";
+    public const string NativeSubmitPassThrough = "native_submit_pass_through";
+    public const string EmergencyDisabled = "emergency_disabled";
+    public const string EnterpriseBlocked = "enterprise_blocked";
 }
 
 public sealed record TextSurfaceDescriptor(

@@ -74,8 +74,10 @@ Negative:
 
 ## Open Questions
 
-1. Where do Codex Desktop and ChatGPT Desktop store the user-configured send shortcut on Windows, and is it stable across versions?
-2. Can the adapter reliably distinguish "send prompt" from "insert newline" for each app/profile?
-3. What is the safest emergency escape if interception breaks input in a supported app?
-4. Should enterprise mode allow an administrator to lock protected profiles and disallow hotkey-only degradation?
-5. How should the product warn when a selected AI app is open but the active version no longer matches the verified profile?
+Resolved in `../SUBMIT_INTERCEPTION_RESEARCH_2026-07-20.md`:
+
+1. No stable local source for the prompt submit shortcut is confirmed. Use `user_verified` binding capture first; config discovery is optional until documented or empirically stable.
+2. Distinguish send from newline only through profile-verified context: foreground app, composer UIA shape, exact submit binding, exact newline binding, and IME/dead-key checks.
+3. Use layered emergency escape: fast hook callback, pass-through for non-matches, local `Ctrl+Alt+Shift+Pause` disable window, tray controls, watchdog, and fail-closed submit suppression.
+4. Enterprise mode should allow admins to lock protected profiles and disallow silent `hotkey_only` degradation for protected AI apps.
+5. Profile mismatch should produce `surface_unverified` with visible tray/confirmation warning and raw-free mismatch reason codes.

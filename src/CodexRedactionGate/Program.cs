@@ -271,6 +271,21 @@ public static class Program
             return RunProductSmoke();
         }
 
+        if (args.Length == 1 && args[0] == "--native-profiles-status")
+        {
+            return RunNativeProfilesStatus(runtime.LayoutFactory);
+        }
+
+        if (args.Length == 4 && args[0] == "--native-profile-verify")
+        {
+            return RunNativeProfileVerify(args[1], args[2], args[3], runtime.LayoutFactory);
+        }
+
+        if (args.Length == 1 && args[0] == "--native-submit-smoke")
+        {
+            return RunNativeSubmitSmoke();
+        }
+
         if (args.Length == 1 && args[0] == "--os-demo-send-gate")
         {
             return RunOsDemoSendGate();
@@ -894,6 +909,58 @@ public static class Program
         }
     }
 
+    private static int RunNativeProfilesStatus(Func<DefaultStorageLayout> layoutFactory)
+    {
+        var layout = layoutFactory();
+        var result = SubmitBindingProfileStore.Load(layout);
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"profile_count: {result.Profiles.Count}");
+        Console.WriteLine($"profile_store_path_length: {SubmitBindingProfileStore.DefaultPath(layout).Length}");
+        foreach (var profile in result.Profiles.OrderBy(profile => profile.ProfileId, StringComparer.Ordinal))
+        {
+            Console.WriteLine($"profile={profile.ProfileId} capability_status={profile.CapabilityStatus} binding_source={profile.BindingSource} submit_binding={profile.SubmitBinding?.DisplayText ?? "unknown"} newline_binding={profile.NewlineBinding?.DisplayText ?? "unknown"}");
+        }
+
+        return result.Succeeded ? 0 : 1;
+    }
+
+    private static int RunNativeProfileVerify(
+        string profileId,
+        string submitBinding,
+        string newlineBinding,
+        Func<DefaultStorageLayout> layoutFactory)
+    {
+        var discovery = WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profileId,
+            submitBinding,
+            newlineBinding,
+            discovery);
+        var save = SubmitBindingProfileStore.Upsert(layoutFactory(), profile);
+
+        Console.WriteLine($"status: {profile.CapabilityStatus}");
+        Console.WriteLine($"binding_source: {profile.BindingSource}");
+        Console.WriteLine($"submit_binding: {profile.SubmitBinding?.DisplayText ?? "unknown"}");
+        Console.WriteLine($"newline_binding: {profile.NewlineBinding?.DisplayText ?? "unknown"}");
+        foreach (var item in profile.ToRawFreeDiagnostics().OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            Console.WriteLine($"{item.Key}: {item.Value}");
+        }
+
+        return save.Succeeded && profile.CapabilityStatus == OsInteractionStatusIds.Protected ? 0 : 1;
+    }
+
+    private static int RunNativeSubmitSmoke()
+    {
+        var report = NativeSubmitProductSmokeRunner.Run(System.Text.Encoding.UTF8.GetBytes("native-submit-smoke-secret"));
+        foreach (var line in NativeSubmitProductSmokeRunner.RenderRawFree(report))
+        {
+            Console.WriteLine(line);
+        }
+
+        return report.Passed ? 0 : 1;
+    }
+
     private static int RunOsDemoSendGate()
     {
         var gate = LiveOsDemoEvidence.Check();
@@ -1274,6 +1341,9 @@ public static class Program
         Console.WriteLine("  --os-demo-dry-run \"text\"");
         Console.WriteLine("  --os-demo-smoke");
         Console.WriteLine("  --product-smoke");
+        Console.WriteLine("  --native-profiles-status");
+        Console.WriteLine("  --native-profile-verify profile-id submit-binding newline-binding");
+        Console.WriteLine("  --native-submit-smoke");
         Console.WriteLine("  --os-demo-send-gate");
         Console.WriteLine("  --os-demo-local-target");
         Console.WriteLine("  --os-demo-hotkey");

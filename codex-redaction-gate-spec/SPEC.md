@@ -50,6 +50,10 @@ The mapping table must be user-global across projects. The same real URL, domain
 32. As a Codex/ChatGPT Desktop user, I want Code Sanitizer to intercept my normal Send shortcut, so that I cannot forget a separate hotkey and accidentally send raw sensitive data.
 33. As a Codex/ChatGPT Desktop user, I want to choose which AI app surfaces are protected, so that Code Sanitizer does not intercept unrelated applications.
 34. As a Codex/ChatGPT Desktop user, I want Code Sanitizer to read or verify my selected AI app's configured Send shortcut, so that it protects the keys I actually use.
+35. As a Codex/ChatGPT Desktop user, I want Code Sanitizer to verify both my Send shortcut and my newline shortcut, so that normal multiline editing does not accidentally submit or get blocked.
+36. As a Codex/ChatGPT Desktop user, I want a visible emergency disable action, so that I can recover local input if interception misbehaves without sending a raw prompt.
+37. As a Codex/ChatGPT Desktop user, I want a clear warning when my installed app version no longer matches a verified protected profile, so that I know protection is not active.
+38. As an enterprise admin, I want protected AI profiles to be lockable by policy, so that managed users cannot silently downgrade to hotkey-only protection.
 
 ## Implementation Decisions
 
@@ -71,7 +75,12 @@ The mapping table must be user-global across projects. The same real URL, domain
 - The adapter must maintain enabled AI surface profiles and must protect only explicitly selected AI apps.
 - The adapter must discover the selected AI app's submit binding from local app configuration when available. If not available, onboarding must ask the user to choose or record the binding and verify it.
 - The adapter must not silently assume that `Enter` is the active Send shortcut.
+- The current Windows release path treats submit binding configuration as `user_verified` by default. A binding can be marked `documented_config` only when the target app vendor documents a stable local setting, or `empirical_config` only after repeated compatibility evidence across app updates.
+- Each AI surface profile must store both `submit_binding` and `newline_binding`. The adapter may claim `protected` only when it can distinguish them for the active focused composer.
 - The tray/menu status must distinguish `protected` from `not_configured`, `binding_unknown`, `surface_unverified` and `degraded_hotkey_only`.
+- Native submit interception must include a visible, raw-free emergency disable path and hook-health watchdog. An emergency action disables protection temporarily; it must not silently send the raw prompt.
+- Enterprise mode may lock required protected profiles, prevent user removal, and disallow silent `degraded_hotkey_only` fallback for selected AI apps.
+- A verified AI profile must include package/app identity, version compatibility, executable/process signals, window identity, UI Automation composer shape, supported read/write patterns, binding source, binding values, and last verification result.
 - The system must never send the mapping table or HMAC secret to the cloud.
 - The system must show an explicit confirmation step when sensitive data was replaced.
 - The system must use a 10-second total hard cap for sanitizer work, target under 2 seconds for ordinary prompts, and fail closed on timeout.
@@ -91,6 +100,10 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Vault tests should verify that raw originals are not present in audit logs or exported policy files.
 - Gateway/adapter integration tests should simulate the full lifecycle: input -> sanitize -> confirm -> send sanitized -> receive sanitized answer -> restore locally.
 - Submit interception tests should simulate selected and unselected AI surfaces, matching and non-matching submit bindings, input suppression, sanitizer allow/confirm/block and fail-closed behavior.
+- Binding verifier tests should cover submit vs newline separation, unknown binding status, IME/dead-key pass-through, and user-verified binding persistence without cloud submission.
+- Emergency escape tests should cover temporary disable, tray status changes, hook watchdog downgrade, and raw-free audit events.
+- Enterprise enforcement tests should cover locked profiles, forbidden hotkey-only degradation, and configured fail behavior for unverified surfaces.
+- Compatibility tests should cover app/package version mismatch, UIA composer mismatch, and `surface_unverified` diagnostics without raw prompt capture.
 - Timeout tests should verify fail-closed behavior at the 10-second hard cap and scanner-level errors.
 - Security regression tests should include near-miss samples and false-positive samples.
 - The highest-value seam is the redaction engine API: it can be tested without depending on Codex UI internals.

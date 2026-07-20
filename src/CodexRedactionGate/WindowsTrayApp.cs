@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
@@ -36,6 +37,10 @@ public static class WindowsTrayApp
         ArgumentNullException.ThrowIfNull(sanitizer);
 
         var settings = HotkeySettingsStore.Load(layout ?? DefaultStorageLayout.CreateDefault());
+        var resolvedLayout = layout ?? DefaultStorageLayout.CreateDefault();
+        var nativeProfile = SubmitBindingProfileStore.Load(resolvedLayout)
+            .Profiles
+            .FirstOrDefault(profile => profile.IsProtected);
         var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
         var orchestrator = new OsInteractionOrchestrator(
             sanitizer,
@@ -49,7 +54,27 @@ public static class WindowsTrayApp
             settings.Usable
                 ? new WindowsTrayHotkeyHost(settings.Settings.ProtectionHotkey)
                 : new UnavailableTrayHotkeyHost(settings.Settings.ProtectionHotkey.Binding, settings.Code),
-            () => orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly));
+            () => orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly),
+            nativeProfile is null ? null : new WindowsNativeSubmitHookHost(),
+            nativeProfile is null
+                ? null
+                : new NativeSubmitInterceptionController(
+                    nativeProfile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            nativeProfile is null
+                ? null
+                : () =>
+                {
+                    var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
+                    var nativeSubmitOrchestrator = new OsInteractionOrchestrator(
+                        sanitizer,
+                        WindowsFocusedComposerDiscovery.CreateDefault(),
+                        nativeSubmitAdapter,
+                        nativeSubmitAdapter,
+                        new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
+                        new WindowsConfirmationOverlay());
+                    return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
+                });
     }
 }
 

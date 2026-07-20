@@ -16,6 +16,7 @@ public sealed record ProductSmokeReport(
     bool AuditViewPassed,
     bool RestorePassed,
     bool UninstallSafePassed,
+    bool NativeSubmitInterceptionPassed,
     bool RawFreeArtifactsPassed,
     int AuditRowCount,
     int SanitizedPlaceholderCount,
@@ -101,7 +102,11 @@ public static class ProductSmokeRunner
             && !cleanupPlan.Deleted
             && Directory.Exists(layout.VaultDirectory);
 
+        var nativeSubmit = NativeSubmitProductSmokeRunner.Run(hmacSecret);
+
         var rawFreeArtifacts = renderedAudit
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, NativeSubmitProductSmokeRunner.RenderRawFree(nativeSubmit))
             + Environment.NewLine
             + RenderRawFree(new ProductSmokeReport(
                 Passed: false,
@@ -114,6 +119,7 @@ public static class ProductSmokeRunner
                 AuditViewPassed: auditViewPassed,
                 RestorePassed: restorePassed,
                 UninstallSafePassed: uninstallSafePassed,
+                NativeSubmitInterceptionPassed: nativeSubmit.Passed,
                 RawFreeArtifactsPassed: false,
                 AuditRowCount: auditView.Rows.Count,
                 SanitizedPlaceholderCount: sample.Replacements.Count,
@@ -131,6 +137,7 @@ public static class ProductSmokeRunner
             && auditViewPassed
             && restorePassed
             && uninstallSafePassed
+            && nativeSubmit.Passed
             && rawFreePassed;
 
         return new ProductSmokeReport(
@@ -144,6 +151,7 @@ public static class ProductSmokeRunner
             AuditViewPassed: auditViewPassed,
             RestorePassed: restorePassed,
             UninstallSafePassed: uninstallSafePassed,
+            NativeSubmitInterceptionPassed: nativeSubmit.Passed,
             RawFreeArtifactsPassed: rawFreePassed,
             AuditRowCount: auditView.Rows.Count,
             SanitizedPlaceholderCount: sample.Replacements.Count,
@@ -188,6 +196,7 @@ public static class ProductSmokeRunner
             $"audit_view: {report.AuditViewPassed.ToString().ToLowerInvariant()}",
             $"restore: {report.RestorePassed.ToString().ToLowerInvariant()}",
             $"uninstall_safe_default: {report.UninstallSafePassed.ToString().ToLowerInvariant()}",
+            $"native_submit_interception: {report.NativeSubmitInterceptionPassed.ToString().ToLowerInvariant()}",
             $"raw_free_artifacts: {report.RawFreeArtifactsPassed.ToString().ToLowerInvariant()}",
             $"audit_rows: {report.AuditRowCount}",
             $"sanitized_placeholder_count: {report.SanitizedPlaceholderCount}"
