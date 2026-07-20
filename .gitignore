@@ -1,0 +1,39 @@
+## .NET / C#
+## Ignore build and output files
+bin/
+obj/
+*.csproj.user
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## Ignore test results
+TestResults/
+*.trx
+*.log
+test-results/
+artifacts/
+
+## Ignore IDE files
+.idea/
+.vs/
+.qwen/
+*.csproj.vs
+*.sln.vs
+
+## Ignore nuget packages
+packages/
+*.nupkg
+**/packages/
+
+## Ignore dotnet tool cache
+.ionide/
+.fusebox/
+
+## Local log files
+build.log
+test.log
+
+## Locally generated secret-scanner fixtures
+codex-redaction-gate-spec/spikes/tool-evaluation/.generated/

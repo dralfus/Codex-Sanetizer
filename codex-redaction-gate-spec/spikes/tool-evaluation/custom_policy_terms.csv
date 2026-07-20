@@ -1,0 +1,9 @@
+type,value,action
+customer,ACME Banking,pseudonymize_restorable
+customer,acme,pseudonymize_restorable
+product,Internal Risk Portal,pseudonymize_restorable
+project,Blue Falcon,pseudonymize_restorable
+project,PRJ-1042,pseudonymize_restorable
+supplier,Northwind Security,pseudonymize_restorable
+domain,corp.example.local,pseudonymize_restorable
+domain,internal.example.local,pseudonymize_restorable

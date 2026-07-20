@@ -1,0 +1,37 @@
+[
+  {
+    "id": "internal_url_token",
+    "text": "Investigate failed deploy at https://deploy.corp.example.local/app?tenant=acme. Authorization: Bearer sk-test-abc1234567890abcdef.",
+    "expected_categories": ["url", "domain", "customer", "secret"]
+  },
+  {
+    "id": "private_network",
+    "text": "SSH from 10.42.7.19 to 172.16.5.10 failed. Scanner scope is 192.168.44.0/24 and host db01.corp.example.local:5432.",
+    "expected_categories": ["ip", "cidr", "host", "domain"]
+  },
+  {
+    "id": "email_path_project",
+    "text": "User alexey.andreev@example.com attached C:\\Users\\alexey.andreev\\Projects\\Blue Falcon\\dump.log for project PRJ-1042.",
+    "expected_categories": ["email", "path", "person_or_user", "project"]
+  },
+  {
+    "id": "connection_string",
+    "text": "Connection string: postgres://app_user:SuperSecret123!@db.internal.example.local:5432/customerdb",
+    "expected_categories": ["connection_string", "secret", "host", "domain"]
+  },
+  {
+    "id": "jwt_private_key",
+    "text": "JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhY21lIn0.signature and key -----BEGIN PRIVATE KEY-----\\nMIIBVwIBADANBgkqhkiG9w0BAQEFAASCAT8wggE7\\n-----END PRIVATE KEY-----",
+    "expected_categories": ["jwt", "private_key"]
+  },
+  {
+    "id": "business_terms",
+    "text": "Customer ACME Banking uses Internal Risk Portal in project Blue Falcon with supplier Northwind Security.",
+    "expected_categories": ["customer", "product", "project", "supplier"]
+  },
+  {
+    "id": "public_docs_allow",
+    "text": "Compare behavior with https://learn.microsoft.com/en-us/azure/security/ and https://github.com/gitleaks/gitleaks.",
+    "expected_categories": ["public_url_allow"]
+  }
+]

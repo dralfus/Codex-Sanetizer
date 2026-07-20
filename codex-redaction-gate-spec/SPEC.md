@@ -1,0 +1,104 @@
+# Spec: Codex Redaction Gate
+
+## Problem Statement
+
+Codex users solve real engineering tasks and inevitably paste context that may include trade secrets, personal data, and internal information: URLs, domains, product names, customer names, project names, private IP addresses, logs, configuration files, tokens, passwords, and infrastructure identifiers.
+
+Manual cleanup with a separate script before every prompt is not acceptable. It adds too much friction, is quickly bypassed, and does not protect against accidental pasting of sensitive fragments. The project needs a global mechanism that runs before cloud submission, replaces sensitive values, keeps the mapping table local, and allows the user to restore the response locally.
+
+## Solution
+
+Build a local Redaction Gate for Codex: a system layer before prompt submission that intercepts input, detects sensitive data, replaces detected values with stable pseudonyms, shows a diff/confirmation step, submits only sanitized text, and later offers local restoration of real values.
+
+The MVP is a Windows-first local .NET application/adapter. The main user workflow is not manual copy/paste. It is `Confirm sanitized prompt`: the user sees the highlighted sanitized version, confirms it, and the adapter sends only `sanitized_text` to the cloud.
+
+The mapping table must be user-global across projects. The same real URL, domain, IP, email, product name, or customer name should always receive the same pseudonym. High-sensitivity secrets such as passwords, tokens, and keys are non-restorable by default: they are replaced with `SECRET_REDACTED` or stored only after an explicit temporary user approval.
+
+## User Stories
+
+1. As a Codex user, I want my prompt to be scanned automatically before submission, so that I do not need to remember to run a redaction script manually.
+2. As a Codex user, I want URLs to be replaced with stable pseudonyms, so that internal systems are not disclosed to OpenAI.
+3. As a Codex user, I want internal domains to be replaced with stable pseudonyms, so that company structure is not exposed.
+4. As a Codex user, I want private IP addresses and CIDR ranges to be replaced, so that internal network topology is not exposed.
+5. As a Codex user, I want emails and personal names to be replaced, so that personal data is not sent to the cloud.
+6. As a Codex user, I want product, project and customer names to be replaced using a local dictionary, so that commercial context remains local.
+7. As a Codex user, I want passwords, tokens and API keys to be removed or strongly redacted, so that credentials are not leaked even as hashes.
+8. As a Codex user, I want to see the sanitized prompt before it is sent, so that I can confirm the transformation.
+9. As a Codex user, I want to see a compact replacement summary, so that I understand what was changed without exposing everything unnecessarily.
+10. As a Codex user, I want one-click approval of the sanitized prompt, so that the security flow does not become tedious.
+11. As a Codex user, I want one-click cancellation, so that I can stop an unsafe submission.
+12. As a Codex user, I want the same original value to map to the same pseudonym across all projects, so that multi-project investigations remain coherent.
+13. As a Codex user, I want the mapping table to stay local, so that real identifiers are not sent to OpenAI.
+14. As a Codex user, I want the mapping store to be encrypted, so that local compromise is harder.
+15. As a Codex user, I want the answer from Codex to be restorable locally, so that I can turn `URL_a1b2c3` back into the real URL when needed.
+16. As a Codex user, I want restoration to be optional, so that I can keep management-facing reports sanitized.
+17. As a Codex user, I want restored output to be clearly marked as local, so that I do not accidentally send it back to the cloud.
+18. As a Codex user, I want the gate to cover prompts, file snippets, clipboard content and tool outputs where possible, so that sensitive data does not bypass the main prompt path.
+19. As a Codex user, I want the system to fail closed when uncertain, so that unknown sensitive-looking text is not silently sent.
+20. As a Codex user, I want project-specific allowlists, so that public URLs and harmless package names do not cause noise.
+21. As a Codex user, I want global blocklists, so that company domains and known customer/product names are always protected.
+22. As a Codex user, I want an audit log of redaction events without raw secrets, so that I can review whether the gate is working.
+23. As a Codex user, I want low-friction operation, so that security does not break my normal Codex workflow.
+24. As a security reviewer, I want clear threat boundaries, so that I know what this system can and cannot protect.
+25. As a future maintainer, I want detectors to be modular, so that new sensitive patterns can be added without rewriting the gate.
+26. As a future maintainer, I want deterministic tests with sample sensitive inputs, so that detector changes do not regress protection.
+27. As an enterprise admin, I want a managed enforcement mode, so that users cannot accidentally disable the protection for sensitive workspaces.
+28. As a Codex user, I want to manually mark a customer, project, domain, URL prefix or regex pattern as sensitive, so that newly discovered false negatives can be fixed without code changes.
+29. As a Codex user, I want text attachments and large pasted file contents to pass through the same sanitizer pipeline, so that large logs and config dumps do not bypass redaction.
+30. As a Codex user, I want unsupported binary attachments to be blocked or explicitly warned, so that unreadable files are not silently treated as safe.
+31. As a Codex user, I want replaced spans highlighted before confirmation, so that I can understand what will be sent without inspecting raw secrets.
+
+## Implementation Decisions
+
+- The project is a standalone local application/library, not a patch inside every target repository.
+- The MVP implementation runtime is .NET for the Windows-first orchestrator, file-based vault, local UI and gateway/adapter layer.
+- The core module is `redaction-engine`: it receives text and returns sanitized text, detected entities, replacement records and warnings.
+- The mapping module is `mapping-vault`: it stores global mappings, keyed by normalized entity type and original value, in a file-based vault for MVP.
+- Pseudonyms use deterministic keyed hashing, preferably HMAC-SHA256 with a local secret, not raw SHA256. This reduces dictionary attack risk for short values such as domains, names and product codes.
+- The HMAC/encryption secret is protected by DPAPI or equivalent OS-protected storage. Plaintext vault mode is only an explicit dev/diagnostic mode.
+- Pseudonym format preserves type but not value: `URL_8F3A21B9`, `DOMAIN_19C0E44A`, `IP_6D9A72C1`, `EMAIL_BA1080F2`, `PRODUCT_0D83A7AA`. Usernames use readable deterministic aliases such as `USERNAME_bright_turing_8F3A` so sanitized paths still look like user paths.
+- Secrets are handled differently from identifiers. Passwords, API keys, bearer tokens, private keys and session cookies are redacted as non-restorable by default.
+- Gitleaks is the first external secret scanner. It is built from source in the project release process from a pinned tag/commit, with revision/build command/checksum recorded, and the resulting `gitleaks.exe` shipped to users.
+- The first implementation should support two integration modes:
+  - Guard mode: a Codex hook or equivalent pre-submit checker blocks unsafe prompts and offers a sanitized replacement.
+  - Gateway/adapter mode: a local composer/proxy/desktop layer owns the submit action and can send sanitized text after user confirmation.
+- Guard mode is acceptable as a baseline but does not fully satisfy the desired UX unless it can programmatically replace the submitted prompt.
+- A minimal confirm-and-send adapter is part of MVP because it implements the desired `Confirm sanitized prompt` flow. A polished full composer is later.
+- The system must never send the mapping table or HMAC secret to the cloud.
+- The system must show an explicit confirmation step when sensitive data was replaced.
+- The system must use a 10-second total hard cap for sanitizer work, target under 2 seconds for ordinary prompts, and fail closed on timeout.
+- The system may auto-send without confirmation only when no sensitive data was detected, or when the user has explicitly enabled a low-risk auto mode.
+- The system must maintain a local audit log that records event time, entity types, counts, target application, policy decision, scanner statuses, warning codes, durations/timeouts, span offsets/length/type and replacement pseudonyms, but never raw original values.
+- The system must support import/export of policy dictionaries without exporting the mapping vault by default.
+- Sensitivity rules must be policy-as-data: built-in detectors cover generic technical patterns, while local policy files and dictionaries cover organization-specific names and identifiers.
+- Manual dictionaries are CSV; structured policy/config is TOML.
+- Policy files and dictionaries must be treated as sensitive local artifacts because they can contain customer names, product names, project names and internal domains.
+
+## Testing Decisions
+
+- Tests should validate external behavior: given an input, the gate returns expected sanitized output, entity classifications, mapping behavior and policy decisions.
+- Detector tests should cover URLs, domains, emails, private IPs, CIDRs, tokens, passwords, connection strings, JWTs, private keys, customer names, project names and mixed log snippets.
+- Attachment tests should cover text attachments, large pasted content and unsupported binary attachment metadata.
+- Mapping tests should verify deterministic pseudonyms across sessions and projects.
+- Vault tests should verify that raw originals are not present in audit logs or exported policy files.
+- Gateway/adapter integration tests should simulate the full lifecycle: input -> sanitize -> confirm -> send sanitized -> receive sanitized answer -> restore locally.
+- Timeout tests should verify fail-closed behavior at the 10-second hard cap and scanner-level errors.
+- Security regression tests should include near-miss samples and false-positive samples.
+- The highest-value seam is the redaction engine API: it can be tested without depending on Codex UI internals.
+- A second seam is the gateway adapter contract: adapter receives a prompt event and must either allow, block or replace with explicit user confirmation.
+
+## Out of Scope
+
+- Guaranteeing that data already sent to OpenAI can be removed from past model-training pipelines.
+- Protecting against users who intentionally bypass the gate.
+- Protecting every possible third-party connector unless the connector traffic also flows through the gateway.
+- Full DLP classification for arbitrary documents in the first version.
+- Full binary/PDF/Office/image parsing, OCR and recursive archive scanning in the first version.
+- Silent mutation of Codex prompts using unsupported private APIs.
+- Storing real passwords or long-lived secrets for restoration by default.
+
+## Further Notes
+
+The design must be honest about Codex hook limits. If the official hook surface only allows blocking a user prompt, the project cannot claim transparent pre-submit replacement inside Codex itself. In that case, the correct product is a local gateway/composer that sits before Codex, or a managed Codex extension point that explicitly supports prompt rewriting.
+
+The most important success criterion is not perfect detection. It is a workflow the user can actually keep enabled every day: low friction, deterministic replacements, clear confirmations and fail-closed behavior for obviously sensitive data.
