@@ -65,6 +65,31 @@ public sealed class FileMappingVault : IMappingVault
         return CreateProtected(DefaultVaultFilePath(), hmacSecret, new WindowsDpapiDataProtector());
     }
 
+    public static void MigrateLegacyDefaultVaultIfNeeded(DefaultStorageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var defaultRoot = Path.GetDirectoryName(DefaultVaultFilePath());
+        if (string.IsNullOrWhiteSpace(defaultRoot)
+            || !string.Equals(
+                Path.GetFullPath(layout.RootDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(defaultRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var legacyPath = DefaultVaultFilePath();
+        var currentPath = Path.Combine(layout.VaultDirectory, DefaultVaultFileName);
+        if (!File.Exists(legacyPath) || File.Exists(currentPath))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(layout.VaultDirectory);
+        File.Copy(legacyPath, currentPath);
+    }
+
     public static FileMappingVault CreateProtected(
         string vaultFilePath,
         byte[] hmacSecret,

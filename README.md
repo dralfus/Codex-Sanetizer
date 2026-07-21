@@ -84,6 +84,14 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --dic
 
 Installed users can open the same editor from the tray menu: `Open sensitive terms`.
 
+Restore local placeholders from model responses:
+
+```powershell
+.\CodexRedactionGate.exe --restore-text "DOMAIN_C195C3D8E8F3"
+```
+
+Installed users can open the same restore window from the tray menu: `Open local restore`. Restored output is local-sensitive; sanitize it again before sending it to any cloud app.
+
 Manage policy rules:
 
 ```powershell

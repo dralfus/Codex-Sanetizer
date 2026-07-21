@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace CodexRedactionGate;
@@ -43,6 +44,9 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
             MinimizeBox = false;
             MaximizeBox = true;
             TopMost = true;
+            ShowInTaskbar = true;
+            Load += (_, _) => BringDialogToFront();
+            Shown += (_, _) => BringDialogToFront();
 
             var promptBox = new RichTextBox
             {
@@ -93,6 +97,21 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
             CancelButton = cancel;
         }
 
+        private void BringDialogToFront()
+        {
+            if (WindowState == FormWindowState.Minimized)
+            {
+                WindowState = FormWindowState.Normal;
+            }
+
+            ShowWindow(Handle, SwShow);
+            TopMost = true;
+            BringToFront();
+            Activate();
+            SetForegroundWindow(Handle);
+            FlashWindow(Handle, invert: true);
+        }
+
         private static void Highlight(RichTextBox promptBox, ConfirmationUiModel model)
         {
             foreach (var span in model.HighlightedSpans.OrderBy(span => span.Offset))
@@ -127,5 +146,16 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
             lines.AddRange(model.HighRiskWarnings);
             return string.Join(Environment.NewLine, lines);
         }
+
+        private const int SwShow = 5;
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        private static extern bool FlashWindow(IntPtr hWnd, bool invert);
     }
 }

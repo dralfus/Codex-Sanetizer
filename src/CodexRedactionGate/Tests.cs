@@ -3721,6 +3721,33 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void WindowsConfirmationOverlay_RequestsForegroundActivationForReplacementDialog()
+    {
+        var sourceText = ProductSourceText("WindowsConfirmationOverlay.cs");
+
+        Assert.That(sourceText, Does.Contain("ShowInTaskbar = true"));
+        Assert.That(sourceText, Does.Contain("BringDialogToFront"));
+        Assert.That(sourceText, Does.Contain("SetForegroundWindow"));
+        Assert.That(sourceText, Does.Contain("FlashWindow"));
+    }
+
+    [Test]
+    public void ProductionSanitizerAndRestoreUseSameLayoutVaultWithLegacyMigration()
+    {
+        var sanitizerSource = ProductSourceText("Sanitizer.cs");
+        var restoreSource = ProductSourceText("LocalRestoreWorkflow.cs");
+        var vaultSource = ProductSourceText("FileMappingVault.cs");
+
+        Assert.That(sanitizerSource, Does.Contain("CreateProductionVault(layout)"));
+        Assert.That(sanitizerSource, Does.Contain("FileMappingVault.MigrateLegacyDefaultVaultIfNeeded(layout)"));
+        Assert.That(sanitizerSource, Does.Not.Contain("private static IMappingVault CreateProductionVault()"));
+        Assert.That(restoreSource, Does.Contain("FileMappingVault.MigrateLegacyDefaultVaultIfNeeded(layout)"));
+        Assert.That(vaultSource, Does.Contain("MigrateLegacyDefaultVaultIfNeeded"));
+        Assert.That(vaultSource, Does.Contain("defaultRoot"));
+        Assert.That(vaultSource, Does.Contain("File.Copy(legacyPath, currentPath)"));
+    }
+
+    [Test]
     public void UserInstallScripts_CreateTrayShortcutsAndKeepLocalDataByDefault()
     {
         var repositoryRoot = FindRepositoryRoot();

@@ -28,10 +28,15 @@ public sealed class Sanitizer : ISanitizer
     private readonly SanitizationResultAssembler _resultAssembler;
 
     public Sanitizer()
+        : this(DefaultStorageLayout.CreateDefault())
+    {
+    }
+
+    private Sanitizer(DefaultStorageLayout layout)
         : this(
-            CreateProductionVault(),
-            ManagedSensitiveDictionary.LoadDefaultTerms(),
-            LoadProductionPolicy(DefaultStorageLayout.CreateDefault()).ActivePolicy)
+            CreateProductionVault(layout),
+            new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout)).LoadTerms(),
+            LoadProductionPolicy(layout).ActivePolicy)
     {
     }
 
@@ -79,10 +84,10 @@ public sealed class Sanitizer : ISanitizer
     public static Sanitizer CreateProduction(IReadOnlyList<DictionaryTerm> dictionaryTerms)
     {
         var layout = DefaultStorageLayout.CreateDefault();
-        var managedTerms = ManagedSensitiveDictionary.LoadDefaultTerms();
+        var managedTerms = new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout)).LoadTerms();
         var managedPolicy = LoadProductionPolicy(layout);
         return new Sanitizer(
-            CreateProductionVault(),
+            CreateProductionVault(layout),
             managedTerms.Concat(dictionaryTerms).ToArray(),
             managedPolicy.ActivePolicy,
             CreateProductionSecretScanner());
@@ -92,9 +97,10 @@ public sealed class Sanitizer : ISanitizer
     {
         ArgumentNullException.ThrowIfNull(managedPolicy);
 
-        var managedTerms = ManagedSensitiveDictionary.LoadDefaultTerms();
+        var layout = DefaultStorageLayout.CreateDefault();
+        var managedTerms = new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout)).LoadTerms();
         return new Sanitizer(
-            CreateProductionVault(),
+            CreateProductionVault(layout),
             managedTerms,
             managedPolicy.ActivePolicy,
             CreateProductionSecretScanner());
@@ -282,17 +288,12 @@ public sealed class Sanitizer : ISanitizer
             expectedReplacementCount);
     }
 
-    private static IMappingVault CreateProductionVault()
-    {
-        var secretProvider = DpapiProtectedHmacSecretProvider.CreateProduction();
-        return FileMappingVault.CreateProduction(secretProvider.GetOrCreateSecret());
-    }
-
     private static IMappingVault CreateProductionVault(DefaultStorageLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
         Directory.CreateDirectory(layout.RootDirectory);
         Directory.CreateDirectory(layout.VaultDirectory);
+        FileMappingVault.MigrateLegacyDefaultVaultIfNeeded(layout);
 
         var secretProvider = new DpapiProtectedHmacSecretProvider(
             Path.Combine(layout.RootDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName),

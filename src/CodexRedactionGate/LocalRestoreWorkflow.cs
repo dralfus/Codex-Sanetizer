@@ -36,6 +36,7 @@ public sealed class LocalRestoreWorkflow
     {
         ArgumentNullException.ThrowIfNull(layout);
         layout.EnsureDirectories();
+        FileMappingVault.MigrateLegacyDefaultVaultIfNeeded(layout);
 
         var dataProtector = new WindowsDpapiDataProtector();
         var secretProvider = new DpapiProtectedHmacSecretProvider(

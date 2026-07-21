@@ -238,7 +238,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             using var form = new LocalRestoreForm(LocalRestoreWorkflow.CreateProduction(_layout));
             form.ShowDialog();
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
             MessageBox.Show(
                 exception.Message,
