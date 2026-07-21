@@ -3657,6 +3657,8 @@ public partial class SanitizerTests
         var repositoryRoot = FindRepositoryRoot();
         var script = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "build-release.ps1"));
         var installerScript = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "build-installer.ps1"));
+        var consoleProject = File.ReadAllText(Path.Combine(repositoryRoot, "src", "CodexRedactionGate", "CodexRedactionGate.csproj"));
+        var trayProject = File.ReadAllText(Path.Combine(repositoryRoot, "src", "CodexRedactionGate.Tray", "CodexRedactionGate.Tray.csproj"));
 
         Assert.That(script, Does.Contain("$ScannerSourceDirectory"));
         Assert.That(script, Does.Contain("$RequireScannerPackage"));
@@ -3683,6 +3685,8 @@ public partial class SanitizerTests
         Assert.That(installerScript, Does.Contain("CodexRedactionGateSetup-*.exe"));
         Assert.That(installerScript, Does.Contain("CodexRedactionGateSetup-$BuildVersion.exe"));
         Assert.That(installerScript, Does.Contain("Expected installer was not created"));
+        Assert.That(consoleProject, Does.Contain("<UseWPF>true</UseWPF>"));
+        Assert.That(trayProject, Does.Contain("<UseWPF>true</UseWPF>"));
     }
 
     [Test]
