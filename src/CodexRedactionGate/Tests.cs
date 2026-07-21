@@ -3673,6 +3673,11 @@ public partial class SanitizerTests
         Assert.That(installScript, Does.Contain("CodexRedactionGate.Tray.exe"));
         Assert.That(installScript, Does.Contain("Start-Process -FilePath $trayExe"));
         Assert.That(installScript, Does.Not.Contain("Start-Process -FilePath $exe -ArgumentList \"--tray-app\""));
+        Assert.That(installScript, Does.Contain("[switch] $StopRunning"));
+        Assert.That(installScript, Does.Contain("Type YES to stop Code Sanitizer and continue installation"));
+        Assert.That(installScript, Does.Contain("selected AI apps will no longer be protected"));
+        Assert.That(installScript, Does.Contain("Stop-Process -Id $process.Id -Force"));
+        Assert.That(installScript, Does.Contain("Wait-Process -Id $process.Id -Timeout 5"));
         Assert.That(installScript, Does.Contain("--autostart-enable"));
         Assert.That(installScript, Does.Contain("-WindowStyle Hidden"));
         Assert.That(installScript, Does.Not.Contain("--local-data-cleanup --i-understand-delete-local-sensitive-data"));

@@ -151,6 +151,12 @@ Install it for the current user and launch the tray app:
 .\scripts\install-user.ps1
 ```
 
+If Code Sanitizer is already running, the install script asks before stopping it because selected AI apps are unprotected during the update. For unattended local updates, pass the explicit confirmation flag:
+
+```powershell
+.\scripts\install-user.ps1 -StopRunning
+```
+
 Install without launching:
 
 ```powershell
