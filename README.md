@@ -76,10 +76,13 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --san
 Manage local sensitive dictionary entries:
 
 ```powershell
+.\CodexRedactionGate.exe --dictionary-ui
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --dictionary-add domain corp.example.local
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --dictionary-list
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --dictionary-remove <entry-id>
 ```
+
+Installed users can open the same editor from the tray menu: `Open sensitive terms`.
 
 Manage policy rules:
 

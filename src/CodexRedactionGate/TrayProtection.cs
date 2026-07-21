@@ -330,7 +330,7 @@ internal static class TrayMenuContent
 
     public static TrayLocalCommand AuditViewerCommand { get; } = new("Audit viewer", "--audit-view");
 
-    public static TrayLocalCommand RuleManagementCommand { get; } = new("Rule management", "--dictionary-list");
+    public static TrayLocalCommand RuleManagementCommand { get; } = new("Sensitive terms", "--dictionary-ui");
 
     public static string RestoreText { get; } = string.Join(
         Environment.NewLine,
@@ -358,7 +358,9 @@ internal static class TrayMenuContent
         "Protected Send binding commands:",
         "--native-profiles-status",
         "--native-profile-verify codex-desktop Enter Ctrl+Enter",
-        "Local rule management commands:",
+        "Local sensitive terms UI:",
+        "--dictionary-ui",
+        "Local rule management CLI:",
         "--send-mode-show",
         "--send-mode-enable",
         "--send-mode-disable",

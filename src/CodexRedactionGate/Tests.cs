@@ -1500,6 +1500,8 @@ public partial class SanitizerTests
         Assert.That(text, Does.Contain("--autostart-enable"));
         Assert.That(text, Does.Contain("--autostart-disable"));
         Assert.That(text, Does.Contain("--local-data-cleanup [--i-understand-delete-local-sensitive-data]"));
+        Assert.That(text, Does.Contain("Local sensitive terms UI:"));
+        Assert.That(text, Does.Contain("--dictionary-ui"));
         Assert.That(text, Does.Contain("--dictionary-add-batch"));
         Assert.That(text, Does.Contain("--dictionary-remove id [id]..."));
         Assert.That(text, Does.Contain("--policy-test \"text\" [--show-sanitized]"));
@@ -1534,6 +1536,7 @@ public partial class SanitizerTests
             Environment.NewLine,
             ProductSourceText("TrayProtection.cs"),
             ProductSourceText("WindowsTrayApp.cs"),
+            ProductSourceText("DictionaryManagementForm.cs"),
             ProductSourceText("ConfirmationUi.cs"),
             ProductSourceText("WindowsConfirmationOverlay.cs"),
             ProductSourceText("OsConfirmationOverlayRenderer.cs"));
@@ -3683,6 +3686,37 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayUi_OpensSensitiveTermsWindowInsteadOfDictionaryConsoleList()
+    {
+        var traySourceText = ProductSourceText("WindowsTrayApp.cs");
+
+        Assert.That(traySourceText, Does.Contain("Open sensitive terms"));
+        Assert.That(traySourceText, Does.Contain("DictionaryManagementForm"));
+        Assert.That(TrayMenuContent.RuleManagementCommand.CliArgument, Is.EqualTo("--dictionary-ui"));
+        Assert.That(traySourceText, Does.Not.Contain("Open rule management"));
+    }
+
+    [Test]
+    public void DictionaryManagementUiText_ExposesSupportedTypesAndAvoidsDotnetRunInstructions()
+    {
+        var text = string.Join(
+            Environment.NewLine,
+            DictionaryManagementUiText.Title,
+            DictionaryManagementUiText.Intro,
+            DictionaryManagementUiText.SupportedTypesText(),
+            DictionaryManagementUiText.AddButton,
+            DictionaryManagementUiText.UpdateButton,
+            DictionaryManagementUiText.DeleteButton,
+            DictionaryManagementUiText.TestButton);
+
+        Assert.That(text, Does.Contain("domain"));
+        Assert.That(text, Does.Contain("url"));
+        Assert.That(text, Does.Contain("username"));
+        Assert.That(text, Does.Contain("Test text"));
+        Assert.That(text, Does.Not.Contain("dotnet run"));
+    }
+
+    [Test]
     public void UserInstallScripts_CreateTrayShortcutsAndKeepLocalDataByDefault()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -5262,6 +5296,37 @@ public class CliTests
     }
 
     [Test]
+    public void ManagedSensitiveDictionary_UpdateEditsTermAndRejectsDuplicate()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var store = new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout));
+            var first = store.Add("domain", "old.example.local", "old domain");
+            var second = store.Add("domain", "existing.example.local", null);
+
+            var update = store.Update(first.EntryId!, "domain", "new.example.local", "new domain");
+            var duplicate = store.Update(first.EntryId!, "domain", "existing.example.local", null);
+            var entries = store.ListEntriesForLocalReveal();
+
+            Assert.That(update.Succeeded, Is.True);
+            Assert.That(update.Code, Is.EqualTo("dictionary_term_updated"));
+            Assert.That(duplicate.Succeeded, Is.False);
+            Assert.That(duplicate.Code, Is.EqualTo("dictionary_term_exists"));
+            Assert.That(entries.Single(entry => entry.Id == first.EntryId).Value, Is.EqualTo("new.example.local"));
+            Assert.That(entries.Single(entry => entry.Id == first.EntryId).Notes, Is.EqualTo("new domain"));
+            Assert.That(entries.Any(entry => entry.Value == "old.example.local"), Is.False);
+            Assert.That(entries.Single(entry => entry.Id == second.EntryId).Value, Is.EqualTo("existing.example.local"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
     public void Main_HotkeySetPersistsAndHotkeyShowLoadsConfiguredCombination()
     {
         var tempDirectory = CreateTempDirectory();
@@ -5627,6 +5692,7 @@ public class CliTests
         Assert.That(stdout, Does.Contain("--sanitize \"text\""));
         Assert.That(stdout, Does.Contain("--restore-text \"sanitized model response\""));
         Assert.That(stdout, Does.Contain("--restore-view"));
+        Assert.That(stdout, Does.Contain("--dictionary-ui"));
         Assert.That(stdout, Does.Contain("--policy-test \"text\" [--show-sanitized]"));
         Assert.That(stdout, Does.Contain("--hotkey-show"));
         Assert.That(stdout, Does.Contain("--hotkey-set \"Ctrl+Shift+F9\""));

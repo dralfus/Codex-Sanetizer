@@ -80,6 +80,11 @@ public static class Program
             return RunRestoreView(runtime.LayoutFactory, runtime.RestoreWorkflowFactory);
         }
 
+        if (args.Length == 1 && args[0] == "--dictionary-ui")
+        {
+            return RunDictionaryUi(runtime.LayoutFactory);
+        }
+
         if (args.Length == 4 && args[0] == "--sanitize" && args[2] == "--dictionary")
         {
             return RunSanitizeWithDictionary(args[1], args[3], runtime.SanitizerFactory);
@@ -391,6 +396,20 @@ public static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         using var form = new LocalRestoreForm(restoreWorkflowFactory(layoutFactory()));
+        Application.Run(form);
+        return 0;
+    }
+
+    private static int RunDictionaryUi(Func<DefaultStorageLayout> layoutFactory)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return Fail("Sensitive terms UI requires Windows.");
+        }
+
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        using var form = new DictionaryManagementForm(layoutFactory());
         Application.Run(form);
         return 0;
     }
@@ -1316,6 +1335,7 @@ public static class Program
         Console.WriteLine("  --sanitize \"text\" --dictionary \"terms.csv\"");
         Console.WriteLine("  --restore-text \"sanitized model response\"");
         Console.WriteLine("  --restore-view");
+        Console.WriteLine("  --dictionary-ui");
         Console.WriteLine("  --doctor [--package app gitleaks provenance]");
         Console.WriteLine("  --dictionary-add type value [notes]");
         Console.WriteLine("  --dictionary-add-batch type value [type value]...");

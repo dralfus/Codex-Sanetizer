@@ -153,9 +153,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         menu.Items.Add(_toggleItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Open local restore", null, (_, _) => OpenLocalRestore()));
+        menu.Items.Add(new ToolStripMenuItem("Open sensitive terms", null, (_, _) => OpenDictionaryManagement()));
         menu.Items.Add(new ToolStripMenuItem("Open audit viewer", null, (_, _) => OpenCommand(TrayMenuContent.AuditViewerCommand)));
         menu.Items.Add(new ToolStripMenuItem("Open diagnostics", null, (_, _) => OpenCommand(TrayMenuContent.DiagnosticsCommand)));
-        menu.Items.Add(new ToolStripMenuItem("Open rule management", null, (_, _) => OpenCommand(TrayMenuContent.RuleManagementCommand)));
         menu.Items.Add(new ToolStripMenuItem("Command reference...", null, (_, _) => ShowLocalText("Commands", TrayMenuContent.RestoreText + Environment.NewLine + Environment.NewLine + TrayMenuContent.DiagnosticsText + Environment.NewLine + Environment.NewLine + TrayMenuContent.RuleManagementText)));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => Exit()));
@@ -243,6 +243,23 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             MessageBox.Show(
                 exception.Message,
                 "Codex Redaction Gate - Local restore failed",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
+    private void OpenDictionaryManagement()
+    {
+        try
+        {
+            using var form = new DictionaryManagementForm(_layout);
+            form.ShowDialog();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(
+                exception.Message,
+                "Codex Redaction Gate - Sensitive terms failed",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }

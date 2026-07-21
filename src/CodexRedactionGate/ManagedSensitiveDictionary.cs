@@ -173,6 +173,42 @@ public sealed class ManagedSensitiveDictionary
             : new ManagedDictionaryMutationResult(false, item?.Code ?? result.Code, id);
     }
 
+    public ManagedDictionaryMutationResult Update(string id, string type, string value, string? notes = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        var term = new DictionaryTerm(type, value, PolicyActions.PseudonymizeRestorable, notes);
+        var code = ValidateTerm(term);
+        if (code is not null)
+        {
+            return new ManagedDictionaryMutationResult(false, code, id);
+        }
+
+        var entries = LoadEntries().ToList();
+        var index = entries.FindIndex(entry => string.Equals(entry.Id, id, StringComparison.Ordinal));
+        if (index < 0)
+        {
+            return new ManagedDictionaryMutationResult(false, "dictionary_term_not_found", id);
+        }
+
+        var replacementKey = CreateKey(term.Type, term.Value);
+        if (entries.Any(entry => !string.Equals(entry.Id, id, StringComparison.Ordinal)
+            && string.Equals(CreateKey(entry.Type, entry.Value), replacementKey, StringComparison.Ordinal)))
+        {
+            return new ManagedDictionaryMutationResult(false, "dictionary_term_exists", id);
+        }
+
+        entries[index] = new ManagedDictionaryEntry(
+            Id: id,
+            Type: term.Type,
+            Value: term.Value,
+            Action: PolicyActions.PseudonymizeRestorable,
+            Notes: term.Notes);
+
+        Save(entries);
+        return new ManagedDictionaryMutationResult(true, "dictionary_term_updated", id);
+    }
+
     public ManagedDictionaryRemoveBatchResult RemoveBatch(IReadOnlyList<string> ids)
     {
         ArgumentNullException.ThrowIfNull(ids);
