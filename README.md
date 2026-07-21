@@ -26,7 +26,8 @@ tickets.md                       Local implementation tracker
 ## Requirements
 
 - Windows.
-- .NET 10 SDK.
+- .NET 10 SDK for building from source.
+- .NET 10 Desktop Runtime or SDK on the target machine. Release builds are currently framework-dependent and do not download runtimes.
 - Optional: Inno Setup 6 if you want to build the `.exe` installer.
 - Optional: a packaged Gitleaks scanner under `artifacts/scanners/gitleaks/` for release builds:
   - `gitleaks.exe`
@@ -50,11 +51,19 @@ Run the product smoke:
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --product-smoke
 ```
 
-Start the tray app:
+Build the installable release:
 
 ```powershell
-dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --tray-app
+.\scripts\build-release.ps1
 ```
+
+Install and launch the resident tray app for the current user:
+
+```powershell
+.\scripts\install-user.ps1
+```
+
+The normal app entrypoint is `CodexRedactionGate.Tray.exe`. `CodexRedactionGate.exe` remains the CLI and diagnostics companion. You should not need `dotnet run` for normal protected operation after installation.
 
 ## Common CLI Commands
 
@@ -92,10 +101,12 @@ Configure the secondary hotkey and optional autostart:
 
 ```powershell
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --hotkey-show
-dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --hotkey-set "Ctrl+Enter"
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --hotkey-set "Ctrl+Shift+F9"
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --autostart-enable
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --autostart-disable
 ```
+
+The hotkey above is only a secondary `manual scan/apply` feature. It is not proof that native submit interception is protecting the selected AI app.
 
 ## Windows Desktop Flow
 
@@ -103,16 +114,28 @@ Supported v1 targets are Codex Desktop and ChatGPT Desktop on Windows.
 
 The production direction is selected-AI native submit interception, not hotkey-first operation. A surface is `protected` only when the selected AI app, focused composer and active submit binding are verified. If submit binding discovery is unavailable, the app must show `binding_unknown` or `degraded_hotkey_only` instead of claiming protection.
 
-Recommended validation sequence:
+Recommended local validation sequence before trying a real Codex/ChatGPT prompt:
 
 ```powershell
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-compatibility-matrix
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-composer-diagnostic-delay 5
-dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-demo-hotkey
-dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-demo-hotkey-apply
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --native-profile-verify codex-desktop Enter Ctrl+Enter
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --native-profiles-status
 ```
 
-`--os-demo-hotkey-send` is an advanced mode and is disabled by default. It requires explicit local enablement with `--send-mode-enable` after supported Codex/ChatGPT desktop apply-only evidence exists.
+If your Codex/ChatGPT Desktop sends with a different shortcut, replace `Enter` with the real Send binding and keep the newline binding as the shortcut that inserts a new line. For example, when `Enter` sends and `Ctrl+Enter` inserts a newline, Code Sanitizer must intercept `Enter` only in the verified composer and pass `Ctrl+Enter` through.
+
+Before sending a sensitive test prompt, `--native-profiles-status` should show a selected profile with:
+
+```text
+readiness=protected
+protected_send_binding=Enter
+newline_binding=Ctrl+Enter
+```
+
+If the status is `not_configured`, `binding_unknown`, `surface_unverified`, or `degraded_hotkey_only`, do not treat the AI app as protected yet.
+
+`--os-demo-hotkey`, `--os-demo-hotkey-apply`, and `--os-demo-hotkey-send` are legacy/demo diagnostics. They are not the normal product flow.
 
 ## Install
 
@@ -122,11 +145,37 @@ Publish a user-scope build:
 .\scripts\build-release.ps1
 ```
 
-Install it for the current user:
+Install it for the current user and launch the tray app:
 
 ```powershell
 .\scripts\install-user.ps1
 ```
+
+Install without launching:
+
+```powershell
+.\scripts\install-user.ps1 -NoLaunch
+```
+
+Install and enable user-scope autostart:
+
+```powershell
+.\scripts\install-user.ps1 -EnableAutostart
+```
+
+Installed files go to:
+
+```text
+%LOCALAPPDATA%\Programs\CodexRedactionGate
+```
+
+Start Menu shortcuts are created for:
+
+- `Codex Redaction Gate` - launches `CodexRedactionGate.Tray.exe`.
+- `Diagnostics` - runs CLI diagnostics.
+- `Audit viewer` - opens the raw-free audit viewer.
+
+Stopping protection, exiting the tray app, or unloading the resident process requires explicit confirmation. Canceling the confirmation keeps protection running. Managed policy may block unload entirely.
 
 Uninstall but keep local sensitive data:
 
@@ -145,6 +194,8 @@ Build an Inno Setup installer when `ISCC.exe` is available:
 ```powershell
 .\scripts\build-installer.ps1
 ```
+
+The Inno installer launches `CodexRedactionGate.Tray.exe` after setup and can register the same tray executable in HKCU autostart.
 
 ## Local Data
 
