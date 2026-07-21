@@ -201,7 +201,19 @@ Build an Inno Setup installer when `ISCC.exe` is available:
 .\scripts\build-installer.ps1
 ```
 
-The Inno installer launches `CodexRedactionGate.Tray.exe` after setup and can register the same tray executable in HKCU autostart.
+The installer is an Inno Setup executable named like:
+
+```text
+artifacts\installer\CodexRedactionGateSetup-0.1.20260721.t1530.exe
+```
+
+You can set the version explicitly:
+
+```powershell
+.\scripts\build-installer.ps1 -BuildVersion "0.1.20260721.t1530"
+```
+
+The Inno installer launches `CodexRedactionGate.Tray.exe` after setup, can register the same tray executable in HKCU autostart, and uses the standard Windows installer flow to close applications that block file replacement during upgrades. Release builds are self-contained for `win-x64`, so the installed application does not require `dotnet` to be available in `PATH`.
 
 ## Local Data
 

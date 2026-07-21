@@ -3637,6 +3637,11 @@ public partial class SanitizerTests
         Assert.That(manifest, Does.Contain("Software\\Microsoft\\Windows\\CurrentVersion\\Run"));
         Assert.That(manifest, Does.Contain("CodexRedactionGate.Tray.exe"));
         Assert.That(manifest, Does.Not.Contain("\"CodexRedactionGate.exe\" --tray-app"));
+        Assert.That(manifest, Does.Contain("#ifndef MyAppVersion"));
+        Assert.That(manifest, Does.Contain("OutputBaseFilename=CodexRedactionGateSetup-{#MyAppVersion}"));
+        Assert.That(manifest, Does.Contain("ArchitecturesInstallIn64BitMode=x64compatible"));
+        Assert.That(manifest, Does.Contain("CloseApplications=yes"));
+        Assert.That(manifest, Does.Contain("RestartApplications=no"));
         Assert.That(manifest, Does.Contain("Codex Redaction Gate keeps local vault, dictionary, policy, audit and settings by default."));
         Assert.That(manifest, Does.Contain("--local-data-cleanup --i-understand-delete-local-sensitive-data"));
         Assert.That(manifest, Does.Not.Contain("Remove local sensitive data"));
@@ -3656,8 +3661,25 @@ public partial class SanitizerTests
         Assert.That(script, Does.Contain("gitleaks-provenance.json"));
         Assert.That(script, Does.Contain("Scanner package is partial"));
         Assert.That(script, Does.Contain("scanner_output=safe_disabled_missing"));
+        Assert.That(script, Does.Contain("Refusing to clean $Purpose outside the repository"));
+        Assert.That(script, Does.Contain("$repoBoundary"));
+        Assert.That(script, Does.Contain("artifacts\\publish-work"));
+        Assert.That(script, Does.Contain("--self-contained true"));
+        Assert.That(script, Does.Contain("Copy-Item -Path (Join-Path $consoleOutput \"CodexRedactionGate.*\")"));
+        Assert.That(script, Does.Contain("Remove-TestPublishArtifacts"));
+        Assert.That(script, Does.Contain("NUnit3.TestAdapter*"));
+        Assert.That(script, Does.Contain("testhost.*"));
+        Assert.That(script, Does.Contain("CodeCoverage"));
         Assert.That(installerScript, Does.Contain("-ScannerSourceDirectory $ScannerSourceDirectory"));
         Assert.That(installerScript, Does.Contain("-RequireScannerPackage:$RequireScannerPackage"));
+        Assert.That(installerScript, Does.Contain("[string] $BuildVersion"));
+        Assert.That(installerScript, Does.Contain("0.1.$($now.ToString('yyyyMMdd')).t$($now.ToString('HHmm'))"));
+        Assert.That(installerScript, Does.Contain("Get-Command iscc"));
+        Assert.That(installerScript, Does.Contain("Programs\\Inno Setup 6\\ISCC.exe"));
+        Assert.That(installerScript, Does.Contain("/DMyAppVersion=$BuildVersion"));
+        Assert.That(installerScript, Does.Contain("CodexRedactionGateSetup-*.exe"));
+        Assert.That(installerScript, Does.Contain("CodexRedactionGateSetup-$BuildVersion.exe"));
+        Assert.That(installerScript, Does.Contain("Expected installer was not created"));
     }
 
     [Test]

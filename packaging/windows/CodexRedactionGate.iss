@@ -6,21 +6,29 @@
 #define OutputDir "..\..\artifacts\installer"
 #endif
 
+#ifndef MyAppVersion
+#define MyAppVersion "0.1.0"
+#endif
+
 [Setup]
 AppId={{9A3AF91C-ED0F-4C8C-86F9-CF69F5A1A04A}
 AppName=Codex Redaction Gate
-AppVersion=0.1.0
+AppVersion={#MyAppVersion}
+AppVerName=Codex Redaction Gate {#MyAppVersion}
+UninstallDisplayName=Codex Redaction Gate {#MyAppVersion}
 AppPublisher=Codex Redaction Gate
 DefaultDirName={localappdata}\Programs\CodexRedactionGate
 DefaultGroupName=Codex Redaction Gate
 DisableProgramGroupPage=yes
 OutputDir={#OutputDir}
-OutputBaseFilename=CodexRedactionGateSetup
+OutputBaseFilename=CodexRedactionGateSetup-{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 PrivilegesRequired=lowest
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\CodexRedactionGate.Tray.exe
+CloseApplications=yes
+RestartApplications=no
 
 [Tasks]
 Name: autostart; Description: "Start Codex Redaction Gate when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
