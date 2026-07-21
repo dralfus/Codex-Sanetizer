@@ -20,7 +20,7 @@ Compression=lzma
 SolidCompression=yes
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64
-UninstallDisplayIcon={app}\CodexRedactionGate.exe
+UninstallDisplayIcon={app}\CodexRedactionGate.Tray.exe
 
 [Tasks]
 Name: autostart; Description: "Start Codex Redaction Gate when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
@@ -29,15 +29,15 @@ Name: autostart; Description: "Start Codex Redaction Gate when I sign in"; Group
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Codex Redaction Gate"; Filename: "{app}\CodexRedactionGate.exe"; Parameters: "--tray-app"
+Name: "{group}\Codex Redaction Gate"; Filename: "{app}\CodexRedactionGate.Tray.exe"
 Name: "{group}\Diagnostics"; Filename: "{app}\CodexRedactionGate.exe"; Parameters: "--doctor"
 Name: "{group}\Audit viewer"; Filename: "{app}\CodexRedactionGate.exe"; Parameters: "--audit-view"
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "CodexRedactionGate"; ValueData: """{app}\CodexRedactionGate.exe"" --tray-app"; Flags: uninsdeletevalue; Tasks: autostart
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "CodexRedactionGate"; ValueData: """{app}\CodexRedactionGate.Tray.exe"""; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-Filename: "{app}\CodexRedactionGate.exe"; Parameters: "--tray-app"; Description: "Launch Codex Redaction Gate"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\CodexRedactionGate.Tray.exe"; Description: "Launch Codex Redaction Gate"; Flags: nowait postinstall skipifsilent
 
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

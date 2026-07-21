@@ -74,7 +74,8 @@ public static class WindowsTrayApp
                         new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
                         new WindowsConfirmationOverlay());
                     return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
-                });
+                },
+            nativeProfile);
     }
 }
 
@@ -107,6 +108,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 {
     private readonly TrayProtectionController _controller;
     private readonly ITrayLocalCommandLauncher _commandLauncher;
+    private readonly ITrayProtectionDisableConfirmation _disableConfirmation;
     private readonly DefaultStorageLayout _layout;
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _statusItem;
@@ -128,10 +130,20 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         TrayProtectionController controller,
         DefaultStorageLayout layout,
         ITrayLocalCommandLauncher commandLauncher)
+        : this(controller, layout, commandLauncher, new MessageBoxTrayProtectionDisableConfirmation())
+    {
+    }
+
+    internal WindowsTrayApplicationContext(
+        TrayProtectionController controller,
+        DefaultStorageLayout layout,
+        ITrayLocalCommandLauncher commandLauncher,
+        ITrayProtectionDisableConfirmation disableConfirmation)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
         _commandLauncher = commandLauncher ?? throw new ArgumentNullException(nameof(commandLauncher));
+        _disableConfirmation = disableConfirmation ?? throw new ArgumentNullException(nameof(disableConfirmation));
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _toggleItem = new ToolStripMenuItem("Stop protection", null, (_, _) => ToggleProtection());
@@ -179,7 +191,16 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     {
         if (_controller.State.Enabled)
         {
-            _controller.Stop();
+            if (!_disableConfirmation.Confirm("stop protection", _controller.State))
+            {
+                return;
+            }
+
+            var result = _controller.TryDisableProtection("stop_protection", confirmed: true);
+            if (!result.Succeeded)
+            {
+                ShowDisableRejected(result);
+            }
         }
         else
         {
@@ -242,7 +263,20 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void Exit()
     {
-        StopProtectionAndHideIcon();
+        if (_controller.State.Enabled
+            && !_disableConfirmation.Confirm("exit Code Sanitizer", _controller.State))
+        {
+            return;
+        }
+
+        var result = _controller.TryDisableProtection("exit", confirmed: true);
+        if (!result.Succeeded)
+        {
+            ShowDisableRejected(result);
+            return;
+        }
+
+        _notifyIcon.Visible = false;
         ExitThread();
     }
 
@@ -250,6 +284,52 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     {
         _controller.Stop();
         _notifyIcon.Visible = false;
+    }
+
+    private static void ShowDisableRejected(ProtectionDisableResult result)
+    {
+        MessageBox.Show(
+            $"Protection is still running. status={result.Code}",
+            "Code Sanitizer - Protection remains active",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+    }
+}
+
+internal interface ITrayProtectionDisableConfirmation
+{
+    bool Confirm(string action, TrayProtectionState state);
+}
+
+internal sealed class MessageBoxTrayProtectionDisableConfirmation : ITrayProtectionDisableConfirmation
+{
+    public bool Confirm(string action, TrayProtectionState state)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(action);
+        ArgumentNullException.ThrowIfNull(state);
+
+        return MessageBox.Show(
+            TrayProtectionDisableConfirmationText.Format(action, state),
+            "Code Sanitizer - Disable protection?",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+    }
+}
+
+internal static class TrayProtectionDisableConfirmationText
+{
+    public static string Format(string action, TrayProtectionState state)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(action);
+        ArgumentNullException.ThrowIfNull(state);
+
+        return string.Join(
+            Environment.NewLine,
+            $"Confirm {action}.",
+            "Selected AI apps will no longer be protected while Code Sanitizer is stopped.",
+            $"protected_send_binding={state.ProtectedSendBinding}",
+            $"readiness={state.ReadinessStatus}");
     }
 }
 

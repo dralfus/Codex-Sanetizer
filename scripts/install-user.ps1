@@ -11,7 +11,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $source = if ([System.IO.Path]::IsPathRooted($SourceDirectory)) { $SourceDirectory } else { Join-Path $repoRoot $SourceDirectory }
 
-if (-not (Test-Path (Join-Path $source "CodexRedactionGate.exe"))) {
+if (-not (Test-Path (Join-Path $source "CodexRedactionGate.exe")) -or -not (Test-Path (Join-Path $source "CodexRedactionGate.Tray.exe"))) {
     throw "Published app was not found. Run scripts\build-release.ps1 first."
 }
 
@@ -19,18 +19,19 @@ New-Item -ItemType Directory -Force $InstallDirectory | Out-Null
 Copy-Item -Path (Join-Path $source "*") -Destination $InstallDirectory -Recurse -Force
 
 $exe = Join-Path $InstallDirectory "CodexRedactionGate.exe"
+$trayExe = Join-Path $InstallDirectory "CodexRedactionGate.Tray.exe"
 New-Item -ItemType Directory -Force $StartMenuDirectory | Out-Null
 
 $shell = New-Object -ComObject WScript.Shell
 $shortcuts = @(
-    @{ Name = "Codex Redaction Gate.lnk"; Arguments = "--tray-app" },
-    @{ Name = "Diagnostics.lnk"; Arguments = "--doctor" },
-    @{ Name = "Audit viewer.lnk"; Arguments = "--audit-view" }
+    @{ Name = "Codex Redaction Gate.lnk"; Target = $trayExe; Arguments = "" },
+    @{ Name = "Diagnostics.lnk"; Target = $exe; Arguments = "--doctor" },
+    @{ Name = "Audit viewer.lnk"; Target = $exe; Arguments = "--audit-view" }
 )
 
 foreach ($item in $shortcuts) {
     $shortcut = $shell.CreateShortcut((Join-Path $StartMenuDirectory $item.Name))
-    $shortcut.TargetPath = $exe
+    $shortcut.TargetPath = $item.Target
     $shortcut.Arguments = $item.Arguments
     $shortcut.WorkingDirectory = $InstallDirectory
     $shortcut.Save()
@@ -44,7 +45,7 @@ if ($EnableAutostart) {
 }
 
 if (-not $NoLaunch) {
-    Start-Process -FilePath $exe -ArgumentList "--tray-app" -WindowStyle Hidden
+    Start-Process -FilePath $trayExe -WindowStyle Hidden
 }
 
 Write-Host "install_status=installed"

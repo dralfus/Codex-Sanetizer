@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repoRoot "src\CodexRedactionGate\CodexRedactionGate.csproj"
+$trayProject = Join-Path $repoRoot "src\CodexRedactionGate.Tray\CodexRedactionGate.Tray.csproj"
 $output = Join-Path $repoRoot $OutputDirectory
 $dotnet = $env:DOTNET_EXE
 if ([string]::IsNullOrWhiteSpace($dotnet)) {
@@ -35,6 +36,18 @@ if ([string]::IsNullOrWhiteSpace($dotnet)) {
 New-Item -ItemType Directory -Force $output | Out-Null
 
 & $dotnet publish $project `
+    -c $Configuration `
+    -r $Runtime `
+    --self-contained false `
+    -p:UseAppHost=true `
+    -p:PublishSingleFile=false `
+    -o $output
+
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& $dotnet publish $trayProject `
     -c $Configuration `
     -r $Runtime `
     --self-contained false `
@@ -72,3 +85,4 @@ elseif (-not $RequireScannerPackage) {
 }
 
 Write-Host "release_output=$output"
+Write-Host "resident_tray_exe=$(Join-Path $output "CodexRedactionGate.Tray.exe")"

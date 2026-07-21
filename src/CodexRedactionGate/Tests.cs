@@ -1252,7 +1252,7 @@ public partial class SanitizerTests
         Assert.That(host.Started, Is.False);
         Assert.That(runningState.Enabled, Is.True);
         Assert.That(runningState.Mode, Is.EqualTo("ApplyOnly"));
-        Assert.That(runningState.Hotkey, Is.EqualTo("Ctrl+Enter"));
+        Assert.That(runningState.Hotkey, Is.EqualTo("Ctrl+Shift+F9"));
         Assert.That(runningState.LastStatus, Is.EqualTo("enabled"));
         Assert.That(stoppedState.Enabled, Is.False);
         Assert.That(stoppedState.LastStatus, Is.EqualTo("disabled"));
@@ -1269,9 +1269,9 @@ public partial class SanitizerTests
 
         Assert.That(started, Is.False);
         Assert.That(controller.State.Enabled, Is.False);
-        Assert.That(statusText, Does.Contain("hotkey=Ctrl+Enter"));
+        Assert.That(statusText, Does.Contain("manual_scan_hotkey=Ctrl+Enter"));
         Assert.That(statusText, Does.Contain("last=hotkey_register_failed:1409"));
-        Assert.That(TrayStatusFormatter.FormatStartupError(controller.State), Does.Contain("hotkey=Ctrl+Enter"));
+        Assert.That(TrayStatusFormatter.FormatStartupError(controller.State), Does.Contain("manual_scan_hotkey=Ctrl+Enter"));
         Assert.That(TrayStatusFormatter.FormatStartupError(controller.State), Does.Contain("error=hotkey_register_failed:1409"));
         Assert.That(statusText, Does.Not.Contain("ACME Banking"));
         Assert.That(statusText, Does.Not.Contain("SENSITIVE_MARKER"));
@@ -1333,6 +1333,147 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_SeparatesProtectedSendBindingFromManualHotkey()
+    {
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "codex-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            TextSurfaceDiscoveryResult.Success(new TextSurfaceDescriptor(
+                "surface-1",
+                "codex-desktop",
+                "Codex desktop composer",
+                Supported: true,
+                CanCaptureText: true,
+                CanReplaceText: true,
+                CanSubmit: true,
+                Metadata: new Dictionary<string, string>())));
+        var controller = new TrayProtectionController(
+            new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            new RecordingNativeSubmitHookHost(),
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => new OsInteractionResult(
+                OsInteractionStatusIds.Submitted,
+                Surface: null,
+                SanitizationResult: null,
+                ConfirmationModel: null,
+                Applied: true,
+                Submitted: true,
+                Diagnostics: new Dictionary<string, string>()),
+            profile);
+
+        controller.Start();
+        var statusText = TrayStatusFormatter.FormatMenuStatus(controller.State);
+
+        Assert.That(controller.State.NativeSubmitEnabled, Is.True);
+        Assert.That(statusText, Does.Contain("protected_send_binding=Enter"));
+        Assert.That(statusText, Does.Contain("newline_binding=Ctrl+Enter"));
+        Assert.That(statusText, Does.Contain("manual_scan_hotkey=Ctrl+Shift+F9"));
+        Assert.That(statusText, Does.Not.Contain("hotkey=Ctrl+Enter"));
+    }
+
+    [Test]
+    public void TrayProtectionController_DisableRequiresConfirmationAndCanBePolicyBlocked()
+    {
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "codex-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            TextSurfaceDiscoveryResult.Success(new TextSurfaceDescriptor(
+                "surface-1",
+                "codex-desktop",
+                "Codex desktop composer",
+                Supported: true,
+                CanCaptureText: true,
+                CanReplaceText: true,
+                CanSubmit: true,
+                Metadata: new Dictionary<string, string>())));
+        var controller = new TrayProtectionController(
+            new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            new RecordingNativeSubmitHookHost(),
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => new OsInteractionResult(
+                OsInteractionStatusIds.Submitted,
+                Surface: null,
+                SanitizationResult: null,
+                ConfirmationModel: null,
+                Applied: true,
+                Submitted: true,
+                Diagnostics: new Dictionary<string, string>()),
+            profile);
+        controller.Start();
+
+        var canceled = controller.TryDisableProtection("exit", confirmed: false);
+        var confirmed = controller.TryDisableProtection("exit", confirmed: true);
+
+        Assert.That(canceled.Succeeded, Is.False);
+        Assert.That(canceled.ProtectionStillRunning, Is.True);
+        Assert.That(controller.State.Enabled, Is.False);
+        Assert.That(confirmed.Succeeded, Is.True);
+        Assert.That(confirmed.ProtectionStillRunning, Is.False);
+        Assert.That(confirmed.Diagnostics["raw_prompt_recorded"], Is.EqualTo("false"));
+
+        var managed = new TrayProtectionController(
+            new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            new RecordingNativeSubmitHookHost(),
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => new OsInteractionResult(
+                OsInteractionStatusIds.Submitted,
+                Surface: null,
+                SanitizationResult: null,
+                ConfirmationModel: null,
+                Applied: true,
+                Submitted: true,
+                Diagnostics: new Dictionary<string, string>()),
+            profile,
+            new NativeSubmitEnterprisePolicy(
+                ManagedMode: true,
+                RequiredProfileIds: new[] { "codex-desktop" },
+                DisallowHotkeyOnlyDegradation: true,
+                UnverifiedRequiredProfileBehavior: "block_submit"));
+        managed.Start();
+
+        var blocked = managed.TryDisableProtection("exit", confirmed: true);
+
+        Assert.That(blocked.Succeeded, Is.False);
+        Assert.That(blocked.Code, Is.EqualTo("protection_disable_blocked_by_policy"));
+        Assert.That(blocked.ProtectionStillRunning, Is.True);
+        Assert.That(managed.State.Enabled, Is.True);
+    }
+
+    [Test]
+    public void TrayProtectionDisableConfirmationText_NamesConsequenceWithoutRawPrompt()
+    {
+        var text = TrayProtectionDisableConfirmationText.Format(
+            "exit Code Sanitizer",
+            new TrayProtectionState(
+                Enabled: true,
+                Mode: "NativeSubmit",
+                Hotkey: "Ctrl+Shift+F9",
+                LastStatus: OsInteractionStatusIds.Protected,
+                LastDecision: null,
+                LastReplacementCount: null,
+                LastProfileId: "codex-desktop",
+                LastApplied: false,
+                LastSubmitted: false,
+                NativeSubmitEnabled: true,
+                NativeSubmitStatus: OsInteractionStatusIds.Protected,
+                ProtectedSendBinding: "Enter",
+                NewlineBinding: "Ctrl+Enter",
+                ManualScanHotkey: "Ctrl+Shift+F9",
+                ReadinessStatus: OsInteractionStatusIds.Protected,
+                ResidentProcess: true));
+
+        Assert.That(text, Does.Contain("Selected AI apps will no longer be protected"));
+        Assert.That(text, Does.Contain("protected_send_binding=Enter"));
+        Assert.That(text, Does.Not.Contain("ACME Banking"));
+        Assert.That(text, Does.Not.Contain("SENSITIVE_MARKER"));
+    }
+
+    [Test]
     public void TrayMenuContent_ExposesDiagnosticsAndRuleManagementCommandsWithoutRawPromptText()
     {
         var text = TrayMenuContent.RestoreText + Environment.NewLine + TrayMenuContent.DiagnosticsText + Environment.NewLine + TrayMenuContent.RuleManagementText;
@@ -1348,7 +1489,10 @@ public partial class SanitizerTests
         Assert.That(text, Does.Contain("--product-smoke"));
         Assert.That(text, Does.Contain("--os-composer-diagnostic"));
         Assert.That(text, Does.Contain("--hotkey-show"));
-        Assert.That(text, Does.Contain("--hotkey-set \"Ctrl+Enter\""));
+        Assert.That(text, Does.Contain("Manual scan/apply hotkey commands:"));
+        Assert.That(text, Does.Contain("--hotkey-set \"Ctrl+Shift+F9\""));
+        Assert.That(text, Does.Contain("Protected Send binding commands:"));
+        Assert.That(text, Does.Contain("--native-profile-verify codex-desktop Enter Ctrl+Enter"));
         Assert.That(text, Does.Contain("--send-mode-show"));
         Assert.That(text, Does.Contain("--send-mode-enable"));
         Assert.That(text, Does.Contain("--send-mode-disable"));
@@ -1378,7 +1522,7 @@ public partial class SanitizerTests
             TrayStatusFormatter.FormatMenuStatus(new TrayProtectionState(
                 Enabled: true,
                 Mode: "ApplyOnly",
-                Hotkey: "Ctrl+Enter",
+                Hotkey: "Ctrl+Shift+F9",
                 LastStatus: OsInteractionStatusIds.Applied,
                 LastDecision: "confirm",
                 LastReplacementCount: 1,
@@ -1432,7 +1576,7 @@ public partial class SanitizerTests
     {
         var hotkey = HotkeySettingsStore.DefaultProtectionHotkey;
 
-        Assert.That(hotkey.Binding.DisplayText, Is.EqualTo("Ctrl+Enter"));
+        Assert.That(hotkey.Binding.DisplayText, Is.EqualTo("Ctrl+Shift+F9"));
         Assert.That(hotkey.Binding.DisplayText, Does.Not.Contain("F12"));
         Assert.That(hotkey.Modifiers, Is.Not.Zero);
         Assert.That(hotkey.VirtualKey, Is.Not.Zero);
@@ -3491,7 +3635,8 @@ public partial class SanitizerTests
         Assert.That(manifest, Does.Contain("DefaultDirName={localappdata}\\Programs\\CodexRedactionGate"));
         Assert.That(manifest, Does.Contain("Name: autostart"));
         Assert.That(manifest, Does.Contain("Software\\Microsoft\\Windows\\CurrentVersion\\Run"));
-        Assert.That(manifest, Does.Contain("--tray-app"));
+        Assert.That(manifest, Does.Contain("CodexRedactionGate.Tray.exe"));
+        Assert.That(manifest, Does.Not.Contain("\"CodexRedactionGate.exe\" --tray-app"));
         Assert.That(manifest, Does.Contain("Codex Redaction Gate keeps local vault, dictionary, policy, audit and settings by default."));
         Assert.That(manifest, Does.Contain("--local-data-cleanup --i-understand-delete-local-sensitive-data"));
         Assert.That(manifest, Does.Not.Contain("Remove local sensitive data"));
@@ -3525,7 +3670,9 @@ public partial class SanitizerTests
         Assert.That(installScript, Does.Contain("Codex Redaction Gate.lnk"));
         Assert.That(installScript, Does.Contain("Diagnostics.lnk"));
         Assert.That(installScript, Does.Contain("Audit viewer.lnk"));
-        Assert.That(installScript, Does.Contain("--tray-app"));
+        Assert.That(installScript, Does.Contain("CodexRedactionGate.Tray.exe"));
+        Assert.That(installScript, Does.Contain("Start-Process -FilePath $trayExe"));
+        Assert.That(installScript, Does.Not.Contain("Start-Process -FilePath $exe -ArgumentList \"--tray-app\""));
         Assert.That(installScript, Does.Contain("--autostart-enable"));
         Assert.That(installScript, Does.Contain("-WindowStyle Hidden"));
         Assert.That(installScript, Does.Not.Contain("--local-data-cleanup --i-understand-delete-local-sensitive-data"));
@@ -4130,7 +4277,17 @@ public partial class SanitizerTests
     {
         private Action? _onTriggered;
 
-        public HotkeyBinding Binding { get; } = new("test-hotkey", "Ctrl+Enter", "tests");
+        public RecordingTrayHotkeyHost()
+            : this("Ctrl+Shift+F9")
+        {
+        }
+
+        public RecordingTrayHotkeyHost(string displayText)
+        {
+            Binding = new HotkeyBinding("test-hotkey", displayText, "tests");
+        }
+
+        public HotkeyBinding Binding { get; }
 
         public string? LastErrorCode { get; private set; }
 
@@ -4153,6 +4310,29 @@ public partial class SanitizerTests
         public void Trigger()
         {
             _onTriggered?.Invoke();
+        }
+    }
+
+    private sealed class RecordingNativeSubmitHookHost : INativeSubmitHookHost
+    {
+        public string? LastErrorCode { get; private set; }
+
+        public bool Started { get; private set; }
+
+        public bool Start(
+            Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
+            Action<NativeKeyGesture> onSuppressedSubmit)
+        {
+            ArgumentNullException.ThrowIfNull(classify);
+            ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
+            Started = true;
+            LastErrorCode = null;
+            return true;
+        }
+
+        public void Stop()
+        {
+            Started = false;
         }
     }
 
@@ -5098,7 +5278,7 @@ public class CliTests
             Assert.That(stderr, Is.Empty);
             Assert.That(stdout, Does.Contain("status: hotkey_reserved"));
             Assert.That(stdout, Does.Not.Contain("Ctrl+Shift+F12"));
-            Assert.That(loaded.ProtectionHotkey.Binding.DisplayText, Is.EqualTo("Ctrl+Enter"));
+            Assert.That(loaded.ProtectionHotkey.Binding.DisplayText, Is.EqualTo("Ctrl+Shift+F9"));
         }
         finally
         {
@@ -5128,7 +5308,7 @@ public class CliTests
             Assert.That(stderr, Is.Empty);
             Assert.That(stdout, Does.Contain("status: hotkey_reserved"));
             Assert.That(stdout, Does.Contain("hotkey: configured_invalid"));
-            Assert.That(stdout, Does.Not.Contain("Ctrl+Enter"));
+            Assert.That(stdout, Does.Not.Contain("Ctrl+Shift+F9"));
         }
         finally
         {
@@ -5422,7 +5602,7 @@ public class CliTests
         Assert.That(stdout, Does.Contain("--restore-view"));
         Assert.That(stdout, Does.Contain("--policy-test \"text\" [--show-sanitized]"));
         Assert.That(stdout, Does.Contain("--hotkey-show"));
-        Assert.That(stdout, Does.Contain("--hotkey-set \"Ctrl+Enter\""));
+        Assert.That(stdout, Does.Contain("--hotkey-set \"Ctrl+Shift+F9\""));
         Assert.That(stdout, Does.Contain("--send-mode-show"));
         Assert.That(stdout, Does.Contain("--send-mode-enable"));
         Assert.That(stdout, Does.Contain("--send-mode-disable"));

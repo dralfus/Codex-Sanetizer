@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace CodexRedactionGate;
 
@@ -13,7 +15,18 @@ public sealed record TrayProtectionState(
     bool LastApplied,
     bool LastSubmitted,
     bool NativeSubmitEnabled = false,
-    string NativeSubmitStatus = OsInteractionStatusIds.NotConfigured);
+    string NativeSubmitStatus = OsInteractionStatusIds.NotConfigured,
+    string ProtectedSendBinding = "not_configured",
+    string NewlineBinding = "unknown",
+    string ManualScanHotkey = "not_configured",
+    string ReadinessStatus = OsInteractionStatusIds.NotConfigured,
+    bool ResidentProcess = false);
+
+public sealed record ProtectionDisableResult(
+    bool Succeeded,
+    string Code,
+    bool ProtectionStillRunning,
+    IReadOnlyDictionary<string, string> Diagnostics);
 
 internal interface ITrayHotkeyHost
 {
@@ -33,6 +46,8 @@ internal sealed class TrayProtectionController
     private readonly INativeSubmitHookHost? _nativeSubmitHookHost;
     private readonly NativeSubmitInterceptionController? _nativeSubmitController;
     private readonly Func<OsInteractionResult>? _nativeSubmitRunner;
+    private readonly SubmitBindingProfile? _nativeProfile;
+    private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
 
     public TrayProtectionController(ITrayHotkeyHost hotkeyHost, Func<OsInteractionResult> applyOnlyRunner)
         : this(hotkeyHost, applyOnlyRunner, null, null, null)
@@ -44,13 +59,17 @@ internal sealed class TrayProtectionController
         Func<OsInteractionResult> applyOnlyRunner,
         INativeSubmitHookHost? nativeSubmitHookHost,
         NativeSubmitInterceptionController? nativeSubmitController,
-        Func<OsInteractionResult>? nativeSubmitRunner)
+        Func<OsInteractionResult>? nativeSubmitRunner,
+        SubmitBindingProfile? nativeProfile = null,
+        NativeSubmitEnterprisePolicy? enterprisePolicy = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
         _nativeSubmitHookHost = nativeSubmitHookHost;
         _nativeSubmitController = nativeSubmitController;
         _nativeSubmitRunner = nativeSubmitRunner;
+        _nativeProfile = nativeProfile;
+        _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         State = CreateState(enabled: false, lastStatus: "disabled");
     }
 
@@ -60,19 +79,20 @@ internal sealed class TrayProtectionController
 
     public bool Start()
     {
-        if (!_hotkeyHost.Start(RunApplyOnlyOnce))
+        var manualHotkeyStarted = _hotkeyHost.Start(RunApplyOnlyOnce);
+        var nativeStarted = StartNativeSubmitHook();
+        if (!manualHotkeyStarted && !nativeStarted)
         {
             State = CreateState(
                 enabled: false,
-                lastStatus: _hotkeyHost.LastErrorCode ?? "hotkey_register_failed");
+                lastStatus: _hotkeyHost.LastErrorCode ?? NativeSubmitUnavailableStatus());
             StateChanged?.Invoke(this, EventArgs.Empty);
             return false;
         }
 
-        var nativeStarted = StartNativeSubmitHook();
         State = CreateState(
             enabled: true,
-            lastStatus: "enabled",
+            lastStatus: manualHotkeyStarted ? "enabled" : "enabled_native_submit_manual_hotkey_unavailable",
             nativeSubmitEnabled: nativeStarted,
             nativeSubmitStatus: nativeStarted ? OsInteractionStatusIds.Protected : NativeSubmitUnavailableStatus());
         StateChanged?.Invoke(this, EventArgs.Empty);
@@ -85,6 +105,36 @@ internal sealed class TrayProtectionController
         _hotkeyHost.Stop();
         State = CreateState(enabled: false, lastStatus: "disabled");
         StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public ProtectionDisableResult TryDisableProtection(string action, bool confirmed)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(action);
+
+        if (!confirmed)
+        {
+            return DisableResult(
+                succeeded: false,
+                code: "protection_disable_canceled",
+                stillRunning: State.Enabled,
+                action: action);
+        }
+
+        if (EnterprisePolicyBlocksDisable())
+        {
+            return DisableResult(
+                succeeded: false,
+                code: "protection_disable_blocked_by_policy",
+                stillRunning: State.Enabled,
+                action: action);
+        }
+
+        Stop();
+        return DisableResult(
+            succeeded: true,
+            code: "protection_disable_confirmed",
+            stillRunning: false,
+            action: action);
     }
 
     private void RunApplyOnlyOnce()
@@ -103,7 +153,12 @@ internal sealed class TrayProtectionController
             LastApplied: result.Applied,
             LastSubmitted: result.Submitted,
             NativeSubmitEnabled: State.NativeSubmitEnabled,
-            NativeSubmitStatus: State.NativeSubmitStatus);
+            NativeSubmitStatus: State.NativeSubmitStatus,
+            ProtectedSendBinding: State.ProtectedSendBinding,
+            NewlineBinding: State.NewlineBinding,
+            ManualScanHotkey: State.ManualScanHotkey,
+            ReadinessStatus: State.ReadinessStatus,
+            ResidentProcess: State.ResidentProcess);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -138,7 +193,12 @@ internal sealed class TrayProtectionController
             LastApplied: result.Applied,
             LastSubmitted: result.Submitted,
             NativeSubmitEnabled: result.Status != OsInteractionStatusIds.DegradedHotkeyOnly,
-            NativeSubmitStatus: result.Status);
+            NativeSubmitStatus: result.Status,
+            ProtectedSendBinding: ProtectedSendBindingText(result.Status),
+            NewlineBinding: NewlineBindingText(),
+            ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
+            ReadinessStatus: result.Status,
+            ResidentProcess: true);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -169,7 +229,62 @@ internal sealed class TrayProtectionController
             LastApplied: false,
             LastSubmitted: false,
             NativeSubmitEnabled: nativeSubmitEnabled,
-            NativeSubmitStatus: nativeSubmitStatus);
+            NativeSubmitStatus: nativeSubmitStatus,
+            ProtectedSendBinding: ProtectedSendBindingText(nativeSubmitStatus),
+            NewlineBinding: NewlineBindingText(),
+            ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
+            ReadinessStatus: ReadinessStatus(nativeSubmitStatus),
+            ResidentProcess: enabled);
+    }
+
+    private bool EnterprisePolicyBlocksDisable()
+    {
+        return _enterprisePolicy.ManagedMode
+            && _nativeProfile is not null
+            && _enterprisePolicy.RequiredProfileIds.Contains(_nativeProfile.ProfileId, StringComparer.Ordinal);
+    }
+
+    private static ProtectionDisableResult DisableResult(
+        bool succeeded,
+        string code,
+        bool stillRunning,
+        string action)
+    {
+        return new ProtectionDisableResult(
+            succeeded,
+            code,
+            stillRunning,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["action"] = action,
+                ["selected_ai_apps_unprotected"] = succeeded.ToString().ToLowerInvariant(),
+                ["raw_prompt_recorded"] = "false",
+                ["audit_event"] = code
+            });
+    }
+
+    private string ProtectedSendBindingText(string nativeSubmitStatus)
+    {
+        return nativeSubmitStatus == OsInteractionStatusIds.Protected && _nativeProfile?.SubmitBinding is not null
+            ? _nativeProfile.SubmitBinding.DisplayText
+            : "not_configured";
+    }
+
+    private string NewlineBindingText()
+    {
+        return _nativeProfile?.NewlineBinding?.DisplayText ?? "unknown";
+    }
+
+    private string ReadinessStatus(string nativeSubmitStatus)
+    {
+        if (_nativeProfile is null)
+        {
+            return OsInteractionStatusIds.NotConfigured;
+        }
+
+        return nativeSubmitStatus == OsInteractionStatusIds.Protected
+            ? OsInteractionStatusIds.Protected
+            : _nativeProfile.CapabilityStatus;
     }
 }
 
@@ -183,7 +298,7 @@ internal static class TrayStatusFormatter
         var replacements = state.LastReplacementCount is null
             ? "n/a"
             : state.LastReplacementCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return $"status={enabled} mode={state.Mode} hotkey={state.Hotkey} native_submit={state.NativeSubmitStatus} last={state.LastStatus} replacements={replacements}";
+        return $"status={enabled} mode={state.Mode} protected_send_binding={state.ProtectedSendBinding} newline_binding={state.NewlineBinding} manual_scan_hotkey={state.ManualScanHotkey} native_submit={state.NativeSubmitStatus} readiness={state.ReadinessStatus} last={state.LastStatus} replacements={replacements}";
     }
 
     public static string FormatNotifyIconText(TrayProtectionState state)
@@ -191,14 +306,14 @@ internal static class TrayStatusFormatter
         ArgumentNullException.ThrowIfNull(state);
 
         var enabled = state.Enabled ? "enabled" : "disabled";
-        return TrimNotifyText($"CodexRG {enabled} {state.Mode} {state.Hotkey} last={state.LastStatus}");
+        return TrimNotifyText($"CodexRG {enabled} {state.Mode} last={state.LastStatus} send={state.ProtectedSendBinding} manual={state.ManualScanHotkey}");
     }
 
     public static string FormatStartupError(TrayProtectionState state)
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        return $"Protection disabled. hotkey={state.Hotkey} error={state.LastStatus}";
+        return $"Protection disabled. manual_scan_hotkey={state.ManualScanHotkey} protected_send_binding={state.ProtectedSendBinding} readiness={state.ReadinessStatus} error={state.LastStatus}";
     }
 
     private static string TrimNotifyText(string text)
@@ -237,9 +352,13 @@ internal static class TrayMenuContent
 
     public static string RuleManagementText { get; } = string.Join(
         Environment.NewLine,
-        "Local rule management commands:",
+        "Manual scan/apply hotkey commands:",
         "--hotkey-show",
-        "--hotkey-set \"Ctrl+Enter\"",
+        "--hotkey-set \"Ctrl+Shift+F9\"",
+        "Protected Send binding commands:",
+        "--native-profiles-status",
+        "--native-profile-verify codex-desktop Enter Ctrl+Enter",
+        "Local rule management commands:",
         "--send-mode-show",
         "--send-mode-enable",
         "--send-mode-disable",

@@ -1019,29 +1019,29 @@ public static class NativeSubmitProductSmokeRunner
         });
         var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "codex-desktop",
+            "Enter",
             "Ctrl+Enter",
-            "Shift+Enter",
             discovery);
         var profileSetupPassed = profile.IsProtected
             && profile.BindingSource == "user_verified";
-        var bindingVerificationPassed = profile.SubmitBinding?.DisplayText == "Ctrl+Enter"
-            && profile.NewlineBinding?.DisplayText == "Shift+Enter";
+        var bindingVerificationPassed = profile.SubmitBinding?.DisplayText == "Enter"
+            && profile.NewlineBinding?.DisplayText == "Ctrl+Enter";
 
         var emergency = new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5));
         var controller = new NativeSubmitInterceptionController(
             profile,
             emergency,
             clock: () => DateTimeOffset.Parse("2026-07-20T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
-        var guard = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+        var guard = controller.HandleGesture(new NativeKeyGesture("Enter"));
         var confirmAndSend = controller.HandleGesture(
-            new NativeKeyGesture("Enter", Ctrl: true),
+            new NativeKeyGesture("Enter"),
             () => RunConfirmAndSend(hmacSecret));
         var emergencyDisable = controller.HandleGesture(NativeKeyGesture.CtrlAltShiftPause);
         var enterprise = new NativeSubmitInterceptionController(
             profile with { CapabilityStatus = OsInteractionStatusIds.DegradedHotkeyOnly },
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             new NativeSubmitEnterprisePolicy(true, new[] { "codex-desktop" }, true, "block_submit"))
-            .HandleGesture(new NativeKeyGesture("Enter", Ctrl: true), hookHealthy: false);
+            .HandleGesture(new NativeKeyGesture("Enter"), hookHealthy: false);
         var mismatch = SurfaceCompatibilityEvaluator.Evaluate(
             profile,
             CreateSurface("chatgpt-desktop", "profile-smoke"),
@@ -1109,8 +1109,8 @@ public static class NativeSubmitProductSmokeRunner
         var surface = new SmokeTextSurface("Connect to 192.168.10.25");
         var submitProfile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "codex-desktop",
+            "Enter",
             "Ctrl+Enter",
-            "Shift+Enter",
             TextSurfaceDiscoveryResult.Success(surface.Surface));
         var orchestrator = new OsInteractionOrchestrator(
             new Sanitizer(new InMemoryHmacMappingVault(hmacSecret)),

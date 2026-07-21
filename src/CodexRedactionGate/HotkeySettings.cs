@@ -30,7 +30,7 @@ internal static class HotkeySettingsStore
 {
     private const string SettingsFileName = "tray-settings.json";
 
-    public static HotkeyDefinition DefaultProtectionHotkey { get; } = HotkeyParser.Parse("Ctrl+Enter").Hotkey!;
+    public static HotkeyDefinition DefaultProtectionHotkey { get; } = HotkeyParser.Parse("Ctrl+Shift+F9").Hotkey!;
 
     public static HotkeyDefinition InvalidConfiguredHotkey { get; } = new(
         new HotkeyBinding("windows-tray-invalid", "configured_invalid", "windows"),

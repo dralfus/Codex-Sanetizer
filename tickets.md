@@ -2637,11 +2637,13 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] Installer artifacts launch the resident tray app directly, without requiring `dotnet run`.
-- [ ] Launch-after-install starts the same resident process that normal protected operation uses.
-- [ ] User-scope autostart starts the resident tray app on login and preserves local policy/vault state.
-- [ ] Tray and diagnostics show the resident protection process, selected protected profiles and hook state using raw-free status.
-- [ ] Build, tests, self-test and an installer smoke are green.
+**Verification result 2026-07-21:** build green with 0 warnings/0 errors; tray WinExe build green with 0 warnings/0 errors; unit tests passed 317/317; `--self-test` passed; `--product-smoke` printed `resident_tray_launch: true` and `autostart_resident_command: true`; `scripts\build-release.ps1` published both `CodexRedactionGate.exe` and `CodexRedactionGate.Tray.exe` and printed `resident_tray_exe=...\CodexRedactionGate.Tray.exe`.
+
+- [x] Installer artifacts launch the resident tray app directly, without requiring `dotnet run`.
+- [x] Launch-after-install starts the same resident process that normal protected operation uses.
+- [x] User-scope autostart starts the resident tray app on login and preserves local policy/vault state.
+- [x] Tray and diagnostics show the resident protection process, selected protected profiles and hook state using raw-free status.
+- [x] Build, tests, self-test and an installer smoke are green.
 
 ## 111. Require explicit confirmation before disabling resident protection
 
@@ -2659,12 +2661,14 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] Stop protection, exit, unload and equivalent tray/menu commands all show explicit confirmation.
-- [ ] The confirmation text names the consequence: selected AI apps will no longer be protected while Code Sanitizer is stopped.
-- [ ] Cancel leaves the resident process, native submit hook state and tray status unchanged.
-- [ ] Confirm unregisters protection, updates tray/status to not protected, and records a raw-free audit event.
-- [ ] Enterprise policy can block unload or require an elevated/admin-approved path without weakening consumer mode.
-- [ ] Build, tests and self-test are green.
+**Verification result 2026-07-21:** build green with 0 warnings/0 errors; unit tests passed 317/317; `--self-test` passed; `--product-smoke` printed `unload_confirmation: true`. Tests cover stop/exit confirmation text, cancel keeping protection running, confirmed disable, raw-free disable diagnostics and enterprise policy blocking unload for required protected profiles.
+
+- [x] Stop protection, exit, unload and equivalent tray/menu commands all show explicit confirmation.
+- [x] The confirmation text names the consequence: selected AI apps will no longer be protected while Code Sanitizer is stopped.
+- [x] Cancel leaves the resident process, native submit hook state and tray status unchanged.
+- [x] Confirm unregisters protection, updates tray/status to not protected, and records a raw-free audit event.
+- [x] Enterprise policy can block unload or require an elevated/admin-approved path without weakening consumer mode.
+- [x] Build, tests and self-test are green.
 
 ## 112. Show protected Send binding separately from manual scan/apply hotkey
 
@@ -2682,12 +2686,14 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] Tray, CLI and diagnostics show `protected_send_binding` and `newline_binding` for each selected protected profile.
-- [ ] Any secondary Code Sanitizer hotkey is labeled `manual scan/apply` and is not used as evidence of native submit protection.
-- [ ] If Codex/ChatGPT sends with `Enter` and inserts newline with `Ctrl+Enter`, status shows `Enter` as protected Send and `Ctrl+Enter` as newline/pass-through.
-- [ ] If a protected profile is missing, unverified or degraded, the UI does not imply that a manual hotkey makes cloud submission protected.
-- [ ] Wording tests cover protected, not configured, binding unknown, surface unverified and degraded hotkey-only states.
-- [ ] Build, tests and self-test are green.
+**Verification result 2026-07-21:** build green with 0 warnings/0 errors; unit tests passed 317/317; `--self-test` passed; `--native-submit-smoke` printed `binding_verification: true`; `--product-smoke` printed `protected_trigger_status: true`. Tray/CLI status now uses `protected_send_binding`, `newline_binding` and `manual_scan_hotkey`; native smoke verifies `Enter` as protected Send and `Ctrl+Enter` as newline/pass-through.
+
+- [x] Tray, CLI and diagnostics show `protected_send_binding` and `newline_binding` for each selected protected profile.
+- [x] Any secondary Code Sanitizer hotkey is labeled `manual scan/apply` and is not used as evidence of native submit protection.
+- [x] If Codex/ChatGPT sends with `Enter` and inserts newline with `Ctrl+Enter`, status shows `Enter` as protected Send and `Ctrl+Enter` as newline/pass-through.
+- [x] If a protected profile is missing, unverified or degraded, the UI does not imply that a manual hotkey makes cloud submission protected.
+- [x] Wording tests cover protected, not configured, binding unknown, surface unverified and degraded hotkey-only states.
+- [x] Build, tests and self-test are green.
 
 ## 113. Add first-run readiness guard for protected AI profiles
 
@@ -2705,12 +2711,14 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] First run with no selected protected profiles shows `not_configured` and a clear local verification action.
-- [ ] Startup with selected profiles but no active native hook shows not protected or degraded status, never silent success.
-- [ ] Binding verification stores submit and newline bindings as user-verified unless a stronger documented source exists.
-- [ ] Compatibility failures surface raw-free reason codes such as `binding_unknown` or `surface_unverified`.
-- [ ] Readiness diagnostics never store raw prompt text, screenshots or full composer contents.
-- [ ] Build, tests and self-test are green.
+**Verification result 2026-07-21:** build green with 0 warnings/0 errors; unit tests passed 317/317; `--self-test` passed; `--native-profiles-status` emits raw-free readiness/capability status; tray status exposes `readiness`, `protected_send_binding`, `newline_binding` and `manual_scan_hotkey`; startup with no protected profile remains `not_configured`, while hook/profile failures do not report `Protected`.
+
+- [x] First run with no selected protected profiles shows `not_configured` and a clear local verification action.
+- [x] Startup with selected profiles but no active native hook shows not protected or degraded status, never silent success.
+- [x] Binding verification stores submit and newline bindings as user-verified unless a stronger documented source exists.
+- [x] Compatibility failures surface raw-free reason codes such as `binding_unknown` or `surface_unverified`.
+- [x] Readiness diagnostics never store raw prompt text, screenshots or full composer contents.
+- [x] Build, tests and self-test are green.
 
 ## 114. Add installed-app protection smoke for launch, trigger and unload
 
@@ -2728,9 +2736,11 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] Smoke installs or stages the release artifact, launches the resident tray app and verifies there is no console/runtime SDK dependency.
-- [ ] Smoke verifies the protected trigger equals the selected profile's verified Send binding and that newline/pass-through still works.
-- [ ] Smoke verifies manual scan/apply hotkey status is separate from protected Send status.
-- [ ] Smoke verifies canceling unload leaves protection active and confirmed unload disables protection with visible status.
-- [ ] Smoke artifacts contain only raw-free diagnostics, placeholders and status codes.
-- [ ] Build, tests, self-test and product smoke are green.
+**Verification result 2026-07-21:** build green with 0 warnings/0 errors; tray WinExe build green with 0 warnings/0 errors; unit tests passed 317/317; `--self-test` passed; `--native-submit-smoke` printed `native_submit_smoke_passed`; `--product-smoke` printed `product_smoke_passed`, `resident_tray_launch: true`, `protected_trigger_status: true`, `unload_confirmation: true`, `native_submit_interception: true` and `raw_free_artifacts: true`; `scripts\build-release.ps1` succeeded and emitted `resident_tray_exe`.
+
+- [x] Smoke installs or stages the release artifact, launches the resident tray app and verifies there is no console/runtime SDK dependency.
+- [x] Smoke verifies the protected trigger equals the selected profile's verified Send binding and that newline/pass-through still works.
+- [x] Smoke verifies manual scan/apply hotkey status is separate from protected Send status.
+- [x] Smoke verifies canceling unload leaves protection active and confirmed unload disables protection with visible status.
+- [x] Smoke artifacts contain only raw-free diagnostics, placeholders and status codes.
+- [x] Build, tests, self-test and product smoke are green.

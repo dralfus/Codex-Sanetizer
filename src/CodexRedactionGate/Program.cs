@@ -566,6 +566,7 @@ public static class Program
         var result = HotkeySettingsStore.Load(layout);
         Console.WriteLine($"status: {result.Code}");
         Console.WriteLine($"hotkey: {result.Settings.ProtectionHotkey.Binding.DisplayText}");
+        Console.WriteLine($"manual_scan_hotkey: {result.Settings.ProtectionHotkey.Binding.DisplayText}");
         Console.WriteLine($"source: {HotkeySettingsStore.DefaultPath(layout)}");
         return result.Usable ? 0 : 1;
     }
@@ -577,6 +578,7 @@ public static class Program
         if (result.Hotkey is not null)
         {
             Console.WriteLine($"hotkey: {result.Hotkey.Binding.DisplayText}");
+            Console.WriteLine($"manual_scan_hotkey: {result.Hotkey.Binding.DisplayText}");
         }
 
         return result.Succeeded ? 0 : 1;
@@ -645,6 +647,13 @@ public static class Program
 
     private static string BuildTrayCommandLine()
     {
+        var appBaseDirectory = AppContext.BaseDirectory;
+        var trayExecutablePath = Path.Combine(appBaseDirectory, "CodexRedactionGate.Tray.exe");
+        if (File.Exists(trayExecutablePath))
+        {
+            return $"\"{trayExecutablePath}\"";
+        }
+
         var processPath = Environment.ProcessPath;
         var assemblyPath = Assembly.GetExecutingAssembly().Location;
         if (!string.IsNullOrWhiteSpace(processPath)
@@ -918,7 +927,7 @@ public static class Program
         Console.WriteLine($"profile_store_path_length: {SubmitBindingProfileStore.DefaultPath(layout).Length}");
         foreach (var profile in result.Profiles.OrderBy(profile => profile.ProfileId, StringComparer.Ordinal))
         {
-            Console.WriteLine($"profile={profile.ProfileId} capability_status={profile.CapabilityStatus} binding_source={profile.BindingSource} submit_binding={profile.SubmitBinding?.DisplayText ?? "unknown"} newline_binding={profile.NewlineBinding?.DisplayText ?? "unknown"}");
+            Console.WriteLine($"profile={profile.ProfileId} readiness={profile.CapabilityStatus} capability_status={profile.CapabilityStatus} binding_source={profile.BindingSource} protected_send_binding={profile.SubmitBinding?.DisplayText ?? "unknown"} newline_binding={profile.NewlineBinding?.DisplayText ?? "unknown"}");
         }
 
         return result.Succeeded ? 0 : 1;
@@ -1315,7 +1324,7 @@ public static class Program
         Console.WriteLine("  --dictionary-import terms.csv");
         Console.WriteLine("  --dictionary-remove id [id]...");
         Console.WriteLine("  --hotkey-show");
-        Console.WriteLine("  --hotkey-set \"Ctrl+Enter\"");
+        Console.WriteLine("  --hotkey-set \"Ctrl+Shift+F9\"");
         Console.WriteLine("  --send-mode-show");
         Console.WriteLine("  --send-mode-enable");
         Console.WriteLine("  --send-mode-disable");

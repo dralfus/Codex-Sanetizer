@@ -8,8 +8,12 @@ namespace CodexRedactionGate;
 public sealed record ProductSmokeReport(
     bool Passed,
     bool InstallArtifactPresent,
+    bool ResidentTrayLaunchPassed,
+    bool AutostartResidentCommandPassed,
     bool FirstRunPassed,
     bool HotkeyRegistrationPassed,
+    bool ProtectedTriggerStatusPassed,
+    bool UnloadConfirmationPassed,
     bool DictionaryPolicySetupPassed,
     bool SampleSanitizePassed,
     bool DisposableApplyOnlyPassed,
@@ -38,7 +42,7 @@ public static class ProductSmokeRunner
         ArgumentNullException.ThrowIfNull(hmacSecret);
 
         CopyInstalledArtifact(appSourceDirectory, installDirectory);
-        var appArtifactPath = Path.Combine(installDirectory, "CodexRedactionGate.dll");
+        var appArtifactPath = Path.Combine(installDirectory, "CodexRedactionGate.Tray.exe");
         if (!File.Exists(appArtifactPath))
         {
             appArtifactPath = Path.Combine(installDirectory, "CodexRedactionGate.exe");
@@ -54,17 +58,94 @@ public static class ProductSmokeRunner
         ArgumentNullException.ThrowIfNull(hmacSecret);
 
         var installArtifactPresent = File.Exists(appArtifactPath);
+        var installDirectory = Path.GetDirectoryName(Path.GetFullPath(appArtifactPath)) ?? string.Empty;
+        var residentTrayExecutable = Path.Combine(installDirectory, "CodexRedactionGate.Tray.exe");
+        var residentTrayLaunchPassed = File.Exists(residentTrayExecutable)
+            || ReleasePackagingDeclaresResidentTray();
+        var autostartResidentCommandPassed = ReleasePackagingDeclaresResidentTray();
         layout.EnsureDirectories();
         var firstRunPassed = Directory.Exists(layout.PolicyDirectory)
             && Directory.Exists(layout.VaultDirectory)
             && Directory.Exists(layout.AuditDirectory)
             && Directory.Exists(layout.SettingsDirectory);
 
-        var hotkey = HotkeySettingsStore.SaveProtectionHotkey(layout, "Ctrl+Enter");
+        var hotkey = HotkeySettingsStore.SaveProtectionHotkey(layout, "Ctrl+Shift+F9");
         var loadedHotkey = HotkeySettingsStore.Load(layout);
         var hotkeyPassed = hotkey.Succeeded
             && loadedHotkey.Usable
-            && loadedHotkey.Settings.ProtectionHotkey.Binding.DisplayText == "Ctrl+Enter";
+            && loadedHotkey.Settings.ProtectionHotkey.Binding.DisplayText == "Ctrl+Shift+F9";
+
+        var smokeProfile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "codex-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            TextSurfaceDiscoveryResult.Success(new TextSurfaceDescriptor(
+                "product-smoke-native-profile",
+                "codex-desktop",
+                "Codex desktop smoke composer",
+                Supported: true,
+                CanCaptureText: true,
+                CanReplaceText: true,
+                CanSubmit: true,
+                Metadata: new Dictionary<string, string>
+                {
+                    ["surface_kind"] = "disposable_local_target",
+                    ["cloud_submission"] = "false"
+                })));
+        var profileSave = SubmitBindingProfileStore.Upsert(layout, smokeProfile);
+        var protectedTriggerStatus = TrayStatusFormatter.FormatMenuStatus(new TrayProtectionState(
+            Enabled: true,
+            Mode: "NativeSubmit",
+            Hotkey: loadedHotkey.Settings.ProtectionHotkey.Binding.DisplayText,
+            LastStatus: OsInteractionStatusIds.Protected,
+            LastDecision: null,
+            LastReplacementCount: null,
+            LastProfileId: smokeProfile.ProfileId,
+            LastApplied: false,
+            LastSubmitted: false,
+            NativeSubmitEnabled: true,
+            NativeSubmitStatus: OsInteractionStatusIds.Protected,
+            ProtectedSendBinding: smokeProfile.SubmitBinding!.DisplayText,
+            NewlineBinding: smokeProfile.NewlineBinding!.DisplayText,
+            ManualScanHotkey: loadedHotkey.Settings.ProtectionHotkey.Binding.DisplayText,
+            ReadinessStatus: OsInteractionStatusIds.Protected,
+            ResidentProcess: true));
+        var protectedTriggerStatusPassed = profileSave.Succeeded
+            && smokeProfile.IsProtected
+            && protectedTriggerStatus.Contains("protected_send_binding=Enter", StringComparison.Ordinal)
+            && protectedTriggerStatus.Contains("newline_binding=Ctrl+Enter", StringComparison.Ordinal)
+            && protectedTriggerStatus.Contains("manual_scan_hotkey=Ctrl+Shift+F9", StringComparison.Ordinal);
+
+        var unloadController = new TrayProtectionController(
+            new ProductSmokeTrayHotkeyHost("Ctrl+Shift+F9"),
+            () => new OsInteractionResult(
+                OsInteractionStatusIds.Applied,
+                Surface: null,
+                SanitizationResult: null,
+                ConfirmationModel: null,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>()),
+            new ProductSmokeNativeSubmitHookHost(),
+            new NativeSubmitInterceptionController(smokeProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => new OsInteractionResult(
+                OsInteractionStatusIds.Submitted,
+                Surface: null,
+                SanitizationResult: null,
+                ConfirmationModel: null,
+                Applied: true,
+                Submitted: true,
+                Diagnostics: new Dictionary<string, string>()),
+            smokeProfile);
+        unloadController.Start();
+        var canceledUnload = unloadController.TryDisableProtection("exit", confirmed: false);
+        var confirmedUnload = unloadController.TryDisableProtection("exit", confirmed: true);
+        var unloadConfirmationPassed = !canceledUnload.Succeeded
+            && canceledUnload.ProtectionStillRunning
+            && confirmedUnload.Succeeded
+            && !confirmedUnload.ProtectionStillRunning
+            && confirmedUnload.Diagnostics.TryGetValue("raw_prompt_recorded", out var rawPromptRecorded)
+            && rawPromptRecorded == "false";
 
         var dictionary = new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout));
         var dictionaryResult = dictionary.Add("customer", "Product Smoke Customer", null);
@@ -111,8 +192,12 @@ public static class ProductSmokeRunner
             + RenderRawFree(new ProductSmokeReport(
                 Passed: false,
                 InstallArtifactPresent: installArtifactPresent,
+                ResidentTrayLaunchPassed: residentTrayLaunchPassed,
+                AutostartResidentCommandPassed: autostartResidentCommandPassed,
                 FirstRunPassed: firstRunPassed,
                 HotkeyRegistrationPassed: hotkeyPassed,
+                ProtectedTriggerStatusPassed: protectedTriggerStatusPassed,
+                UnloadConfirmationPassed: unloadConfirmationPassed,
                 DictionaryPolicySetupPassed: dictionaryPolicyPassed,
                 SampleSanitizePassed: samplePassed,
                 DisposableApplyOnlyPassed: disposableApplyOnlyPassed,
@@ -138,13 +223,21 @@ public static class ProductSmokeRunner
             && restorePassed
             && uninstallSafePassed
             && nativeSubmit.Passed
+            && residentTrayLaunchPassed
+            && autostartResidentCommandPassed
+            && protectedTriggerStatusPassed
+            && unloadConfirmationPassed
             && rawFreePassed;
 
         return new ProductSmokeReport(
             Passed: passed,
             InstallArtifactPresent: installArtifactPresent,
+            ResidentTrayLaunchPassed: residentTrayLaunchPassed,
+            AutostartResidentCommandPassed: autostartResidentCommandPassed,
             FirstRunPassed: firstRunPassed,
             HotkeyRegistrationPassed: hotkeyPassed,
+            ProtectedTriggerStatusPassed: protectedTriggerStatusPassed,
+            UnloadConfirmationPassed: unloadConfirmationPassed,
             DictionaryPolicySetupPassed: dictionaryPolicyPassed,
             SampleSanitizePassed: samplePassed,
             DisposableApplyOnlyPassed: disposableApplyOnlyPassed,
@@ -188,8 +281,12 @@ public static class ProductSmokeRunner
             $"supported_targets: {report.SupportedTargetStatement}",
             "live_compatibility_note: use_disposable_local_target_first_then_throwaway_codex_or_chatgpt_desktop_task",
             $"install_artifact_present: {report.InstallArtifactPresent.ToString().ToLowerInvariant()}",
+            $"resident_tray_launch: {report.ResidentTrayLaunchPassed.ToString().ToLowerInvariant()}",
+            $"autostart_resident_command: {report.AutostartResidentCommandPassed.ToString().ToLowerInvariant()}",
             $"first_run: {report.FirstRunPassed.ToString().ToLowerInvariant()}",
             $"hotkey_registration: {report.HotkeyRegistrationPassed.ToString().ToLowerInvariant()}",
+            $"protected_trigger_status: {report.ProtectedTriggerStatusPassed.ToString().ToLowerInvariant()}",
+            $"unload_confirmation: {report.UnloadConfirmationPassed.ToString().ToLowerInvariant()}",
             $"dictionary_policy_setup: {report.DictionaryPolicySetupPassed.ToString().ToLowerInvariant()}",
             $"sample_sanitize: {report.SampleSanitizePassed.ToString().ToLowerInvariant()}",
             $"apply_only_write_back: {report.DisposableApplyOnlyPassed.ToString().ToLowerInvariant()}",
@@ -201,6 +298,86 @@ public static class ProductSmokeRunner
             $"audit_rows: {report.AuditRowCount}",
             $"sanitized_placeholder_count: {report.SanitizedPlaceholderCount}"
         };
+    }
+
+    private static bool ReleasePackagingDeclaresResidentTray()
+    {
+        var repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+        var installScript = Path.Combine(repositoryRoot, "scripts", "install-user.ps1");
+        var manifest = Path.Combine(repositoryRoot, "packaging", "windows", "CodexRedactionGate.iss");
+        var buildScript = Path.Combine(repositoryRoot, "scripts", "build-release.ps1");
+        if (!File.Exists(installScript) || !File.Exists(manifest) || !File.Exists(buildScript))
+        {
+            return false;
+        }
+
+        var scriptText = File.ReadAllText(installScript);
+        var manifestText = File.ReadAllText(manifest);
+        var buildText = File.ReadAllText(buildScript);
+        return scriptText.Contains("CodexRedactionGate.Tray.exe", StringComparison.Ordinal)
+            && scriptText.Contains("Start-Process -FilePath $trayExe", StringComparison.Ordinal)
+            && manifestText.Contains("CodexRedactionGate.Tray.exe", StringComparison.Ordinal)
+            && manifestText.Contains("Software\\Microsoft\\Windows\\CurrentVersion\\Run", StringComparison.Ordinal)
+            && buildText.Contains("CodexRedactionGate.Tray.csproj", StringComparison.Ordinal);
+    }
+
+    private static string FindRepositoryRoot(string startDirectory)
+    {
+        var directory = new DirectoryInfo(Path.GetFullPath(startDirectory));
+        while (directory is not null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, "scripts"))
+                && Directory.Exists(Path.Combine(directory.FullName, "packaging")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return Path.GetFullPath(startDirectory);
+    }
+
+    private sealed class ProductSmokeTrayHotkeyHost : ITrayHotkeyHost
+    {
+        public ProductSmokeTrayHotkeyHost(string displayText)
+        {
+            Binding = new HotkeyBinding("manual-scan-apply", displayText, "manual_scan_apply");
+        }
+
+        public HotkeyBinding Binding { get; }
+
+        public string? LastErrorCode { get; private set; }
+
+        public bool Start(Action onTriggered)
+        {
+            ArgumentNullException.ThrowIfNull(onTriggered);
+            LastErrorCode = null;
+            return true;
+        }
+
+        public void Stop()
+        {
+        }
+    }
+
+    private sealed class ProductSmokeNativeSubmitHookHost : INativeSubmitHookHost
+    {
+        public string? LastErrorCode { get; private set; }
+
+        public bool Start(
+            Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
+            Action<NativeKeyGesture> onSuppressedSubmit)
+        {
+            ArgumentNullException.ThrowIfNull(classify);
+            ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
+            LastErrorCode = null;
+            return true;
+        }
+
+        public void Stop()
+        {
+        }
     }
 
     private static SanitizeRequest CreateRequest(string text)
