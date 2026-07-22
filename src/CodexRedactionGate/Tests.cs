@@ -2051,6 +2051,68 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void Sanitize_DictionaryTerm_MatchesCaseAndSeparatorVariants()
+    {
+        var vault = new InMemoryHmacMappingVault(TestSecret());
+        var sanitizer = new Sanitizer(vault, new[]
+        {
+            new DictionaryTerm("domain", "test.secret.com", PolicyActions.PseudonymizeRestorable, null)
+        });
+
+        var mixedCase = sanitizer.Sanitize(CreatePromptRequest("Open Test.secret.com after lunch."));
+        var separatorVariant = sanitizer.Sanitize(CreatePromptRequest("Open Test secret com after lunch."));
+
+        Assert.That(mixedCase.Decision, Is.EqualTo(SanitizeDecision.Confirm));
+        Assert.That(mixedCase.SanitizedText, Does.Not.Contain("Test.secret.com"));
+        Assert.That(mixedCase.Replacements, Has.Count.EqualTo(1));
+        Assert.That(mixedCase.Replacements.Single().Offset, Is.EqualTo("Open ".Length));
+        Assert.That(mixedCase.Replacements.Single().Length, Is.EqualTo("Test.secret.com".Length));
+        Assert.That(mixedCase.Replacements.Single().Type, Is.EqualTo("domain"));
+        Assert.That(separatorVariant.Decision, Is.EqualTo(SanitizeDecision.Confirm));
+        Assert.That(separatorVariant.SanitizedText, Does.Not.Contain("Test secret com"));
+        Assert.That(separatorVariant.Replacements, Has.Count.EqualTo(1));
+        Assert.That(separatorVariant.Replacements.Single().Offset, Is.EqualTo("Open ".Length));
+        Assert.That(separatorVariant.Replacements.Single().Length, Is.EqualTo("Test secret com".Length));
+        Assert.That(separatorVariant.Replacements.Single().Type, Is.EqualTo("domain"));
+        Assert.That(vault.TryGetPseudonym("domain", "test.secret.com", out var pseudonym), Is.True);
+        Assert.That(mixedCase.SanitizedText, Does.Contain(pseudonym));
+        Assert.That(separatorVariant.SanitizedText, Does.Contain(pseudonym));
+        Assert.That(AuditInspection.Contains(mixedCase.AuditEvent, "Test.secret.com"), Is.False);
+        Assert.That(AuditInspection.Contains(separatorVariant.AuditEvent, "Test secret com"), Is.False);
+    }
+
+    [Test]
+    public void Sanitize_ManagedUsername_MatchesCaseAndSeparatorVariants()
+    {
+        var vault = new InMemoryHmacMappingVault(TestSecret());
+        var sanitizer = new Sanitizer(vault, new[]
+        {
+            new DictionaryTerm("username", "alexey.andreev", PolicyActions.PseudonymizeRestorable, null)
+        });
+
+        var mixedCase = sanitizer.Sanitize(CreatePromptRequest("Ask Alexey.andreev to review it."));
+        var separatorVariant = sanitizer.Sanitize(CreatePromptRequest("Ask Alexey Andreev to review it."));
+
+        Assert.That(mixedCase.Decision, Is.EqualTo(SanitizeDecision.Confirm));
+        Assert.That(mixedCase.SanitizedText, Does.Not.Contain("Alexey.andreev"));
+        Assert.That(mixedCase.Replacements, Has.Count.EqualTo(1));
+        Assert.That(mixedCase.Replacements.Single().Offset, Is.EqualTo("Ask ".Length));
+        Assert.That(mixedCase.Replacements.Single().Length, Is.EqualTo("Alexey.andreev".Length));
+        Assert.That(mixedCase.Replacements.Single().Type, Is.EqualTo("username"));
+        Assert.That(separatorVariant.Decision, Is.EqualTo(SanitizeDecision.Confirm));
+        Assert.That(separatorVariant.SanitizedText, Does.Not.Contain("Alexey Andreev"));
+        Assert.That(separatorVariant.Replacements, Has.Count.EqualTo(1));
+        Assert.That(separatorVariant.Replacements.Single().Offset, Is.EqualTo("Ask ".Length));
+        Assert.That(separatorVariant.Replacements.Single().Length, Is.EqualTo("Alexey Andreev".Length));
+        Assert.That(separatorVariant.Replacements.Single().Type, Is.EqualTo("username"));
+        Assert.That(vault.TryGetPseudonym("username", "alexey.andreev", out var pseudonym), Is.True);
+        Assert.That(mixedCase.SanitizedText, Does.Contain(pseudonym));
+        Assert.That(separatorVariant.SanitizedText, Does.Contain(pseudonym));
+        Assert.That(AuditInspection.Contains(mixedCase.AuditEvent, "Alexey.andreev"), Is.False);
+        Assert.That(AuditInspection.Contains(separatorVariant.AuditEvent, "Alexey Andreev"), Is.False);
+    }
+
+    [Test]
     public void Sanitize_DictionaryTerm_AuditDoesNotContainRawDictionaryValue()
     {
         var sanitizer = new Sanitizer(new InMemoryHmacMappingVault(TestSecret()), new[]
@@ -5423,6 +5485,39 @@ public class CliTests
             Assert.That(entries.Single(entry => entry.Id == first.EntryId).Notes, Is.EqualTo("new domain"));
             Assert.That(entries.Any(entry => entry.Value == "old.example.local"), Is.False);
             Assert.That(entries.Single(entry => entry.Id == second.EntryId).Value, Is.EqualTo("existing.example.local"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void ManagedSensitiveDictionary_RejectsCaseAndSeparatorDuplicate()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var store = new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout));
+            var first = store.Add("domain", "test.secret.com", null);
+
+            var duplicateAdd = store.Add("domain", "Test secret com", null);
+            var second = store.Add("username", "alexey.andreev", null);
+            var duplicateUpdate = store.Update(second.EntryId!, "domain", "TEST_SECRET_COM", null);
+            var separatorOnly = store.Add("domain", "...", null);
+            var entries = store.ListEntriesForLocalReveal();
+
+            Assert.That(first.Succeeded, Is.True);
+            Assert.That(duplicateAdd.Succeeded, Is.False);
+            Assert.That(duplicateAdd.Code, Is.EqualTo("dictionary_term_exists"));
+            Assert.That(duplicateUpdate.Succeeded, Is.False);
+            Assert.That(duplicateUpdate.Code, Is.EqualTo("dictionary_term_exists"));
+            Assert.That(separatorOnly.Succeeded, Is.False);
+            Assert.That(separatorOnly.Code, Is.EqualTo("invalid_dictionary_term"));
+            Assert.That(entries.Count(entry => entry.Type == "domain"), Is.EqualTo(1));
+            Assert.That(entries.Single(entry => entry.Type == "domain").Value, Is.EqualTo("test.secret.com"));
         }
         finally
         {

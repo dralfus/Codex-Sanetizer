@@ -333,6 +333,7 @@ public sealed class ManagedSensitiveDictionary
     {
         return !SensitiveEntityTypes.IsSupportedDictionaryType(term.Type)
             || string.IsNullOrWhiteSpace(term.Value)
+            || DictionaryTermMatching.NormalizeKey(term.Value).Length == 0
             || term.Action != PolicyActions.PseudonymizeRestorable
             ? "invalid_dictionary_term"
             : null;
@@ -340,7 +341,7 @@ public sealed class ManagedSensitiveDictionary
 
     private static string CreateKey(string type, string value)
     {
-        return $"{type}\u001f{value}";
+        return $"{type}\u001f{DictionaryTermMatching.NormalizeKey(value)}";
     }
 
     private static ManagedDictionaryEntry ParseEntry(string line)

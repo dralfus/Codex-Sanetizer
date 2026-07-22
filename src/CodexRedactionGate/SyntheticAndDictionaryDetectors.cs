@@ -60,12 +60,12 @@ internal sealed class DictionaryDetector : ISensitiveDetector
 
         foreach (var term in _dictionaryTerms)
         {
-            foreach (var offset in FindTermOffsets(text, term))
+            foreach (var match in FindTermMatches(text, term))
             {
                 candidates.Add(new SensitiveCandidate(
                     ContentPartId: contentPartId,
-                    Offset: offset,
-                    Length: term.Value.Length,
+                    Offset: match.Offset,
+                    Length: match.Length,
                     Type: SensitiveEntityTypeIds.FromPublic(term.Type),
                     DetectorId: SensitiveDetectorIds.Dictionary,
                     Action: SanitizerActionIds.FromPublic(term.Action),
@@ -80,8 +80,8 @@ internal sealed class DictionaryDetector : ISensitiveDetector
             .ToArray();
     }
 
-    private static IReadOnlyList<int> FindTermOffsets(string text, DictionaryTerm term)
+    private static IReadOnlyList<TextSpanMatch> FindTermMatches(string text, DictionaryTerm term)
     {
-        return TextSpanUtilities.FindOffsetsForEntity(text, term.Value, term.Type);
+        return DictionaryTermMatching.FindMatches(text, term.Value, term.Type);
     }
 }
