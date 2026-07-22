@@ -61,9 +61,7 @@ internal static class DictionaryTermMatching
 
             var start = normalizedText.OriginalIndexes[matchIndex];
             var endExclusive = normalizedText.OriginalIndexes[matchIndex + normalizedValue.Length - 1] + 1;
-            if (!requireUsernameBoundary
-                || (IsUsernameBoundary(text, start - 1)
-                    && IsUsernameBoundary(text, endExclusive)))
+            if (HasBoundaries(text, start, endExclusive, requireUsernameBoundary))
             {
                 matches.Add(new TextSpanMatch(start, endExclusive - start));
             }
@@ -92,6 +90,24 @@ internal static class DictionaryTermMatching
         }
 
         return new NormalizedTextProjection(builder.ToString(), originalIndexes.ToArray());
+    }
+
+    private static bool HasBoundaries(
+        string text,
+        int start,
+        int endExclusive,
+        bool requireUsernameBoundary)
+    {
+        return requireUsernameBoundary
+            ? IsUsernameBoundary(text, start - 1) && IsUsernameBoundary(text, endExclusive)
+            : IsTermBoundary(text, start - 1) && IsTermBoundary(text, endExclusive);
+    }
+
+    private static bool IsTermBoundary(string text, int index)
+    {
+        return index < 0
+            || index >= text.Length
+            || !char.IsLetterOrDigit(text[index]);
     }
 
     private static bool IsUsernameBoundary(string text, int index)

@@ -2082,6 +2082,31 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void Sanitize_DictionaryTerm_DoesNotMatchInsideLongerWords()
+    {
+        var vault = new InMemoryHmacMappingVault(TestSecret());
+        var sanitizer = new Sanitizer(vault, new[]
+        {
+            new DictionaryTerm("product", "pom", PolicyActions.PseudonymizeRestorable, null)
+        });
+
+        var embedded = sanitizer.Sanitize(CreatePromptRequest("Review pomelo and componentpom today."));
+        var standalone = sanitizer.Sanitize(CreatePromptRequest("Review POM today."));
+
+        Assert.That(embedded.Decision, Is.EqualTo(SanitizeDecision.Allow));
+        Assert.That(embedded.SanitizedText, Is.EqualTo("Review pomelo and componentpom today."));
+        Assert.That(embedded.Replacements, Is.Empty);
+        Assert.That(standalone.Decision, Is.EqualTo(SanitizeDecision.Confirm));
+        Assert.That(standalone.SanitizedText, Does.Not.Contain("POM"));
+        Assert.That(standalone.Replacements, Has.Count.EqualTo(1));
+        Assert.That(standalone.Replacements.Single().Offset, Is.EqualTo("Review ".Length));
+        Assert.That(standalone.Replacements.Single().Length, Is.EqualTo("POM".Length));
+        Assert.That(standalone.Replacements.Single().Type, Is.EqualTo("product"));
+        Assert.That(vault.TryGetPseudonym("product", "pom", out var pseudonym), Is.True);
+        Assert.That(standalone.SanitizedText, Does.Contain(pseudonym));
+    }
+
+    [Test]
     public void Sanitize_ManagedUsername_MatchesCaseAndSeparatorVariants()
     {
         var vault = new InMemoryHmacMappingVault(TestSecret());
