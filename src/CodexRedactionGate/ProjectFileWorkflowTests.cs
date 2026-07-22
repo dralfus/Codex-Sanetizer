@@ -168,7 +168,8 @@ public sealed class ProjectFileWorkflowTests
             var workspace = Path.Combine(tempDirectory, "workspace");
             Directory.CreateDirectory(workspace);
             var filePath = Path.Combine(workspace, "config.txt");
-            File.WriteAllText(filePath, "Connect to 192.168.10.25\r\npassword=P@ssw0rd!");
+            var originalText = "Connect to 192.168.10.25\r\npassword=P@ssw0rd!";
+            File.WriteAllText(filePath, originalText);
             var runtime = CreateRuntime(layout);
 
             var protect = CaptureProgramOutput(() =>
@@ -324,6 +325,186 @@ public sealed class ProjectFileWorkflowTests
     }
 
     [Test]
+    public void ProjectFilePatchApplier_WritesOnlyApprovedRestoredPatchAndAuditsRawFreeStatus()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            Directory.CreateDirectory(workspace);
+            var filePath = Path.Combine(workspace, "config.txt");
+            var originalText = "Connect to 192.168.10.25\r\npassword=P@ssw0rd!";
+            File.WriteAllText(filePath, originalText);
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+            var vault = new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("project-patch-apply-test-secret"));
+            var broker = new ProjectFileContextBroker(
+                new Sanitizer(vault),
+                layout,
+                ProjectFileBrokerOptions.ProtectedWorkspaceDefault);
+            var source = broker.CreateSanitizedVirtualFile(filePath, workspace).VirtualFile!;
+            var restoreWorkflow = new LocalRestoreWorkflow(
+                new LocalRestorer(vault),
+                new FileAuditSink(Path.Combine(tempDirectory, "restore-audit")));
+            var applier = new ProjectFilePatchApplier(
+                new ProjectFilePatchDryRun(request => restoreWorkflow.Restore(request).Restoration, layout),
+                new FileAuditSink(layout.AuditDirectory));
+            var request = new ProjectFilePatchDryRunRequest(
+                source,
+                workspace,
+                filePath,
+                source.SanitizedText.Replace("Connect", "Route", StringComparison.Ordinal));
+
+            var canceled = applier.Apply(new ProjectFilePatchApplyRequest(request, Approved: false));
+            var approved = applier.Apply(new ProjectFilePatchApplyRequest(request, Approved: true));
+            var persistedAudit = string.Join(Environment.NewLine, Directory.GetFiles(layout.AuditDirectory, "audit-*.json").Select(File.ReadAllText));
+
+            Assert.That(canceled.Succeeded, Is.False);
+            Assert.That(canceled.Code, Is.EqualTo("project_patch_apply_cancelled"));
+            Assert.That(canceled.Written, Is.False);
+            Assert.That(approved.Succeeded, Is.True);
+            Assert.That(approved.Code, Is.EqualTo("project_patch_applied"));
+            Assert.That(approved.Written, Is.True);
+            Assert.That(approved.LocalSensitive, Is.True);
+            Assert.That(approved.Diagnostics["raw_restored_patch_recorded"], Is.EqualTo("false"));
+            Assert.That(persistedAudit, Does.Contain(approved.Diagnostics["source_id"]));
+            Assert.That(persistedAudit, Does.Contain(approved.Diagnostics["expected_content_hash"]));
+            Assert.That(persistedAudit, Does.Contain(approved.Diagnostics["restored_patch_hash"]));
+            Assert.That(File.ReadAllText(filePath), Does.Contain("Route to 192.168.10.25"));
+            Assert.That(File.ReadAllText(filePath), Does.Contain("PASSWORD_REDACTED"));
+            Assert.That(persistedAudit, Does.Contain("project_patch_applied"));
+            Assert.That(persistedAudit, Does.Not.Contain("192.168.10.25"));
+            Assert.That(persistedAudit, Does.Not.Contain("P@ssw0rd!"));
+            Assert.That(persistedAudit, Does.Not.Contain(filePath));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void ProjectFilePatchApplier_BlocksWriteWhenTargetEscapesAfterPreview()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Pass("Windows link escape regression is Windows-specific.");
+        }
+
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            var outside = Path.Combine(tempDirectory, "outside");
+            Directory.CreateDirectory(workspace);
+            Directory.CreateDirectory(outside);
+            var filePath = Path.Combine(workspace, "config.txt");
+            var outsideFile = Path.Combine(outside, "config.txt");
+            File.WriteAllText(filePath, "Connect to 192.168.10.25");
+            File.WriteAllText(outsideFile, "outside");
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+            var vault = new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("project-patch-escape-test-secret"));
+            var broker = new ProjectFileContextBroker(new Sanitizer(vault), layout, ProjectFileBrokerOptions.ProtectedWorkspaceDefault);
+            var source = broker.CreateSanitizedVirtualFile(filePath, workspace).VirtualFile!;
+            var restoreWorkflow = new LocalRestoreWorkflow(new LocalRestorer(vault), new FileAuditSink(Path.Combine(tempDirectory, "restore-audit")));
+            var applier = new ProjectFilePatchApplier(
+                new ProjectFilePatchDryRun(request => restoreWorkflow.Restore(request).Restoration, layout),
+                new FileAuditSink(layout.AuditDirectory));
+            var request = new ProjectFilePatchDryRunRequest(
+                source,
+                workspace,
+                filePath,
+                source.SanitizedText.Replace("Connect", "Route", StringComparison.Ordinal));
+            File.Delete(filePath);
+            File.CreateSymbolicLink(filePath, outsideFile);
+
+            var result = applier.Apply(new ProjectFilePatchApplyRequest(request, Approved: true));
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo("outside_workspace"));
+            Assert.That(result.Written, Is.False);
+            Assert.That(File.ReadAllText(outsideFile), Is.EqualTo("outside"));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Assert.Pass("Creating symbolic links requires privileges on this Windows host.");
+        }
+        catch (IOException) when (!File.Exists(Path.Combine(tempDirectory, "workspace", "config.txt")))
+        {
+            Assert.Pass("Creating symbolic links requires privileges on this Windows host.");
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void ProjectFileBypassGuard_FailsClosedForProtectedWorkspaceWithoutRawValues()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            Directory.CreateDirectory(workspace);
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+
+            var directAttachment = ProjectFileBypassGuard.ReportDirectAttachment(layout, workspace);
+            var connector = ProjectFileBypassGuard.ReportUnmanagedConnector(layout, workspace);
+            var broker = new ProjectFileContextBroker(TestSanitizers.Create(), layout, ProjectFileBrokerOptions.ProtectedWorkspaceDefault);
+            var managed = broker.SanitizeManagedToolOutput("safe output", workspace);
+            var rendered = JsonSerializer.Serialize(new
+            {
+                DirectDiagnostics = directAttachment.Diagnostics,
+                DirectWarnings = directAttachment.Warnings,
+                ConnectorDiagnostics = connector.Diagnostics,
+                ConnectorWarnings = connector.Warnings,
+                ManagedDiagnostics = managed.Diagnostics
+            });
+
+            Assert.That(directAttachment.Allowed, Is.False);
+            Assert.That(directAttachment.Code, Is.EqualTo("direct_attachment_broker_required"));
+            Assert.That(directAttachment.Diagnostics["protected_workspace"], Is.EqualTo("true"));
+            Assert.That(directAttachment.Diagnostics["broker_only_file_context_required"], Is.EqualTo("true"));
+            Assert.That(connector.Allowed, Is.False);
+            Assert.That(connector.Code, Is.EqualTo("unmanaged_connector_broker_required"));
+            Assert.That(managed.Diagnostics["broker_only_file_context_required"], Is.EqualTo("true"));
+            Assert.That(managed.Diagnostics["broker_routed"], Is.EqualTo("true"));
+            Assert.That(rendered, Does.Not.Contain(workspace));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void ProjectFileProductSmokeRunner_ProvesCompleteBrokerWorkflowRawFree()
+    {
+        var report = ProjectFileProductSmokeRunner.Run(System.Text.Encoding.UTF8.GetBytes("project-file-product-smoke-test-secret"));
+        var rendered = string.Join(Environment.NewLine, ProjectFileProductSmokeRunner.RenderRawFree(report));
+
+        Assert.That(report.Passed, Is.True);
+        Assert.That(report.ReadSanitizedVirtualFilePassed, Is.True);
+        Assert.That(report.ToolOutputSanitizedPassed, Is.True);
+        Assert.That(report.ApprovedWritePassed, Is.True);
+        Assert.That(report.UnsupportedFileBlockedPassed, Is.True);
+        Assert.That(report.BypassBlockedPassed, Is.True);
+        Assert.That(report.ProjectFilesProtectedForBrokerWorkflow, Is.True);
+        Assert.That(report.RawFreeAuditEvidencePassed, Is.True);
+        Assert.That(rendered, Does.Contain("project_file_product_smoke: passed"));
+        Assert.That(rendered, Does.Contain("project_files_protected: true"));
+        Assert.That(rendered, Does.Not.Contain("deploy.corp.example.local"));
+        Assert.That(rendered, Does.Not.Contain("user1"));
+        Assert.That(rendered, Does.Not.Contain("P@ssw0rd!"));
+    }
+
+    [Test]
     public void Program_ProjectFileSmokeToolOutputAndPatchDryRunCommands_ExposeRawFreeStatus()
     {
         var tempDirectory = CreateTempDirectory();
@@ -334,7 +515,8 @@ public sealed class ProjectFileWorkflowTests
             var workspace = Path.Combine(tempDirectory, "workspace");
             Directory.CreateDirectory(workspace);
             var filePath = Path.Combine(workspace, "config.txt");
-            File.WriteAllText(filePath, "Connect to 192.168.10.25\r\npassword=P@ssw0rd!");
+            var originalText = "Connect to 192.168.10.25\r\npassword=P@ssw0rd!";
+            File.WriteAllText(filePath, originalText);
             var vault = new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("project-file-cli-test-secret"));
             var runtime = CreateRuntime(layout, vault);
             ProtectedWorkspaceStore.Protect(layout, workspace);
@@ -381,6 +563,25 @@ public sealed class ProjectFileWorkflowTests
                     "--sanitized-edit",
                     virtualFile.SanitizedText.Replace("Connect", "Route", StringComparison.Ordinal)
                 }, runtime));
+            File.WriteAllText(filePath, originalText);
+            var apply = CaptureProgramOutput(() =>
+                Program.Main(new[]
+                {
+                    "--project-patch-apply",
+                    filePath,
+                    "--protected-workspace",
+                    workspace,
+                    "--source-content-hash",
+                    virtualFile.ContentHash,
+                    "--sanitized-edit",
+                    virtualFile.SanitizedText.Replace("Connect", "Route", StringComparison.Ordinal),
+                    "--approve"
+                }, runtime));
+            File.WriteAllText(filePath, originalText);
+            var bypass = CaptureProgramOutput(() =>
+                Program.Main(new[] { "--project-attachment-bypass-status", workspace }, runtime));
+            var productSmoke = CaptureProgramOutput(() =>
+                Program.Main(new[] { "--project-file-product-smoke" }, runtime));
 
             Assert.That(smoke.ExitCode, Is.EqualTo(0));
             Assert.That(smoke.Stdout, Does.Contain("project_file_smoke: passed"));
@@ -397,6 +598,16 @@ public sealed class ProjectFileWorkflowTests
             Assert.That(patch.Stdout, Does.Contain("status: restore_aware_patch_preview_ready"));
             Assert.That(patch.Stdout, Does.Contain("local_sensitive: true"));
             Assert.That(patch.Stdout, Does.Contain("Route to 192.168.10.25"));
+            Assert.That(apply.ExitCode, Is.EqualTo(0));
+            Assert.That(apply.Stdout, Does.Contain("status: project_patch_applied"));
+            Assert.That(apply.Stdout, Does.Contain("written: true"));
+            Assert.That(apply.Stdout, Does.Not.Contain("192.168.10.25"));
+            Assert.That(apply.Stdout, Does.Not.Contain("P@ssw0rd!"));
+            Assert.That(bypass.ExitCode, Is.EqualTo(1));
+            Assert.That(bypass.Stdout, Does.Contain("status: direct_attachment_broker_required"));
+            Assert.That(bypass.Stdout, Does.Not.Contain(workspace));
+            Assert.That(productSmoke.ExitCode, Is.EqualTo(0));
+            Assert.That(productSmoke.Stdout, Does.Contain("project_file_product_smoke: passed"));
             Assert.That(File.ReadAllText(filePath), Does.Not.Contain("Route to"));
             Assert.That(stalePatch.ExitCode, Is.EqualTo(1));
             Assert.That(stalePatch.Stdout, Does.Contain("status: source_version_mismatch"));

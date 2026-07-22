@@ -2905,11 +2905,13 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] Approved restored patches are written only to the intended protected workspace path.
-- [ ] Cancel leaves the local project unchanged.
-- [ ] Write audit events record target ids, hashes, action and status without raw restored values.
-- [ ] The UI/status marks restored file output as local-sensitive.
-- [ ] Build, tests and self-test are green.
+**Verification result 2026-07-22:** focused project-file workflow tests passed 14/14; full unit tests passed 341/341; `--self-test` passed; `--project-file-product-smoke` passed; approved apply writes only after `--approve`, cancel leaves files unchanged, final-path containment is rechecked before write and write audit records include raw-free target ids/hashes.
+
+- [x] Approved restored patches are written only to the intended protected workspace path.
+- [x] Cancel leaves the local project unchanged.
+- [x] Write audit events record target ids, hashes, action and status without raw restored values.
+- [x] The UI/status marks restored file output as local-sensitive.
+- [x] Build, tests and self-test are green.
 
 ## 207. Guard direct attachment and bypass paths
 
@@ -2927,11 +2929,13 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] Protected workspace status warns when direct attachments are not broker-routed.
-- [ ] Unmanaged connector/tool paths are shown as unprotected or blocked by policy.
-- [ ] The warning path does not capture raw filenames, paths or file contents by default.
-- [ ] Enterprise policy can require broker-only file context for protected workspaces.
-- [ ] Build, tests and self-test are green.
+**Verification result 2026-07-22:** focused project-file workflow tests passed 14/14; full unit tests passed 341/341; `--self-test` passed; bypass guard tests cover direct attachment and unmanaged connector warnings for protected workspaces with broker-only policy and raw-free diagnostics, while broker-routed tool output exposes broker-only policy state.
+
+- [x] Protected workspace status warns when direct attachments are not broker-routed.
+- [x] Unmanaged connector/tool paths are shown as unprotected or blocked by policy.
+- [x] The warning path does not capture raw filenames, paths or file contents by default.
+- [x] Enterprise policy can require broker-only file context for protected workspaces.
+- [x] Build, tests and self-test are green.
 
 ## 208. Add end-to-end protected project-file product smoke
 
@@ -2949,9 +2953,11 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] Smoke proves supported file reads produce sanitized virtual files.
-- [ ] Smoke proves file-derived tool output is sanitized before model visibility.
-- [ ] Smoke proves sanitized edits can be restored and written locally after approval.
-- [ ] Smoke proves unsupported files and bypass paths fail closed or show unprotected status.
-- [ ] Smoke proves `project_files_protected=true` only for the verified broker workflow.
-- [ ] Build, tests, self-test and project-file product smoke are green.
+**Verification result 2026-07-22:** focused project-file workflow tests passed 14/14; full unit tests passed 341/341; `--self-test` passed; `--project-file-product-smoke` passed and reports `project_files_protected: true` only when read/tool/apply/unsupported/bypass/raw-free-audit checks all pass; `--product-smoke` passed and includes `project_file_product_smoke: true`.
+
+- [x] Smoke proves supported file reads produce sanitized virtual files.
+- [x] Smoke proves file-derived tool output is sanitized before model visibility.
+- [x] Smoke proves sanitized edits can be restored and written locally after approval.
+- [x] Smoke proves unsupported files and bypass paths fail closed or show unprotected status.
+- [x] Smoke proves `project_files_protected=true` only for the verified broker workflow.
+- [x] Build, tests, self-test and project-file product smoke are green.

@@ -171,6 +171,42 @@ public sealed record ProjectFilePatchDryRunResult(
     IReadOnlyList<Warning> Warnings,
     IReadOnlyDictionary<string, string> Diagnostics);
 
+public sealed record ProjectFilePatchApplyRequest(
+    ProjectFilePatchDryRunRequest DryRunRequest,
+    bool Approved);
+
+public sealed record ProjectFilePatchApplyResult(
+    bool Succeeded,
+    string Code,
+    bool Written,
+    bool LocalSensitive,
+    AuditWriteResult AuditWriteResult,
+    IReadOnlyList<Warning> Warnings,
+    IReadOnlyDictionary<string, string> Diagnostics);
+
+public sealed record ProjectFileBypassPolicy(bool RequireBrokerOnlyFileContext)
+{
+    public static ProjectFileBypassPolicy BrokerOnlyDefault { get; } = new(RequireBrokerOnlyFileContext: true);
+}
+
+public sealed record ProjectFileBypassResult(
+    bool Allowed,
+    string Code,
+    IReadOnlyList<Warning> Warnings,
+    IReadOnlyDictionary<string, string> Diagnostics);
+
+public sealed record ProjectFileProductSmokeReport(
+    bool Passed,
+    bool ReadSanitizedVirtualFilePassed,
+    bool ToolOutputSanitizedPassed,
+    bool ApprovedWritePassed,
+    bool UnsupportedFileBlockedPassed,
+    bool BypassBlockedPassed,
+    bool ProjectFilesProtectedForBrokerWorkflow,
+    bool RawFreeAuditEvidencePassed,
+    int AuditEventCount,
+    int ReplacementCount);
+
 public sealed class ProjectFileContextBroker
 {
     private readonly ISanitizer _sanitizer;
@@ -202,6 +238,8 @@ public sealed class ProjectFileContextBroker
             ["workspace_id"] = workspaceId ?? "none",
             ["raw_file_content_recorded"] = "false",
             ["raw_file_path_recorded"] = "false",
+            ["broker_routed"] = "true",
+            ["broker_only_file_context_required"] = _options.RequireProtectedWorkspace.ToString().ToLowerInvariant(),
             ["broker_mode"] = _options.RequireProtectedWorkspace ? "protected_workspace" : "demo"
         };
 
@@ -291,7 +329,9 @@ public sealed class ProjectFileContextBroker
             ["workspace_id"] = workspaceId,
             ["output_hash"] = outputHash,
             ["raw_tool_output_recorded"] = "false",
-            ["tool_output_managed"] = "true"
+            ["tool_output_managed"] = "true",
+            ["broker_routed"] = "true",
+            ["broker_only_file_context_required"] = _options.RequireProtectedWorkspace.ToString().ToLowerInvariant()
         };
 
         if (_options.RequireProtectedWorkspace)
@@ -551,6 +591,363 @@ public sealed class ProjectFilePatchDryRun
                 new Warning(code, "Patch dry-run could not be validated for the protected workspace.", WarningSeverity.Error)
             },
             Diagnostics: diagnostics);
+    }
+}
+
+public sealed class ProjectFilePatchApplier
+{
+    private readonly ProjectFilePatchDryRun _dryRun;
+    private readonly IAuditSink _auditSink;
+
+    public ProjectFilePatchApplier(ProjectFilePatchDryRun dryRun, IAuditSink auditSink)
+    {
+        _dryRun = dryRun ?? throw new ArgumentNullException(nameof(dryRun));
+        _auditSink = auditSink ?? throw new ArgumentNullException(nameof(auditSink));
+    }
+
+    public ProjectFilePatchApplyResult Apply(ProjectFilePatchApplyRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!request.Approved)
+        {
+            return CompleteWithoutWrite(
+                "project_patch_apply_cancelled",
+                request.DryRunRequest,
+                localSensitive: false,
+                warnings: new[]
+                {
+                    new Warning(
+                        "project_patch_apply_cancelled",
+                        "Project file patch was not approved for local write.",
+                        WarningSeverity.Info)
+                });
+        }
+
+        var preview = _dryRun.Preview(request.DryRunRequest);
+        if (!preview.Succeeded || preview.PreviewText is null)
+        {
+            return CompleteWithoutWrite(preview.Code, request.DryRunRequest, preview.LocalSensitive, preview.Warnings, preview.Diagnostics);
+        }
+
+        var diagnostics = CreateBaseDiagnostics(request.DryRunRequest);
+        foreach (var item in preview.Diagnostics)
+        {
+            diagnostics[item.Key] = item.Value;
+        }
+
+        diagnostics["write_performed"] = "true";
+        diagnostics["raw_restored_patch_recorded"] = "false";
+        diagnostics["restored_patch_hash"] = RawFreeIdentity.HashBytes(Encoding.UTF8.GetBytes(preview.PreviewText));
+
+        var writeContainment = ProjectFileSelectionGuard.CheckWorkspaceContainment(
+            request.DryRunRequest.TargetFilePath,
+            request.DryRunRequest.WorkspacePath);
+        diagnostics["write_workspace_containment"] = writeContainment.Code;
+        if (!writeContainment.Succeeded)
+        {
+            return CompleteWithoutWrite(
+                writeContainment.Code,
+                request.DryRunRequest,
+                preview.LocalSensitive,
+                new[] { new Warning(writeContainment.Code, "Project file target escaped the protected workspace before write.", WarningSeverity.Error) },
+                diagnostics);
+        }
+
+        try
+        {
+            AtomicFileWriter.WriteAllBytes(
+                request.DryRunRequest.TargetFilePath,
+                Encoding.UTF8.GetBytes(preview.PreviewText));
+        }
+        catch (Exception) when (
+            OperatingSystem.IsWindows()
+            || OperatingSystem.IsLinux()
+            || OperatingSystem.IsMacOS())
+        {
+            return CompleteWithoutWrite(
+                "project_patch_write_failed",
+                request.DryRunRequest,
+                preview.LocalSensitive,
+                new[] { new Warning("project_patch_write_failed", "Project file patch could not be written.", WarningSeverity.Error) },
+                diagnostics);
+        }
+
+        var auditWrite = _auditSink.Write(CreateAuditEvent("project_patch_applied", preview.LocalSensitive, diagnostics, preview.Warnings));
+        return new ProjectFilePatchApplyResult(
+            Succeeded: auditWrite.Succeeded,
+            Code: auditWrite.Succeeded ? "project_patch_applied" : "project_patch_audit_failed",
+            Written: true,
+            LocalSensitive: preview.LocalSensitive,
+            AuditWriteResult: auditWrite,
+            Warnings: auditWrite.Succeeded
+                ? preview.Warnings
+                : preview.Warnings.Concat(new[] { new Warning(auditWrite.WarningCode ?? "audit_write_failed", "Project file write audit could not be written.", WarningSeverity.Error) }).ToArray(),
+            Diagnostics: diagnostics);
+    }
+
+    private ProjectFilePatchApplyResult CompleteWithoutWrite(
+        string code,
+        ProjectFilePatchDryRunRequest request,
+        bool localSensitive,
+        IReadOnlyList<Warning> warnings,
+        IReadOnlyDictionary<string, string>? extraDiagnostics = null)
+    {
+        var diagnostics = CreateBaseDiagnostics(request);
+        diagnostics["write_performed"] = "false";
+        diagnostics["raw_restored_patch_recorded"] = "false";
+        if (extraDiagnostics is not null)
+        {
+            foreach (var item in extraDiagnostics)
+            {
+                diagnostics[item.Key] = item.Value;
+            }
+        }
+
+        var auditWrite = _auditSink.Write(CreateAuditEvent(code, localSensitive, diagnostics, warnings));
+        return new ProjectFilePatchApplyResult(
+            Succeeded: false,
+            Code: code,
+            Written: false,
+            LocalSensitive: localSensitive,
+            AuditWriteResult: auditWrite,
+            Warnings: warnings,
+            Diagnostics: diagnostics);
+    }
+
+    private static Dictionary<string, string> CreateBaseDiagnostics(ProjectFilePatchDryRunRequest request)
+    {
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["workspace_id"] = RawFreeIdentity.HashPath(request.WorkspacePath),
+            ["source_id"] = RawFreeIdentity.HashPath(request.TargetFilePath),
+            ["expected_content_hash"] = request.SourceFile.ContentHash,
+            ["target_file_path_recorded"] = "false"
+        };
+    }
+
+    private static AuditEvent CreateAuditEvent(
+        string code,
+        bool localSensitive,
+        IReadOnlyDictionary<string, string> diagnostics,
+        IReadOnlyList<Warning> warnings)
+    {
+        var actionCounts = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            [code] = 1,
+            ["local_sensitive"] = localSensitive ? 1 : 0
+        };
+        if (diagnostics.TryGetValue("restored_count", out var restoredCount)
+            && int.TryParse(restoredCount, out var restored))
+        {
+            actionCounts["restored_count"] = restored;
+        }
+
+        return new AuditEvent(
+            Timestamp: DateTimeOffset.UtcNow,
+            RequestId: Guid.NewGuid().ToString("N"),
+            Application: "project_file_broker",
+            WorkspaceHash: diagnostics.GetValueOrDefault("workspace_id"),
+            PolicyProfile: "project_file_write",
+            Decision: code == "project_patch_applied" ? SanitizeDecision.Allow : SanitizeDecision.Block,
+            ScannerStatuses: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["project_file_write"] = code,
+                ["raw_restored_patch_recorded"] = "false",
+                ["source_id"] = diagnostics.GetValueOrDefault("source_id") ?? "unknown",
+                ["expected_content_hash"] = diagnostics.GetValueOrDefault("expected_content_hash") ?? "unknown",
+                ["current_content_hash"] = diagnostics.GetValueOrDefault("current_content_hash") ?? "unknown",
+                ["restored_patch_hash"] = diagnostics.GetValueOrDefault("restored_patch_hash") ?? "none",
+                ["target_file_path_recorded"] = "false"
+            },
+            EntityCountsByType: new Dictionary<string, int>(StringComparer.Ordinal),
+            ActionCounts: actionCounts,
+            SpanSummaries: Array.Empty<SpanSummary>(),
+            ReplacementSummaries: Array.Empty<ReplacementSummary>(),
+            Warnings: warnings,
+            AdapterMode: "project_file_broker_write",
+            DurationsMs: new Dictionary<string, long>(StringComparer.Ordinal));
+    }
+}
+
+public static class ProjectFileBypassGuard
+{
+    public static ProjectFileBypassResult ReportDirectAttachment(
+        DefaultStorageLayout layout,
+        string workspacePath,
+        ProjectFileBypassPolicy? policy = null)
+    {
+        return Report("direct_attachment", "direct_attachment_broker_required", layout, workspacePath, policy);
+    }
+
+    public static ProjectFileBypassResult ReportUnmanagedConnector(
+        DefaultStorageLayout layout,
+        string workspacePath,
+        ProjectFileBypassPolicy? policy = null)
+    {
+        return Report("unmanaged_connector", "unmanaged_connector_broker_required", layout, workspacePath, policy);
+    }
+
+    private static ProjectFileBypassResult Report(
+        string channel,
+        string code,
+        DefaultStorageLayout layout,
+        string workspacePath,
+        ProjectFileBypassPolicy? policy)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
+
+        var activePolicy = policy ?? ProjectFileBypassPolicy.BrokerOnlyDefault;
+        var status = ProtectedWorkspaceStore.GetStatus(layout, workspacePath);
+        var diagnostics = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["workspace_id"] = status.WorkspaceId,
+            ["protected_workspace"] = status.Protected.ToString().ToLowerInvariant(),
+            ["channel"] = channel,
+            ["broker_routed"] = "false",
+            ["broker_only_file_context_required"] = activePolicy.RequireBrokerOnlyFileContext.ToString().ToLowerInvariant(),
+            ["raw_file_path_recorded"] = "false",
+            ["raw_file_content_recorded"] = "false"
+        };
+        var blocked = status.Protected && activePolicy.RequireBrokerOnlyFileContext;
+        return new ProjectFileBypassResult(
+            Allowed: !blocked,
+            Code: blocked ? code : "workspace_not_protected",
+            Warnings: new[]
+            {
+                new Warning(
+                    blocked ? code : "workspace_not_protected",
+                    "Project file context is not broker-routed.",
+                    blocked ? WarningSeverity.Error : WarningSeverity.Warning)
+            },
+            Diagnostics: diagnostics);
+    }
+}
+
+public static class ProjectFileProductSmokeRunner
+{
+    public static ProjectFileProductSmokeReport Run(byte[] hmacSecret)
+    {
+        ArgumentNullException.ThrowIfNull(hmacSecret);
+
+        var tempDirectory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-project-file-product-smoke", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            Directory.CreateDirectory(workspace);
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+
+            var filePath = Path.Combine(workspace, "config.txt");
+            File.WriteAllText(filePath, "Connect to deploy.corp.example.local\r\nRead C:\\Users\\user1\\secret.txt\r\npassword=P@ssw0rd!");
+            var unsupportedPath = Path.Combine(workspace, "archive.zip");
+            File.WriteAllText(unsupportedPath, "not a supported project file");
+
+            var vault = new InMemoryHmacMappingVault(hmacSecret);
+            var broker = new ProjectFileContextBroker(
+                new Sanitizer(vault),
+                layout,
+                ProjectFileBrokerOptions.ProtectedWorkspaceDefault);
+            var virtualFileResult = broker.CreateSanitizedVirtualFile(filePath, workspace);
+            var virtualFile = virtualFileResult.VirtualFile;
+            var readPassed = virtualFileResult.Succeeded
+                && virtualFile is not null
+                && !virtualFile.SanitizedText.Contains("deploy.corp.example.local", StringComparison.Ordinal)
+                && !virtualFile.SanitizedText.Contains("user1", StringComparison.Ordinal)
+                && !virtualFile.SanitizedText.Contains("P@ssw0rd!", StringComparison.Ordinal);
+            var toolOutput = broker.SanitizeManagedToolOutput(
+                "cat returned deploy.corp.example.local and password=P@ssw0rd!",
+                workspace,
+                "product-smoke-tool");
+            var toolPassed = toolOutput.Succeeded
+                && toolOutput.ToolOutput is not null
+                && !toolOutput.ToolOutput.SanitizedText.Contains("deploy.corp.example.local", StringComparison.Ordinal)
+                && !toolOutput.ToolOutput.SanitizedText.Contains("P@ssw0rd!", StringComparison.Ordinal);
+            var unsupported = broker.CreateSanitizedVirtualFile(unsupportedPath, workspace);
+            var bypass = ProjectFileBypassGuard.ReportDirectAttachment(layout, workspace);
+
+            var restoreWorkflow = new LocalRestoreWorkflow(
+                new LocalRestorer(vault),
+                new FileAuditSink(Path.Combine(tempDirectory, "restore-audit")));
+            var applier = new ProjectFilePatchApplier(
+                new ProjectFilePatchDryRun(request => restoreWorkflow.Restore(request).Restoration, layout),
+                new FileAuditSink(layout.AuditDirectory));
+            var apply = virtualFile is null
+                ? null
+                : applier.Apply(new ProjectFilePatchApplyRequest(
+                    new ProjectFilePatchDryRunRequest(
+                        virtualFile,
+                        workspace,
+                        filePath,
+                        virtualFile.SanitizedText.Replace("Connect", "Route", StringComparison.Ordinal)),
+                    Approved: true));
+            var writtenText = File.ReadAllText(filePath);
+            var approvedWritePassed = apply?.Succeeded == true
+                && apply.Written
+                && apply.LocalSensitive
+                && writtenText.Contains("Route to deploy.corp.example.local", StringComparison.Ordinal)
+                && writtenText.Contains("PASSWORD_REDACTED", StringComparison.Ordinal)
+                && !writtenText.Contains("P@ssw0rd!", StringComparison.Ordinal);
+            var auditRecords = AuditChainReader.ReadRecords(layout.AuditDirectory);
+            var auditPayload = string.Join(Environment.NewLine, auditRecords.Select(record => AuditChainReader.SerializeEvent(record.Event)));
+            var rawFreeAudit = auditRecords.Count > 0
+                && !auditPayload.Contains("deploy.corp.example.local", StringComparison.Ordinal)
+                && !auditPayload.Contains("user1", StringComparison.Ordinal)
+                && !auditPayload.Contains("P@ssw0rd!", StringComparison.Ordinal)
+                && !auditPayload.Contains(filePath, StringComparison.Ordinal);
+            var projectFilesProtectedForBrokerWorkflow = readPassed
+                && toolPassed
+                && approvedWritePassed
+                && unsupported.Code == "unsupported_attachment_type"
+                && !bypass.Allowed
+                && rawFreeAudit;
+            var passed = readPassed
+                && toolPassed
+                && approvedWritePassed
+                && unsupported.Code == "unsupported_attachment_type"
+                && !bypass.Allowed
+                && projectFilesProtectedForBrokerWorkflow
+                && rawFreeAudit;
+
+            return new ProjectFileProductSmokeReport(
+                Passed: passed,
+                ReadSanitizedVirtualFilePassed: readPassed,
+                ToolOutputSanitizedPassed: toolPassed,
+                ApprovedWritePassed: approvedWritePassed,
+                UnsupportedFileBlockedPassed: unsupported.Code == "unsupported_attachment_type",
+                BypassBlockedPassed: !bypass.Allowed,
+                ProjectFilesProtectedForBrokerWorkflow: projectFilesProtectedForBrokerWorkflow,
+                RawFreeAuditEvidencePassed: rawFreeAudit,
+                AuditEventCount: auditRecords.Count,
+                ReplacementCount: virtualFile?.ReplacementCount ?? 0);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    public static IReadOnlyList<string> RenderRawFree(ProjectFileProductSmokeReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        return new[]
+        {
+            $"project_file_product_smoke: {(report.Passed ? "passed" : "failed")}",
+            $"read_sanitized_virtual_file: {report.ReadSanitizedVirtualFilePassed.ToString().ToLowerInvariant()}",
+            $"tool_output_sanitized: {report.ToolOutputSanitizedPassed.ToString().ToLowerInvariant()}",
+            $"approved_write: {report.ApprovedWritePassed.ToString().ToLowerInvariant()}",
+            $"unsupported_file_blocked: {report.UnsupportedFileBlockedPassed.ToString().ToLowerInvariant()}",
+            $"bypass_blocked: {report.BypassBlockedPassed.ToString().ToLowerInvariant()}",
+            $"project_files_protected: {report.ProjectFilesProtectedForBrokerWorkflow.ToString().ToLowerInvariant()}",
+            $"raw_free_audit_evidence: {report.RawFreeAuditEvidencePassed.ToString().ToLowerInvariant()}",
+            $"audit_events: {report.AuditEventCount}",
+            $"replacement_count: {report.ReplacementCount}"
+        };
     }
 }
 

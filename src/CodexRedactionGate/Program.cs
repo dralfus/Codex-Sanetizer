@@ -286,6 +286,39 @@ public static class Program
                 runtime.RestoreWorkflowFactory);
         }
 
+        if (args.Length == 9
+            && args[0] == "--project-patch-apply"
+            && args[2] == "--protected-workspace"
+            && args[4] == "--source-content-hash"
+            && args[6] == "--sanitized-edit"
+            && args[8] is "--approve" or "--cancel")
+        {
+            return RunProjectPatchApply(
+                args[1],
+                args[3],
+                args[5],
+                args[7],
+                approved: args[8] == "--approve",
+                runtime.LayoutFactory,
+                runtime.SanitizerFactory,
+                runtime.RestoreWorkflowFactory);
+        }
+
+        if (args.Length == 2 && args[0] == "--project-attachment-bypass-status")
+        {
+            return RunProjectAttachmentBypassStatus(args[1], runtime.LayoutFactory);
+        }
+
+        if (args.Length == 2 && args[0] == "--project-connector-bypass-status")
+        {
+            return RunProjectConnectorBypassStatus(args[1], runtime.LayoutFactory);
+        }
+
+        if (args.Length == 1 && args[0] == "--project-file-product-smoke")
+        {
+            return RunProjectFileProductSmoke();
+        }
+
         if (args.Length == 3 && args[0] == "--audit-cleanup" && args[1] == "--keep")
         {
             return int.TryParse(args[2], out var keepEvents) && keepEvents >= 0
@@ -1172,6 +1205,77 @@ public static class Program
         return result.Succeeded ? 0 : 1;
     }
 
+    private static int RunProjectPatchApply(
+        string filePath,
+        string workspacePath,
+        string sourceContentHash,
+        string sanitizedEdit,
+        bool approved,
+        Func<DefaultStorageLayout> layoutFactory,
+        Func<IReadOnlyList<DictionaryTerm>, Sanitizer> sanitizerFactory,
+        Func<DefaultStorageLayout, LocalRestoreWorkflow> restoreWorkflowFactory)
+    {
+        var layout = layoutFactory();
+        var broker = new ProjectFileContextBroker(
+            sanitizerFactory(Array.Empty<DictionaryTerm>()),
+            layout,
+            ProjectFileBrokerOptions.ProtectedWorkspaceDefault);
+        var source = broker.CreateSanitizedVirtualFile(filePath, workspacePath);
+        if (source.VirtualFile is null)
+        {
+            Console.WriteLine($"status: {source.Code}");
+            WriteDiagnosticsAndWarnings(source.Diagnostics, source.Warnings);
+
+            return 1;
+        }
+
+        var sourceIdentity = source.VirtualFile with { ContentHash = sourceContentHash };
+        var dryRun = new ProjectFilePatchDryRun(
+            request => restoreWorkflowFactory(layout).Restore(request).Restoration,
+            layout);
+        var applier = new ProjectFilePatchApplier(dryRun, new FileAuditSink(layout.AuditDirectory));
+        var result = applier.Apply(new ProjectFilePatchApplyRequest(
+            new ProjectFilePatchDryRunRequest(sourceIdentity, workspacePath, filePath, sanitizedEdit),
+            approved));
+
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"written: {result.Written.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"local_sensitive: {result.LocalSensitive.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"audit_written: {result.AuditWriteResult.Succeeded.ToString().ToLowerInvariant()}");
+        WriteDiagnosticsAndWarnings(result.Diagnostics, result.Warnings);
+
+        return result.Succeeded ? 0 : 1;
+    }
+
+    private static int RunProjectAttachmentBypassStatus(string workspacePath, Func<DefaultStorageLayout> layoutFactory)
+    {
+        var result = ProjectFileBypassGuard.ReportDirectAttachment(layoutFactory(), workspacePath);
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"allowed: {result.Allowed.ToString().ToLowerInvariant()}");
+        WriteDiagnosticsAndWarnings(result.Diagnostics, result.Warnings);
+        return result.Allowed ? 0 : 1;
+    }
+
+    private static int RunProjectConnectorBypassStatus(string workspacePath, Func<DefaultStorageLayout> layoutFactory)
+    {
+        var result = ProjectFileBypassGuard.ReportUnmanagedConnector(layoutFactory(), workspacePath);
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"allowed: {result.Allowed.ToString().ToLowerInvariant()}");
+        WriteDiagnosticsAndWarnings(result.Diagnostics, result.Warnings);
+        return result.Allowed ? 0 : 1;
+    }
+
+    private static int RunProjectFileProductSmoke()
+    {
+        var report = ProjectFileProductSmokeRunner.Run(System.Text.Encoding.UTF8.GetBytes("project-file-product-smoke-secret"));
+        foreach (var line in ProjectFileProductSmokeRunner.RenderRawFree(report))
+        {
+            Console.WriteLine(line);
+        }
+
+        return report.Passed ? 0 : 1;
+    }
+
     private static void WriteDiagnosticsAndWarnings(
         IReadOnlyDictionary<string, string> diagnostics,
         IReadOnlyList<Warning> warnings)
@@ -1603,6 +1707,10 @@ public static class Program
         Console.WriteLine("  --project-tool-output-sanitize workspace \"tool output\"");
         Console.WriteLine("  --project-tool-output-unmanaged workspace");
         Console.WriteLine("  --project-patch-dry-run file --protected-workspace workspace --source-content-hash hash --sanitized-edit \"text\"");
+        Console.WriteLine("  --project-patch-apply file --protected-workspace workspace --source-content-hash hash --sanitized-edit \"text\" (--approve|--cancel)");
+        Console.WriteLine("  --project-attachment-bypass-status workspace");
+        Console.WriteLine("  --project-connector-bypass-status workspace");
+        Console.WriteLine("  --project-file-product-smoke");
         Console.WriteLine("  --tray-app");
         Console.WriteLine("  --os-profiles-list");
         Console.WriteLine("  --os-compatibility-matrix");

@@ -3817,6 +3817,7 @@ public partial class SanitizerTests
             Assert.That(rendered, Does.Contain("live_compatibility_note: use_disposable_local_target_first_then_throwaway_codex_or_chatgpt_desktop_task"));
             Assert.That(rendered, Does.Contain("apply_only_write_back: true"));
             Assert.That(rendered, Does.Contain("project_file_read_only_smoke: true"));
+            Assert.That(rendered, Does.Contain("project_file_product_smoke: true"));
             Assert.That(rendered, Does.Not.Contain("192.168.10.25"));
             Assert.That(rendered, Does.Not.Contain("Product Smoke Customer"));
             Assert.That(rendered, Does.Not.Contain("product-smoke.example.local"));
@@ -5551,6 +5552,7 @@ public class CliTests
         Assert.That(stdout, Does.Contain("supported_targets: windows_codex_chatgpt_desktop_only"));
         Assert.That(stdout, Does.Contain("apply_only_write_back: true"));
         Assert.That(stdout, Does.Contain("project_file_read_only_smoke: true"));
+        Assert.That(stdout, Does.Contain("project_file_product_smoke: true"));
         Assert.That(stdout, Does.Contain("audit_view: true"));
         Assert.That(stdout, Does.Contain("restore: true"));
         Assert.That(stdout, Does.Contain("uninstall_safe_default: true"));
@@ -5761,6 +5763,10 @@ public class CliTests
         Assert.That(stdout, Does.Contain("--project-tool-output-sanitize workspace \"tool output\""));
         Assert.That(stdout, Does.Contain("--project-tool-output-unmanaged workspace"));
         Assert.That(stdout, Does.Contain("--project-patch-dry-run file --protected-workspace workspace --source-content-hash hash --sanitized-edit \"text\""));
+        Assert.That(stdout, Does.Contain("--project-patch-apply file --protected-workspace workspace --source-content-hash hash --sanitized-edit \"text\" (--approve|--cancel)"));
+        Assert.That(stdout, Does.Contain("--project-attachment-bypass-status workspace"));
+        Assert.That(stdout, Does.Contain("--project-connector-bypass-status workspace"));
+        Assert.That(stdout, Does.Contain("--project-file-product-smoke"));
         Assert.That(stdout, Does.Contain("--tray-app"));
         Assert.That(stdout, Does.Contain("--os-compatibility-matrix"));
         Assert.That(stdout, Does.Contain("--product-smoke"));

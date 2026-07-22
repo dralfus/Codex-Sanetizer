@@ -17,6 +17,7 @@ public sealed record ProductSmokeReport(
     bool ComposerProtectionStatusPassed,
     bool ProjectFileProtectionStatusPassed,
     bool ProjectFileReadOnlySmokePassed,
+    bool ProjectFileProductSmokePassed,
     bool DictionaryPolicySetupPassed,
     bool SampleSanitizePassed,
     bool DisposableApplyOnlyPassed,
@@ -194,12 +195,15 @@ public static class ProductSmokeRunner
 
         var nativeSubmit = NativeSubmitProductSmokeRunner.Run(hmacSecret);
         var projectFileReadOnlySmoke = ProjectFileReadOnlySmokeRunner.Run(hmacSecret);
+        var projectFileProductSmoke = ProjectFileProductSmokeRunner.Run(hmacSecret);
 
         var rawFreeArtifacts = renderedAudit
             + Environment.NewLine
             + string.Join(Environment.NewLine, NativeSubmitProductSmokeRunner.RenderRawFree(nativeSubmit))
             + Environment.NewLine
             + string.Join(Environment.NewLine, ProjectFileReadOnlySmokeRunner.RenderRawFree(projectFileReadOnlySmoke))
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, ProjectFileProductSmokeRunner.RenderRawFree(projectFileProductSmoke))
             + Environment.NewLine
             + RenderRawFree(new ProductSmokeReport(
                 Passed: false,
@@ -213,6 +217,7 @@ public static class ProductSmokeRunner
                 ComposerProtectionStatusPassed: composerProtectionStatusPassed,
                 ProjectFileProtectionStatusPassed: projectFileProtectionStatusPassed,
                 ProjectFileReadOnlySmokePassed: projectFileReadOnlySmoke.Passed,
+                ProjectFileProductSmokePassed: projectFileProductSmoke.Passed,
                 DictionaryPolicySetupPassed: dictionaryPolicyPassed,
                 SampleSanitizePassed: samplePassed,
                 DisposableApplyOnlyPassed: disposableApplyOnlyPassed,
@@ -245,6 +250,7 @@ public static class ProductSmokeRunner
             && composerProtectionStatusPassed
             && projectFileProtectionStatusPassed
             && projectFileReadOnlySmoke.Passed
+            && projectFileProductSmoke.Passed
             && rawFreePassed;
 
         return new ProductSmokeReport(
@@ -259,6 +265,7 @@ public static class ProductSmokeRunner
             ComposerProtectionStatusPassed: composerProtectionStatusPassed,
             ProjectFileProtectionStatusPassed: projectFileProtectionStatusPassed,
             ProjectFileReadOnlySmokePassed: projectFileReadOnlySmoke.Passed,
+            ProjectFileProductSmokePassed: projectFileProductSmoke.Passed,
             DictionaryPolicySetupPassed: dictionaryPolicyPassed,
             SampleSanitizePassed: samplePassed,
             DisposableApplyOnlyPassed: disposableApplyOnlyPassed,
@@ -311,6 +318,7 @@ public static class ProductSmokeRunner
             $"composer_protected_status: {report.ComposerProtectionStatusPassed.ToString().ToLowerInvariant()}",
             $"project_files_protected_status: {report.ProjectFileProtectionStatusPassed.ToString().ToLowerInvariant()}",
             $"project_file_read_only_smoke: {report.ProjectFileReadOnlySmokePassed.ToString().ToLowerInvariant()}",
+            $"project_file_product_smoke: {report.ProjectFileProductSmokePassed.ToString().ToLowerInvariant()}",
             $"dictionary_policy_setup: {report.DictionaryPolicySetupPassed.ToString().ToLowerInvariant()}",
             $"sample_sanitize: {report.SampleSanitizePassed.ToString().ToLowerInvariant()}",
             $"apply_only_write_back: {report.DisposableApplyOnlyPassed.ToString().ToLowerInvariant()}",
