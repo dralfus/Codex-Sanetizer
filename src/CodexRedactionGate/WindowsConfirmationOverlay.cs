@@ -18,18 +18,31 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
         }
 
         ConfirmationDecision? decision = null;
+        Exception? dialogException = null;
         var thread = new System.Threading.Thread(() =>
         {
-            using var dialog = new ConfirmationDialog(model);
-            var result = dialog.ShowDialog();
-            decision = result == DialogResult.OK
-                ? ConfirmationDecisionContract.Confirm(model)
-                : ConfirmationDecisionContract.Cancel(model);
+            try
+            {
+                using var dialog = new ConfirmationDialog(model);
+                var result = dialog.ShowDialog();
+                decision = result == DialogResult.OK
+                    ? ConfirmationDecisionContract.Confirm(model)
+                    : ConfirmationDecisionContract.Cancel(model);
+            }
+            catch (Exception exception)
+            {
+                dialogException = exception;
+            }
         });
 
         thread.SetApartmentState(System.Threading.ApartmentState.STA);
         thread.Start();
         thread.Join();
+        if (dialogException is not null)
+        {
+            return ConfirmationDecisionContract.Cancel(model);
+        }
+
         return decision ?? ConfirmationDecisionContract.Cancel(model);
     }
 

@@ -562,17 +562,20 @@ public sealed class NativeSubmitInterceptionController
     private readonly NativeSubmitEmergencyState _emergencyState;
     private readonly NativeSubmitEnterprisePolicy _policy;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
 
     public NativeSubmitInterceptionController(
         SubmitBindingProfile profile,
         NativeSubmitEmergencyState emergencyState,
         NativeSubmitEnterprisePolicy? policy = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null)
     {
         _profile = profile ?? throw new ArgumentNullException(nameof(profile));
         _emergencyState = emergencyState ?? throw new ArgumentNullException(nameof(emergencyState));
         _policy = policy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _activeSurfaceDiscovery = activeSurfaceDiscovery;
     }
 
     public NativeSubmitInterceptionResult HandleGesture(
@@ -620,6 +623,12 @@ public sealed class NativeSubmitInterceptionController
         {
             diagnostics["pass_through_reason"] = "not_submit_binding";
             return PassThrough(diagnostics);
+        }
+
+        var activeTargetGate = PassThroughIfActiveSurfaceIsNotSelectedProfile(diagnostics);
+        if (activeTargetGate is not null)
+        {
+            return activeTargetGate;
         }
 
         var enforcement = EvaluateEnterpriseEnforcement(hookHealthy);
@@ -726,6 +735,55 @@ public sealed class NativeSubmitInterceptionController
             Applied: false,
             Submitted: false,
             Diagnostics: diagnostics);
+    }
+
+    private NativeSubmitInterceptionResult? PassThroughIfActiveSurfaceIsNotSelectedProfile(
+        Dictionary<string, string> diagnostics)
+    {
+        if (_activeSurfaceDiscovery is null)
+        {
+            return null;
+        }
+
+        TextSurfaceDiscoveryResult discovery;
+        try
+        {
+            discovery = _activeSurfaceDiscovery();
+        }
+        catch (InvalidOperationException)
+        {
+            diagnostics["pass_through_reason"] = "active_surface_discovery_failed";
+            return PassThrough(diagnostics);
+        }
+        catch (ArgumentException)
+        {
+            diagnostics["pass_through_reason"] = "active_surface_discovery_failed";
+            return PassThrough(diagnostics);
+        }
+
+        diagnostics["active_surface_status"] = discovery.Status;
+
+        if (!discovery.Succeeded || discovery.Surface is null || !discovery.Surface.Supported)
+        {
+            diagnostics["pass_through_reason"] = "active_surface_not_supported";
+            return PassThrough(diagnostics);
+        }
+
+        diagnostics["active_profile_id"] = discovery.Surface.ProfileId;
+        if (!string.Equals(discovery.Surface.ProfileId, _profile.ProfileId, StringComparison.Ordinal))
+        {
+            diagnostics["pass_through_reason"] = "active_profile_mismatch";
+            return PassThrough(diagnostics);
+        }
+
+        if (!discovery.Surface.CanSubmit)
+        {
+            diagnostics["pass_through_reason"] = "active_surface_cannot_submit";
+            return PassThrough(diagnostics);
+        }
+
+        diagnostics["active_surface_gate"] = "selected_profile";
+        return null;
     }
 
     private static IReadOnlyDictionary<string, string> Merge(
@@ -837,6 +895,8 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost
     private const int VkControl = 0x11;
     private const int VkShift = 0x10;
     private const int VkMenu = 0x12;
+    private const uint LlkhfLowerIlInjected = 0x02;
+    private const uint LlkhfInjected = 0x10;
 
     private readonly NativeMethods.LowLevelKeyboardProc _callback;
     private IntPtr _hook;
@@ -912,6 +972,11 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost
         }
 
         var data = Marshal.PtrToStructure<NativeMethods.KbdLlHookStruct>(lParam);
+        if (IsInjectedKeyboardEvent(data.flags))
+        {
+            return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
+        }
+
         var gesture = new NativeKeyGesture(
             Key: VirtualKeyToName(data.vkCode),
             Ctrl: IsKeyDown(VkControl),
@@ -958,6 +1023,12 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost
             >= 0x70 and <= 0x87 => $"F{virtualKey - 0x70 + 1}",
             _ => virtualKey.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
+    }
+
+    internal static bool IsInjectedKeyboardEvent(uint flags)
+    {
+        return (flags & LlkhfInjected) != 0
+            || (flags & LlkhfLowerIlInjected) != 0;
     }
 
     private static class NativeMethods

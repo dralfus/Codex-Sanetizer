@@ -3643,8 +3643,13 @@ public partial class SanitizerTests
         Assert.That(manifest, Does.Contain("#ifndef MyAppVersion"));
         Assert.That(manifest, Does.Contain("OutputBaseFilename=CodexRedactionGateSetup-{#MyAppVersion}"));
         Assert.That(manifest, Does.Contain("ArchitecturesInstallIn64BitMode=x64compatible"));
-        Assert.That(manifest, Does.Contain("CloseApplications=yes"));
+        Assert.That(manifest, Does.Contain("CloseApplications=no"));
         Assert.That(manifest, Does.Contain("RestartApplications=no"));
+        Assert.That(manifest, Does.Contain("PrepareToInstall"));
+        Assert.That(manifest, Does.Contain("Continue and stop Code Sanitizer now?"));
+        Assert.That(manifest, Does.Contain("WindowsPowerShell\\v1.0\\powershell.exe"));
+        Assert.That(manifest, Does.Contain("Stop-Process -Id $p.Id -Force"));
+        Assert.That(manifest, Does.Contain("[IO.Path]::GetFullPath($_.Path).StartsWith($app"));
         Assert.That(manifest, Does.Contain("Codex Redaction Gate keeps local vault, dictionary, policy, audit and settings by default."));
         Assert.That(manifest, Does.Contain("--local-data-cleanup --i-understand-delete-local-sensitive-data"));
         Assert.That(manifest, Does.Not.Contain("Remove local sensitive data"));
@@ -3729,6 +3734,16 @@ public partial class SanitizerTests
         Assert.That(sourceText, Does.Contain("BringDialogToFront"));
         Assert.That(sourceText, Does.Contain("SetForegroundWindow"));
         Assert.That(sourceText, Does.Contain("FlashWindow"));
+    }
+
+    [Test]
+    public void WindowsConfirmationOverlay_FailsClosedWhenDialogCreationThrows()
+    {
+        var sourceText = ProductSourceText("WindowsConfirmationOverlay.cs");
+
+        Assert.That(sourceText, Does.Contain("Exception? dialogException"));
+        Assert.That(sourceText, Does.Contain("catch (Exception exception)"));
+        Assert.That(sourceText, Does.Contain("return ConfirmationDecisionContract.Cancel(model);"));
     }
 
     [Test]
@@ -5737,6 +5752,9 @@ public class CliTests
         Assert.That(stdout, Does.Contain("--audit-view"));
         Assert.That(stdout, Does.Contain("--audit-verify"));
         Assert.That(stdout, Does.Contain("--audit-cleanup --keep count"));
+        Assert.That(stdout, Does.Contain("--project-workspace-protect workspace"));
+        Assert.That(stdout, Does.Contain("--project-workspace-status workspace"));
+        Assert.That(stdout, Does.Contain("--project-file-sanitize file [--protected-workspace workspace]"));
         Assert.That(stdout, Does.Contain("--tray-app"));
         Assert.That(stdout, Does.Contain("--os-compatibility-matrix"));
         Assert.That(stdout, Does.Contain("--product-smoke"));

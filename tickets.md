@@ -1,6 +1,6 @@
 # Tickets: Codex Redaction Gate MVP
 
-Build a Windows-first local Codex Redaction Gate MVP that sanitizes prompts, text attachments and large pasted content before cloud submission, using .NET, source-built Gitleaks, file-based vault storage, `Confirm sanitized prompt` UX and local response restoration. Source specs: `codex-redaction-gate-spec/SPEC.md` and `codex-redaction-gate-spec/MVP_IMPLEMENTATION_SPEC.md`.
+Build a Windows-first local Codex Redaction Gate MVP that sanitizes prompts, text attachments and large pasted content before cloud submission, using .NET, source-built Gitleaks, file-based vault storage, `Confirm sanitized prompt` UX and local response restoration. Source specs: `codex-redaction-gate-spec/SPEC.md`, `codex-redaction-gate-spec/MVP_IMPLEMENTATION_SPEC.md`, and `codex-redaction-gate-spec/PROJECT_FILE_WORKFLOW_SPEC.md`.
 
 ## Execution Rules For Agents
 
@@ -17,7 +17,7 @@ These rules are part of every ticket.
 - If verification fails twice with the same error, stop and report the exact error instead of rewriting the project.
 - Keep implementation small. Prefer boring, explicit code over clever abstractions.
 
-Work the **frontier**: any ticket whose blockers are all done. After native submit interception product smoke, the next frontier starts at ticket 110.
+Work the **frontier**: any ticket whose blockers are all done. After installed-app protection smoke, the next frontier starts at ticket 200.
 
 ## Current Review Status
 
@@ -2744,3 +2744,208 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 - [x] Smoke verifies canceling unload leaves protection active and confirmed unload disables protection with visible status.
 - [x] Smoke artifacts contain only raw-free diagnostics, placeholders and status codes.
 - [x] Build, tests, self-test and product smoke are green.
+
+## 200. Add honest project-file protection status
+
+**What to build:** Add product status, diagnostics and tests that distinguish composer submit protection from project-file workflow protection. A user must be able to see that the selected AI composer may be protected while arbitrary project file reads are still not protected end-to-end.
+
+**Blocked by:** 114. Add installed-app protection smoke for launch, trigger and unload.
+
+**Do not:** Claim `project_files_protected` based on native submit interception, manual hotkey mode, or file-snippet sanitizer support alone.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-22:** focused project-file workflow tests passed 5/5; full unit tests passed 332/332; `--self-test` passed; `--product-smoke` passed and reports `composer_protected_status: true` plus `project_files_protected_status: true` for the honest split where live project-file protection remains unavailable unless a broker workflow is verified.
+
+- [x] Tray/CLI diagnostics expose separate `composer_protected` and `project_files_protected` status.
+- [x] A verified Codex/ChatGPT Desktop submit profile can show `composer_protected=true` while `project_files_protected=false`.
+- [x] `project_files_protected` is false when no file-context broker is active.
+- [x] Status and audit diagnostics are raw-free and do not capture file contents.
+- [x] Build, tests and self-test are green.
+
+## 201. Add sanitized virtual file broker contract
+
+**What to build:** Add the first file-context broker contract and a demo command that accepts a supported text file, runs it through the existing sanitizer pipeline, and returns a sanitized virtual file plus raw-free diagnostics without changing the original file.
+
+**Blocked by:** 200. Add honest project-file protection status.
+
+**Do not:** Integrate with live Codex file reads yet, write local file changes, or support binary/document formats.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-22:** focused project-file workflow tests passed 5/5; full unit tests passed 332/332; `--self-test` passed; CLI tests cover `--project-file-sanitize` returning a sanitized virtual file without raw path/content diagnostics.
+
+- [x] A supported UTF-8 text/source/config file can be represented as a sanitized virtual file.
+- [x] The sanitized virtual file replaces protected domains, usernames, paths and secrets according to existing policy.
+- [x] The original local file is not modified by the read flow.
+- [x] Broker diagnostics include source id, content hash, entity counts and decision without raw values.
+- [x] Build, tests and self-test are green.
+
+## 202. Add protected workspace policy and file selection guard
+
+**What to build:** Add protected workspace configuration and file selection rules so users can opt a repository into file-context protection and get fail-closed behavior for unsupported, unreadable, oversized or out-of-scope files.
+
+**Blocked by:** 201. Add sanitized virtual file broker contract.
+
+**Do not:** Add broad recursive DLP crawling, OCR, archive expansion, or automatic uploads.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+**Verification result 2026-07-22:** focused project-file workflow tests passed 5/5; full unit tests passed 332/332; `--self-test` passed; protected workspace tests cover raw-free registration, out-of-workspace rejection, unsupported extension rejection and size-limit rejection.
+
+- [x] A workspace can be marked protected with local configuration outside the repository-sensitive vault.
+- [x] Supported text file extensions and size limits are enforced before sanitizer execution.
+- [x] Unsupported binary, PDF, Office, image and archive files produce fail-closed broker decisions.
+- [x] Out-of-workspace paths and unreadable files are blocked with raw-free reason codes.
+- [x] Build, tests and self-test are green.
+
+## 203. Add read-only protected project file smoke
+
+**What to build:** Add a product smoke that creates a disposable protected fixture workspace, routes file reads through the broker, and proves the model-visible payload is a sanitized virtual file.
+
+**Blocked by:** 202. Add protected workspace policy and file selection guard.
+
+**Do not:** Depend on a live cloud submission, real sensitive data, or a live Codex Desktop file-read integration.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+- [ ] The smoke fixture includes synthetic domains, usernames, paths and secrets in project files.
+- [ ] Broker output contains placeholders and non-restorable secret redactions, not raw protected values.
+- [ ] Raw-free evidence records the file-context payload status.
+- [ ] `project_files_protected` remains false for live Codex until an actual integration point is verified.
+- [ ] Build, tests, self-test and project-file smoke are green.
+
+## 204. Sanitize file-derived tool output
+
+**What to build:** Extend the broker workflow so command/tool output derived from protected workspace files can be sanitized before it becomes model-visible context.
+
+**Blocked by:** 203. Add read-only protected project file smoke.
+
+**Do not:** Intercept arbitrary terminal sessions globally, store raw command output in audit logs, or claim coverage for tools that bypass the broker.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+- [ ] Broker-managed tool output is passed through the same sanitizer decision pipeline as prompt and file content.
+- [ ] Paths, filenames, internal domains and secrets in tool output are replaced or redacted.
+- [ ] Tool-output audit events contain only hashes, counts, source ids and reason codes.
+- [ ] Unmanaged tool output is reported as unprotected rather than silently trusted.
+- [ ] Build, tests and self-test are green.
+
+## 205. Add restore-aware patch dry-run
+
+**What to build:** Add a dry-run local write workflow that accepts a sanitized model edit for a protected file, validates it against the sanitized virtual file identity, and previews the restored local patch without writing to disk.
+
+**Blocked by:** 203. Add read-only protected project file smoke.
+
+**Do not:** Auto-apply edits, restore non-restorable secrets, or accept patches for unrelated workspaces.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+- [ ] A sanitized edit can be matched to its protected workspace, target path and sanitized source version.
+- [ ] Restorable pseudonyms are restored in the dry-run preview.
+- [ ] Non-restorable secrets remain redacted in the dry-run preview.
+- [ ] Stale, mismatched or out-of-workspace patches are blocked with raw-free reasons.
+- [ ] Build, tests and self-test are green.
+
+## 206. Apply restore-aware local writes with approval
+
+**What to build:** Complete the protected local write path so the user can approve a validated restored patch and write it to the local project while keeping restored sensitive values out of cloud-visible diagnostics.
+
+**Blocked by:** 205. Add restore-aware patch dry-run.
+
+**Do not:** Write restored patches without explicit approval, log restored values, or send restored output back to Codex automatically.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+- [ ] Approved restored patches are written only to the intended protected workspace path.
+- [ ] Cancel leaves the local project unchanged.
+- [ ] Write audit events record target ids, hashes, action and status without raw restored values.
+- [ ] The UI/status marks restored file output as local-sensitive.
+- [ ] Build, tests and self-test are green.
+
+## 207. Guard direct attachment and bypass paths
+
+**What to build:** Add user-visible warnings and fail-closed decisions for project-file channels that are not routed through the broker, including direct attachment upload and unmanaged connector/tool paths.
+
+**Blocked by:** 203. Add read-only protected project file smoke.
+
+**Do not:** Claim interception for app upload controls unless a verified adapter proves pre-upload sanitization.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+- [ ] Protected workspace status warns when direct attachments are not broker-routed.
+- [ ] Unmanaged connector/tool paths are shown as unprotected or blocked by policy.
+- [ ] The warning path does not capture raw filenames, paths or file contents by default.
+- [ ] Enterprise policy can require broker-only file context for protected workspaces.
+- [ ] Build, tests and self-test are green.
+
+## 208. Add end-to-end protected project-file product smoke
+
+**What to build:** Add the final disposable smoke that proves the complete protected file workflow: read supported project file, emit sanitized virtual file, process sanitized model edit, preview restored patch, approve local write, and verify raw-free audit evidence.
+
+**Blocked by:** 204. Sanitize file-derived tool output; 206. Apply restore-aware local writes with approval; 207. Guard direct attachment and bypass paths.
+
+**Do not:** Use real sensitive data, depend on live cloud submission, or skip unsupported-file fail-closed checks.
+
+**Verification:**
+
+```powershell
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' build 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' test 'src\CodexRedactionGate\CodexRedactionGate.csproj' -nologo -v minimal
+& 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
+```
+
+- [ ] Smoke proves supported file reads produce sanitized virtual files.
+- [ ] Smoke proves file-derived tool output is sanitized before model visibility.
+- [ ] Smoke proves sanitized edits can be restored and written locally after approval.
+- [ ] Smoke proves unsupported files and bypass paths fail closed or show unprotected status.
+- [ ] Smoke proves `project_files_protected=true` only for the verified broker workflow.
+- [ ] Build, tests, self-test and project-file product smoke are green.

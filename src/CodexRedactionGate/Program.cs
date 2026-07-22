@@ -221,6 +221,36 @@ public static class Program
             return RunAuditVerify(runtime.LayoutFactory);
         }
 
+        if (args.Length == 2 && args[0] == "--project-workspace-protect")
+        {
+            return RunProjectWorkspaceProtect(args[1], runtime.LayoutFactory);
+        }
+
+        if (args.Length == 2 && args[0] == "--project-workspace-status")
+        {
+            return RunProjectWorkspaceStatus(args[1], runtime.LayoutFactory);
+        }
+
+        if (args.Length == 2 && args[0] == "--project-file-sanitize")
+        {
+            return RunProjectFileSanitize(
+                args[1],
+                workspacePath: null,
+                requireProtectedWorkspace: false,
+                runtime.LayoutFactory,
+                runtime.SanitizerFactory);
+        }
+
+        if (args.Length == 4 && args[0] == "--project-file-sanitize" && args[2] == "--protected-workspace")
+        {
+            return RunProjectFileSanitize(
+                args[1],
+                args[3],
+                requireProtectedWorkspace: true,
+                runtime.LayoutFactory,
+                runtime.SanitizerFactory);
+        }
+
         if (args.Length == 3 && args[0] == "--audit-cleanup" && args[1] == "--keep")
         {
             return int.TryParse(args[2], out var keepEvents) && keepEvents >= 0
@@ -944,9 +974,75 @@ public static class Program
         Console.WriteLine($"status: {result.Code}");
         Console.WriteLine($"profile_count: {result.Profiles.Count}");
         Console.WriteLine($"profile_store_path_length: {SubmitBindingProfileStore.DefaultPath(layout).Length}");
+        Console.WriteLine("project_files_protected: false");
+        Console.WriteLine($"project_file_status: {ProjectFileProtectionStatusValues.NotConfigured}");
         foreach (var profile in result.Profiles.OrderBy(profile => profile.ProfileId, StringComparer.Ordinal))
         {
-            Console.WriteLine($"profile={profile.ProfileId} readiness={profile.CapabilityStatus} capability_status={profile.CapabilityStatus} binding_source={profile.BindingSource} protected_send_binding={profile.SubmitBinding?.DisplayText ?? "unknown"} newline_binding={profile.NewlineBinding?.DisplayText ?? "unknown"}");
+            var composerProtected = profile.CapabilityStatus == OsInteractionStatusIds.Protected;
+            Console.WriteLine($"profile={profile.ProfileId} readiness={profile.CapabilityStatus} capability_status={profile.CapabilityStatus} composer_protected={composerProtected.ToString().ToLowerInvariant()} project_files_protected=false binding_source={profile.BindingSource} protected_send_binding={profile.SubmitBinding?.DisplayText ?? "unknown"} newline_binding={profile.NewlineBinding?.DisplayText ?? "unknown"}");
+        }
+
+        return result.Succeeded ? 0 : 1;
+    }
+
+    private static int RunProjectWorkspaceProtect(string workspacePath, Func<DefaultStorageLayout> layoutFactory)
+    {
+        var result = ProtectedWorkspaceStore.Protect(layoutFactory(), workspacePath);
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"workspace_id: {result.WorkspaceId}");
+        Console.WriteLine($"store_path_length: {result.StorePath.Length}");
+        Console.WriteLine("raw_workspace_path_recorded_in_output: false");
+        return result.Succeeded ? 0 : 1;
+    }
+
+    private static int RunProjectWorkspaceStatus(string workspacePath, Func<DefaultStorageLayout> layoutFactory)
+    {
+        var result = ProtectedWorkspaceStore.GetStatus(layoutFactory(), workspacePath);
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"protected_workspace: {result.Protected.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"workspace_id: {result.WorkspaceId}");
+        Console.WriteLine("project_files_protected: false");
+        Console.WriteLine($"project_file_status: {ProjectFileProtectionStatusValues.BrokerDemoOnly}");
+        Console.WriteLine("raw_workspace_path_recorded_in_output: false");
+        return result.Protected ? 0 : 1;
+    }
+
+    private static int RunProjectFileSanitize(
+        string filePath,
+        string? workspacePath,
+        bool requireProtectedWorkspace,
+        Func<DefaultStorageLayout> layoutFactory,
+        Func<IReadOnlyList<DictionaryTerm>, Sanitizer> sanitizerFactory)
+    {
+        var broker = new ProjectFileContextBroker(
+            sanitizerFactory(Array.Empty<DictionaryTerm>()),
+            layoutFactory(),
+            requireProtectedWorkspace
+                ? ProjectFileBrokerOptions.ProtectedWorkspaceDefault
+                : ProjectFileBrokerOptions.DemoDefault);
+        var result = broker.CreateSanitizedVirtualFile(filePath, workspacePath);
+
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"project_files_protected: false");
+        Console.WriteLine($"project_file_status: {ProjectFileProtectionStatusValues.BrokerDemoOnly}");
+        foreach (var item in result.Diagnostics.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            Console.WriteLine($"{item.Key}: {item.Value}");
+        }
+
+        foreach (var warning in result.Warnings.DistinctBy(warning => warning.Code).OrderBy(warning => warning.Code, StringComparer.Ordinal))
+        {
+            Console.WriteLine($"warning.{warning.Code}: {warning.Severity}");
+        }
+
+        if (result.VirtualFile is not null)
+        {
+            Console.WriteLine($"virtual_path: {result.VirtualFile.VirtualPath}");
+            Console.WriteLine($"content_hash: {result.VirtualFile.ContentHash}");
+            Console.WriteLine($"decision: {CliOutputFormatting.FormatDecision(result.VirtualFile.Decision)}");
+            Console.WriteLine($"replacement_count: {result.VirtualFile.ReplacementCount}");
+            Console.WriteLine("sanitized_virtual_file:");
+            Console.WriteLine(result.VirtualFile.SanitizedText);
         }
 
         return result.Succeeded ? 0 : 1;
@@ -1361,6 +1457,9 @@ public static class Program
         Console.WriteLine("  --audit-view");
         Console.WriteLine("  --audit-verify");
         Console.WriteLine("  --audit-cleanup --keep count");
+        Console.WriteLine("  --project-workspace-protect workspace");
+        Console.WriteLine("  --project-workspace-status workspace");
+        Console.WriteLine("  --project-file-sanitize file [--protected-workspace workspace]");
         Console.WriteLine("  --tray-app");
         Console.WriteLine("  --os-profiles-list");
         Console.WriteLine("  --os-compatibility-matrix");

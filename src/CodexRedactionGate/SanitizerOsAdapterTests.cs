@@ -33,7 +33,9 @@ public partial class SanitizerTests
         Assert.That(result.Applied, Is.True);
         Assert.That(result.Submitted, Is.True);
         Assert.That(surface.CurrentText, Is.EqualTo("Normal prompt text"));
+        Assert.That(surface.WriteCount, Is.EqualTo(0));
         Assert.That(surface.SubmitCount, Is.EqualTo(1));
+        Assert.That(result.Diagnostics["write_status"], Is.EqualTo("skipped_no_changes"));
     }
 
     [Test]
@@ -636,7 +638,7 @@ public partial class SanitizerTests
             return new SubmitActionResult(true, "submitted", new Dictionary<string, string> { ["submit_count"] = SubmitCount.ToString(System.Globalization.CultureInfo.InvariantCulture) });
         }
 
-        private int WriteCount { get; set; }
+        public int WriteCount { get; private set; }
     }
 
     private sealed class FakeConfirmationOverlay : IConfirmationOverlay

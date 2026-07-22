@@ -8,6 +8,7 @@
 - Personal data such as names and emails.
 - Internal IPs, CIDRs and hostnames.
 - Logs and configuration snippets.
+- Source files, configuration files, filenames, paths, diffs and tool outputs derived from protected repositories.
 - Passwords, tokens, keys and cookies.
 - Mapping table between real values and pseudonyms.
 - HMAC/encryption secret.
@@ -19,12 +20,14 @@
 - Repeated disclosure of company structure through stable identifiers.
 - Sending real identifiers when sanitized identifiers would be sufficient.
 - Reintroducing real values into cloud prompts after a sanitized response is restored locally, if the gateway warns or blocks.
+- Sending repository file content to the model through a verified file-context broker that emits only sanitized virtual files.
 
 ## Not Protected Against
 
 - Data already sent before the gate was installed.
 - A user intentionally bypassing the gate.
 - External tools or connectors that send data outside the gateway path.
+- Arbitrary project file reads, attachment uploads, MCP/tool outputs or generated patches that bypass the future file-context broker.
 - Screen sharing or screenshots that expose sensitive data.
 - Malware or local admin compromise.
 - Perfect de-identification of large text where context itself reveals the organization.
@@ -73,6 +76,12 @@ Decision: keep them local by default, exclude them from automatic exports, and t
 If Codex hooks cannot rewrite prompts, a hook-only implementation cannot meet the desired UX.
 
 Decision: define hook guard as baseline and gateway mode as target.
+
+### Project File Bypass
+
+Composer interception can block or sanitize text that the user submits, but it cannot automatically protect project files that a coding agent reads and sends as model context.
+
+Decision: do not claim `project_files_protected` until a local file-context broker owns file reads, file-derived tool output, sanitized virtual files and restore-aware writes.
 
 ## Security Posture
 

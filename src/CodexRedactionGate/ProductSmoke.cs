@@ -14,6 +14,8 @@ public sealed record ProductSmokeReport(
     bool HotkeyRegistrationPassed,
     bool ProtectedTriggerStatusPassed,
     bool UnloadConfirmationPassed,
+    bool ComposerProtectionStatusPassed,
+    bool ProjectFileProtectionStatusPassed,
     bool DictionaryPolicySetupPassed,
     bool SampleSanitizePassed,
     bool DisposableApplyOnlyPassed,
@@ -109,12 +111,18 @@ public static class ProductSmokeRunner
             NewlineBinding: smokeProfile.NewlineBinding!.DisplayText,
             ManualScanHotkey: loadedHotkey.Settings.ProtectionHotkey.Binding.DisplayText,
             ReadinessStatus: OsInteractionStatusIds.Protected,
+            ComposerProtected: true,
+            ProjectFilesProtected: false,
+            ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
             ResidentProcess: true));
         var protectedTriggerStatusPassed = profileSave.Succeeded
             && smokeProfile.IsProtected
             && protectedTriggerStatus.Contains("protected_send_binding=Enter", StringComparison.Ordinal)
             && protectedTriggerStatus.Contains("newline_binding=Ctrl+Enter", StringComparison.Ordinal)
             && protectedTriggerStatus.Contains("manual_scan_hotkey=Ctrl+Shift+F9", StringComparison.Ordinal);
+        var composerProtectionStatusPassed = protectedTriggerStatus.Contains("composer_protected=true", StringComparison.Ordinal);
+        var projectFileProtectionStatusPassed = protectedTriggerStatus.Contains("project_files_protected=false", StringComparison.Ordinal)
+            && protectedTriggerStatus.Contains($"project_file_status={ProjectFileProtectionStatusValues.NotConfigured}", StringComparison.Ordinal);
 
         var unloadController = new TrayProtectionController(
             new ProductSmokeTrayHotkeyHost("Ctrl+Shift+F9"),
@@ -198,6 +206,8 @@ public static class ProductSmokeRunner
                 HotkeyRegistrationPassed: hotkeyPassed,
                 ProtectedTriggerStatusPassed: protectedTriggerStatusPassed,
                 UnloadConfirmationPassed: unloadConfirmationPassed,
+                ComposerProtectionStatusPassed: composerProtectionStatusPassed,
+                ProjectFileProtectionStatusPassed: projectFileProtectionStatusPassed,
                 DictionaryPolicySetupPassed: dictionaryPolicyPassed,
                 SampleSanitizePassed: samplePassed,
                 DisposableApplyOnlyPassed: disposableApplyOnlyPassed,
@@ -227,6 +237,8 @@ public static class ProductSmokeRunner
             && autostartResidentCommandPassed
             && protectedTriggerStatusPassed
             && unloadConfirmationPassed
+            && composerProtectionStatusPassed
+            && projectFileProtectionStatusPassed
             && rawFreePassed;
 
         return new ProductSmokeReport(
@@ -238,6 +250,8 @@ public static class ProductSmokeRunner
             HotkeyRegistrationPassed: hotkeyPassed,
             ProtectedTriggerStatusPassed: protectedTriggerStatusPassed,
             UnloadConfirmationPassed: unloadConfirmationPassed,
+            ComposerProtectionStatusPassed: composerProtectionStatusPassed,
+            ProjectFileProtectionStatusPassed: projectFileProtectionStatusPassed,
             DictionaryPolicySetupPassed: dictionaryPolicyPassed,
             SampleSanitizePassed: samplePassed,
             DisposableApplyOnlyPassed: disposableApplyOnlyPassed,
@@ -287,6 +301,8 @@ public static class ProductSmokeRunner
             $"hotkey_registration: {report.HotkeyRegistrationPassed.ToString().ToLowerInvariant()}",
             $"protected_trigger_status: {report.ProtectedTriggerStatusPassed.ToString().ToLowerInvariant()}",
             $"unload_confirmation: {report.UnloadConfirmationPassed.ToString().ToLowerInvariant()}",
+            $"composer_protected_status: {report.ComposerProtectionStatusPassed.ToString().ToLowerInvariant()}",
+            $"project_files_protected_status: {report.ProjectFileProtectionStatusPassed.ToString().ToLowerInvariant()}",
             $"dictionary_policy_setup: {report.DictionaryPolicySetupPassed.ToString().ToLowerInvariant()}",
             $"sample_sanitize: {report.SampleSanitizePassed.ToString().ToLowerInvariant()}",
             $"apply_only_write_back: {report.DisposableApplyOnlyPassed.ToString().ToLowerInvariant()}",

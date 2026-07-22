@@ -94,6 +94,64 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void NativeSubmitInterception_PassesThroughSubmitBindingWhenForegroundIsUnsupported()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.UnsupportedSurface,
+                new Dictionary<string, string> { ["unsupported_scope"] = "browser_or_pwa" }));
+
+        var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(result.Diagnostics["pass_through_reason"], Is.EqualTo("active_surface_not_supported"));
+    }
+
+    [Test]
+    public void NativeSubmitInterception_PassesThroughSubmitBindingWhenForegroundProfileDiffers()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
+
+        var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(result.Diagnostics["pass_through_reason"], Is.EqualTo("active_profile_mismatch"));
+    }
+
+    [Test]
+    public void NativeSubmitInterception_GuardsSubmitBindingOnlyWhenForegroundProfileMatches()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
+
+        var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+        Assert.That(result.Diagnostics["active_surface_gate"], Is.EqualTo("selected_profile"));
+    }
+
+    [Test]
+    public void WindowsNativeSubmitHookHost_TreatsSendKeysEventsAsInjected()
+    {
+        Assert.That(WindowsNativeSubmitHookHost.IsInjectedKeyboardEvent(0x10), Is.True);
+        Assert.That(WindowsNativeSubmitHookHost.IsInjectedKeyboardEvent(0x02), Is.True);
+        Assert.That(WindowsNativeSubmitHookHost.IsInjectedKeyboardEvent(0), Is.False);
+    }
+
+    [Test]
     public void NativeSubmitInterception_ConfirmAndSendSuppressesOriginalAndSubmitsSanitizedFlow()
     {
         var profile = CreateProtectedProfile();

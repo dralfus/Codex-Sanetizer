@@ -42,6 +42,7 @@ public static class WindowsTrayApp
             .Profiles
             .FirstOrDefault(profile => profile.IsProtected);
         var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
+        var activeSurfaceDiscovery = WindowsActiveSurfaceDiscovery.CreateDefault();
         var orchestrator = new OsInteractionOrchestrator(
             sanitizer,
             WindowsFocusedComposerDiscovery.CreateDefault(),
@@ -60,7 +61,8 @@ public static class WindowsTrayApp
                 ? null
                 : new NativeSubmitInterceptionController(
                     nativeProfile,
-                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                    activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface),
             nativeProfile is null
                 ? null
                 : () =>

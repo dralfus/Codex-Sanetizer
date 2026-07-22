@@ -20,6 +20,9 @@ public sealed record TrayProtectionState(
     string NewlineBinding = "unknown",
     string ManualScanHotkey = "not_configured",
     string ReadinessStatus = OsInteractionStatusIds.NotConfigured,
+    bool ComposerProtected = false,
+    bool ProjectFilesProtected = false,
+    string ProjectFileStatus = ProjectFileProtectionStatusValues.NotConfigured,
     bool ResidentProcess = false);
 
 public sealed record ProtectionDisableResult(
@@ -158,6 +161,9 @@ internal sealed class TrayProtectionController
             NewlineBinding: State.NewlineBinding,
             ManualScanHotkey: State.ManualScanHotkey,
             ReadinessStatus: State.ReadinessStatus,
+            ComposerProtected: State.ComposerProtected,
+            ProjectFilesProtected: State.ProjectFilesProtected,
+            ProjectFileStatus: State.ProjectFileStatus,
             ResidentProcess: State.ResidentProcess);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -198,6 +204,9 @@ internal sealed class TrayProtectionController
             NewlineBinding: NewlineBindingText(),
             ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
             ReadinessStatus: result.Status,
+            ComposerProtected: result.Status == OsInteractionStatusIds.Protected,
+            ProjectFilesProtected: false,
+            ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
             ResidentProcess: true);
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -234,6 +243,9 @@ internal sealed class TrayProtectionController
             NewlineBinding: NewlineBindingText(),
             ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
             ReadinessStatus: ReadinessStatus(nativeSubmitStatus),
+            ComposerProtected: nativeSubmitStatus == OsInteractionStatusIds.Protected,
+            ProjectFilesProtected: false,
+            ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
             ResidentProcess: enabled);
     }
 
@@ -298,7 +310,7 @@ internal static class TrayStatusFormatter
         var replacements = state.LastReplacementCount is null
             ? "n/a"
             : state.LastReplacementCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return $"status={enabled} mode={state.Mode} protected_send_binding={state.ProtectedSendBinding} newline_binding={state.NewlineBinding} manual_scan_hotkey={state.ManualScanHotkey} native_submit={state.NativeSubmitStatus} readiness={state.ReadinessStatus} last={state.LastStatus} replacements={replacements}";
+        return $"status={enabled} mode={state.Mode} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={state.ProjectFileStatus} protected_send_binding={state.ProtectedSendBinding} newline_binding={state.NewlineBinding} manual_scan_hotkey={state.ManualScanHotkey} native_submit={state.NativeSubmitStatus} readiness={state.ReadinessStatus} last={state.LastStatus} replacements={replacements}";
     }
 
     public static string FormatNotifyIconText(TrayProtectionState state)

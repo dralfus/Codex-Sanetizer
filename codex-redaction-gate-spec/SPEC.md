@@ -57,6 +57,10 @@ The mapping table must be user-global across projects. The same real URL, domain
 39. As a Windows user, I want Code Sanitizer to install and launch as a normal resident tray application, so that protection is running without manual `dotnet run` commands.
 40. As a Windows user, I want exiting or unloading Code Sanitizer to require explicit confirmation, so that I do not accidentally turn protection off.
 41. As a Codex/ChatGPT Desktop user, I want Code Sanitizer's primary trigger to be the same Send shortcut I use in the selected AI app, so that pressing the normal Codex/ChatGPT send key is what activates protection.
+42. As a Codex coding user, I want project file reads to pass through a local sanitizer before they become model context, so that sensitive data inside repository files does not bypass composer protection.
+43. As a Codex coding user, I want sanitized virtual files to preserve enough structure for useful coding assistance, so that the model can still reason about code after identifiers are pseudonymized.
+44. As a Codex coding user, I want model-generated edits restored locally before they are written to disk when policy allows, so that my real project remains usable while the cloud saw only placeholders.
+45. As a security reviewer, I want product status to distinguish composer protection from project-file protection, so that users do not over-trust the desktop submit interceptor.
 
 ## Implementation Decisions
 
@@ -74,6 +78,9 @@ The mapping table must be user-global across projects. The same real URL, domain
   - Gateway/adapter mode: a local composer/proxy/desktop layer owns the submit action and can send sanitized text after user confirmation.
 - Guard mode is acceptable as a baseline but does not fully satisfy the desired UX unless it can programmatically replace the submitted prompt.
 - Native submit interception for selected Windows Codex/ChatGPT Desktop surfaces is the primary gateway/adapter path. A minimal confirm-and-send adapter is part of MVP because it implements the desired `Confirm sanitized prompt` flow. A polished full composer is later.
+- Native submit interception protects the selected AI app composer submit path. It does not guarantee protection for arbitrary project files read by a coding agent, attachments uploaded outside the sanitizer, or tool outputs derived from local files.
+- Full coding-workflow protection requires a restore-aware file-context broker that owns supported project file reads, creates sanitized virtual files for model context, blocks unsupported file content, validates sanitized patches, and restores restorable pseudonyms only in the local write path.
+- The product must distinguish `composer_protected` from `project_files_protected` in status, diagnostics and documentation.
 - The product must ship as a Windows installer that installs the resident tray app, can launch it at the end of setup, and can configure user-scope autostart. Normal protected operation must not require a console or `dotnet run`.
 - Stopping protection, exiting the tray app, or unloading the resident process must require an explicit confirmation dialog that names the consequence: selected AI apps will no longer be protected. Enterprise policy may block unload or require administrator approval.
 - Hotkey-triggered scan/apply is a secondary diagnostic/manual feature. It must not be presented as the main protection path.
@@ -106,6 +113,7 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Mapping tests should verify deterministic pseudonyms across sessions and projects.
 - Vault tests should verify that raw originals are not present in audit logs or exported policy files.
 - Gateway/adapter integration tests should simulate the full lifecycle: input -> sanitize -> confirm -> send sanitized -> receive sanitized answer -> restore locally.
+- Project-file workflow tests should simulate file read -> sanitized virtual file -> sanitized model edit -> restore-aware local write, and prove that raw protected values do not appear in cloud-visible payload records.
 - Submit interception tests should simulate selected and unselected AI surfaces, matching and non-matching submit bindings, input suppression, sanitizer allow/confirm/block and fail-closed behavior.
 - Binding verifier tests should cover submit vs newline separation, unknown binding status, IME/dead-key pass-through, and user-verified binding persistence without cloud submission.
 - Installer/tray tests should cover install, launch-after-install, user-scope autostart, resident startup status, explicit unload confirmation and local data retention.
@@ -123,6 +131,7 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Guaranteeing that data already sent to OpenAI can be removed from past model-training pipelines.
 - Protecting against users who intentionally bypass the gate.
 - Protecting every possible third-party connector unless the connector traffic also flows through the gateway.
+- End-to-end project file protection without a verified local file-context broker.
 - Full DLP classification for arbitrary documents in the first version.
 - Full binary/PDF/Office/image parsing, OCR and recursive archive scanning in the first version.
 - Silent mutation of Codex prompts using unsupported private APIs.

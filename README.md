@@ -10,6 +10,8 @@ The current product slice focuses on the Windows Codex/ChatGPT desktop composer.
 - Secrets such as passwords, tokens, private keys, connection strings, and API keys. Secrets are non-restorable by default and become `SECRET_REDACTED`.
 - Large pasted text and plain-text attachment snippets that pass through the sanitizer pipeline.
 
+The current product does not yet provide end-to-end protection for arbitrary project files read by a coding agent. It can sanitize explicit file snippets or plain-text attachments only when they are routed through Code Sanitizer before cloud submission. Full project-file protection needs a file-context broker; see `codex-redaction-gate-spec/PROJECT_FILE_WORKFLOW_GRILL_REVIEW.md` and `codex-redaction-gate-spec/adr/ADR-005-project-file-context-requires-a-restore-aware-broker.md`.
+
 The product does not claim to remove data that was already sent to a cloud service, and it does not protect users who intentionally bypass the gate.
 
 ## Repository Layout
@@ -107,6 +109,16 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --doc
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --audit-view
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --audit-verify
 ```
+
+Sanitize a project file through the local broker demo:
+
+```powershell
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --project-file-sanitize .\src\example.cs
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --project-workspace-protect .
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --project-file-sanitize .\src\example.cs --protected-workspace .
+```
+
+This broker demo proves local sanitized virtual file generation. It still reports `project_files_protected: false` for live Codex because end-to-end Codex project-file interception starts in the next tickets.
 
 Configure the secondary hotkey and optional autostart:
 
@@ -224,7 +236,7 @@ You can set the version explicitly:
 .\scripts\build-installer.ps1 -BuildVersion "0.1.20260721.t1530"
 ```
 
-The Inno installer launches `CodexRedactionGate.Tray.exe` after setup, can register the same tray executable in HKCU autostart, and uses the standard Windows installer flow to close applications that block file replacement during upgrades. Release builds are self-contained for `win-x64`, so the installed application does not require `dotnet` to be available in `PATH`.
+The Inno installer launches `CodexRedactionGate.Tray.exe` after setup and can register the same tray executable in HKCU autostart. During upgrades, if Code Sanitizer is already running, setup shows an explicit warning that resident protection must stop temporarily, then stops `CodexRedactionGate.Tray.exe` before replacing files and starts it again after setup. Release builds are self-contained for `win-x64`, so the installed application does not require `dotnet` to be available in `PATH`.
 
 ## Local Data
 

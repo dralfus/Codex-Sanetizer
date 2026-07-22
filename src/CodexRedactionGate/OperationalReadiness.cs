@@ -32,7 +32,8 @@ public static class ReadinessDoctor
             CheckVault(layout),
             CheckVaultSecret(vaultSecretProbe),
             CheckAudit(layout),
-            CheckScanner(manifest, defaultScannerPackageProbe)
+            CheckScanner(manifest, defaultScannerPackageProbe),
+            CheckProjectFileProtection()
         };
 
         return new ReadinessReport(
@@ -140,6 +141,11 @@ public static class ReadinessDoctor
         return scanner.Valid
             ? new ReadinessItem("scanner", "ready", "scanner_ready")
             : new ReadinessItem("scanner", "failed", scanner.WarningCode ?? "scanner_configuration_invalid");
+    }
+
+    private static ReadinessItem CheckProjectFileProtection()
+    {
+        return new ReadinessItem("project_files", "safe_disabled", "project_file_broker_not_configured");
     }
 
     private static bool IsLocalIoFailure(Exception exception)

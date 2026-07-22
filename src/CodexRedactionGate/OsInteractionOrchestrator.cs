@@ -113,6 +113,36 @@ public sealed class OsInteractionOrchestrator
             return Finish(OsInteractionStatusIds.Applied, surface, result, model, false, false, diagnostics);
         }
 
+        if (string.Equals(outgoingText, capture.Text, StringComparison.Ordinal))
+        {
+            var unchangedDiagnostics = Merge(diagnostics, ("write_status", "skipped_no_changes"));
+            if (!options.SubmitAfterApply)
+            {
+                return Finish(OsInteractionStatusIds.Applied, surface, result, model, true, false, unchangedDiagnostics);
+            }
+
+            var preSubmit = RediscoverSameSurface(surface);
+            if (preSubmit.Status is not null)
+            {
+                return Finish(preSubmit.Status, preSubmit.Surface, result, model, true, false, Merge(
+                    unchangedDiagnostics,
+                    preSubmit.Diagnostics,
+                    ("pre_submit_status", preSubmit.Status)));
+            }
+
+            var submitSurface = preSubmit.Surface ?? surface;
+            var submitWithoutWrite = _submitAction.Submit(submitSurface);
+            return submitWithoutWrite.Succeeded
+                ? Finish(OsInteractionStatusIds.Submitted, submitSurface, result, model, true, true, Merge(
+                    unchangedDiagnostics,
+                    submitWithoutWrite.Diagnostics,
+                    ("submit_status", submitWithoutWrite.Status)))
+                : Finish(OsInteractionStatusIds.SubmitFailed, submitSurface, result, model, true, false, Merge(
+                    unchangedDiagnostics,
+                    submitWithoutWrite.Diagnostics,
+                    ("submit_status", submitWithoutWrite.Status)));
+        }
+
         var preWrite = RediscoverSameSurface(surface);
         if (preWrite.Status is not null)
         {

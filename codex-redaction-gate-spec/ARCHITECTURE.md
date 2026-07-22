@@ -41,6 +41,8 @@ For the user's current workflow, the next UX frontier is not a browser adapter, 
 
 The OS adapter seam is intentionally platform-neutral above the concrete adapter: enabled AI profile selection, active surface discovery, submit binding discovery, submit input interception, text capture, text replacement, submit action, secondary hotkey trigger and confirmation overlay are separate contracts. Windows uses a Windows-specific adapter and Codex/ChatGPT surface profiles first. Future Linux desktop support should replace the platform adapter only. Future CLI support should be wrapper mode, not terminal keystroke interception.
 
+Native submit interception protects the composer submit path only. It does not, by itself, protect a full coding-agent workflow where project files are read from disk and sent to the model as context. Project-file protection requires a separate file-context broker that owns file reads, supported text extraction, sanitized virtual file delivery, restore-aware writes and raw-free evidence for every file-derived cloud-bound payload. This boundary is captured in `adr/ADR-005-project-file-context-requires-a-restore-aware-broker.md`.
+
 ### Redaction Engine
 
 Pure local library that transforms text.
@@ -208,6 +210,7 @@ Implemented modules:
 - Readiness, policy activation, policy precedence, audit summary and release smoke components provide raw-free operational diagnostics around the sanitizer core.
 - Package smoke checks cover sanitizer allow/confirm, scanner-backed secret redaction, guard blocking, local restore, storage defaults, scanner artifact provenance, scanner config validation, confirm handoff and attachment ingestion boundary.
 - Native submit interception is now the primary target UX for the Windows desktop adapter. Existing hotkey paths are treated as diagnostic/manual secondary features until the submit-binding profile manager and input suppression path are implemented.
+- Full project-file workflow protection is not implemented yet. The current implementation can sanitize explicit file snippets or plain-text attachments when they are passed through the sanitizer API, but it cannot guarantee that arbitrary Codex project file reads, model-visible tool outputs, attachment uploads or generated patches are sanitized and locally restored.
 
 Current sanitizer pipeline responsibilities:
 
@@ -310,6 +313,26 @@ flowchart TD
 ```
 
 Pure hook-only guard mode is safer than nothing, but it does not fully satisfy the desired UX if Codex cannot replace the prompt programmatically. The MVP must include a submit-owning adapter path for `Confirm sanitized prompt`.
+
+### Protected Project File Mode
+
+```mermaid
+flowchart TD
+    A["User asks Codex to modify project"] --> B["Codex requests file context"]
+    B --> C["Local file-context broker reads supported files"]
+    C --> D{"Readable supported text?"}
+    D -- "No" --> E["Block or require explicit local conversion"]
+    D -- "Yes" --> F["Sanitize file content, paths and tool output"]
+    F --> G["Send sanitized virtual files to model"]
+    G --> H["Receive sanitized response or patch"]
+    H --> I["Validate target workspace and patch shape"]
+    I --> J{"Restore allowed identifiers locally?"}
+    J -- "No" --> K["Write sanitized output or require approval"]
+    J -- "Yes" --> L["Restore restorable pseudonyms in local writer"]
+    L --> M["Write restored local file"]
+```
+
+This mode is a future product requirement, not current composer protection. It is the only mode that can honestly claim `project_files_protected`.
 
 ## Integration Strategy
 

@@ -28,6 +28,14 @@ A detector output that points to a span in the original text and describes a pos
 
 The point after which prompt content leaves the local machine for Codex/OpenAI. The sanitizer must run before this boundary.
 
+## File Context Broker
+
+A local integration layer for protected coding workspaces. It owns project file reads, supported text extraction, tool-output sanitization, sanitized virtual file delivery to the model, and restore-aware local writes.
+
+## Project Files Protected
+
+A capability status meaning that project file reads, file-derived tool output and file writes are covered by a verified local file-context broker. Composer interception alone is not enough to claim this status.
+
 ## Confirmation UI
 
 The local screen that shows the sanitized prompt, counts by entity type, warnings, and send/cancel/edit actions. It should not reveal raw original values by default.
@@ -83,6 +91,10 @@ The local process that replaces restorable pseudonyms in a model answer with ori
 ## Sanitized Prompt
 
 The prompt text after all approved replacements have been applied and verified. This is the only text that may cross the cloud boundary when sensitive data is detected.
+
+## Sanitized Virtual File
+
+A model-visible representation of a local file where sensitive spans, paths and identifiers have been replaced before the content crosses the cloud boundary. The original local file is not modified by creating this view.
 
 ## Sanitizer
 

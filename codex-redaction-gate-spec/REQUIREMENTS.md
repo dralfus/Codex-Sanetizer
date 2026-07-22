@@ -19,6 +19,19 @@
 - The system must support an integration strategy that can replace the submitted prompt, not only block it.
 - The system must inspect text attachments, large pasted file contents and file snippets when the adapter can access their text before cloud submission.
 - The system must not silently allow unsupported binary attachments as if they were scanned.
+- The system must not claim project-file protection unless all project file reads, file-derived tool output and file writes for the protected workflow pass through a verified local file-context broker.
+- The system must distinguish `composer_protected` from `project_files_protected` in status, diagnostics and documentation.
+
+### Project File Workflow
+
+- A protected project-file workflow must read supported text files through a local broker before any file content becomes model context.
+- The broker must sanitize file content, filenames and paths before cloud submission.
+- The broker must expose sanitized virtual files to the model without modifying the original local files.
+- Unsupported, unreadable, oversized, binary, PDF, Office, image and archive inputs must fail closed or require explicit local conversion before upload.
+- Model-generated edits for protected files must be applied through a restore-aware local writer.
+- The local writer must restore only restorable pseudonyms and must keep non-restorable secrets redacted.
+- The broker must validate that a returned patch targets the same protected workspace and sanitized source version before writing.
+- Direct attachment upload outside the broker must be treated as unprotected unless the active adapter proves pre-upload sanitization.
 
 ### Detection
 
@@ -147,6 +160,9 @@ The detector must identify at least:
 - A prompt containing an API key does not send the API key and does not restore it by default.
 - A text attachment containing an API key or internal URL is blocked or sanitized before cloud submission.
 - An unsupported binary attachment is blocked or explicitly warned before cloud submission, not silently allowed.
+- A protected project file containing an internal domain is sent to the model only as a sanitized virtual file.
+- A sanitized model patch can be restored and written locally without sending the restored values back to the cloud.
+- If the file-context broker is unavailable for a protected workspace, project-file operations fail closed or show an unprotected warning instead of claiming protection.
 - Confirming a sanitized prompt sends the sanitized prompt and does not send the original prompt.
 - Pressing the configured Send shortcut in a selected protected AI app does not send raw sensitive data; Code Sanitizer intercepts before cloud submission.
 - Pressing the same shortcut in an unselected application is not intercepted by Code Sanitizer.

@@ -8,6 +8,7 @@ This directory documents Codex Redaction Gate: a local safety layer that interce
 - `MVP_IMPLEMENTATION_SPEC.md` - the first implementable slice produced from the specification.
 - `POST_REFACTOR_IMPROVEMENT_SPEC.md` - the next improvement wave after the sanitizer pipeline split.
 - `NEXT_IMPROVEMENT_SPEC.md` - product-readiness improvements around operations, packaging, audit, and smoke coverage.
+- `PROJECT_FILE_WORKFLOW_SPEC.md` - product spec for protected coding-agent file reads, sanitized virtual files, and restore-aware local writes.
 - `REQUIREMENTS.md` - functional, non-functional, and security requirements.
 - `ARCHITECTURE.md` - target architecture, components, data flows, and integration options.
 - `SANITIZER_DESIGN.md` - concrete sanitizer design: API, pipeline, policy, span replacement, and verification.
@@ -18,6 +19,7 @@ This directory documents Codex Redaction Gate: a local safety layer that interce
 - `IMPLEMENTATION_CLARIFICATIONS.md` - resolved decisions about runtime, Gitleaks packaging, timeouts, fail-closed behavior, CSV/TOML, vault/DPAPI, UI handoff, audit, attachments, and cleanup.
 - `THREAT_MODEL.md` - protection boundaries, threats, and explicit non-goals.
 - `GRILL_REVIEW.md` - design stress-test notes, risks, and decisions.
+- `PROJECT_FILE_WORKFLOW_GRILL_REVIEW.md` - stress-test notes for coding-agent project file reads, sanitized virtual files, and restore-aware writes.
 - `GLOSSARY.md` - domain model and terminology.
 - `adr/` - architecture decision records.
 - `spikes/tool-evaluation/` - small local spike fixtures and reproducible tool-evaluation notes.
