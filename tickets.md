@@ -2833,11 +2833,13 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] The smoke fixture includes synthetic domains, usernames, paths and secrets in project files.
-- [ ] Broker output contains placeholders and non-restorable secret redactions, not raw protected values.
-- [ ] Raw-free evidence records the file-context payload status.
-- [ ] `project_files_protected` remains false for live Codex until an actual integration point is verified.
-- [ ] Build, tests, self-test and project-file smoke are green.
+**Verification result 2026-07-22:** focused project-file workflow tests passed 10/10; full unit tests passed 337/337; `--self-test` passed; `--project-file-smoke` passed and reports sanitized payload/raw-free evidence while keeping `live_project_files_protected: false`; `--product-smoke` passed and includes `project_file_read_only_smoke: true`.
+
+- [x] The smoke fixture includes synthetic domains, usernames, paths and secrets in project files.
+- [x] Broker output contains placeholders and non-restorable secret redactions, not raw protected values.
+- [x] Raw-free evidence records the file-context payload status.
+- [x] `project_files_protected` remains false for live Codex until an actual integration point is verified.
+- [x] Build, tests, self-test and project-file smoke are green.
 
 ## 204. Sanitize file-derived tool output
 
@@ -2855,11 +2857,13 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] Broker-managed tool output is passed through the same sanitizer decision pipeline as prompt and file content.
-- [ ] Paths, filenames, internal domains and secrets in tool output are replaced or redacted.
-- [ ] Tool-output audit events contain only hashes, counts, source ids and reason codes.
-- [ ] Unmanaged tool output is reported as unprotected rather than silently trusted.
-- [ ] Build, tests and self-test are green.
+**Verification result 2026-07-22:** focused project-file workflow tests passed 10/10; full unit tests passed 337/337; `--self-test` passed; broker tests cover managed tool-output sanitization and unmanaged tool-output fail-closed reporting with raw-free diagnostics.
+
+- [x] Broker-managed tool output is passed through the same sanitizer decision pipeline as prompt and file content.
+- [x] Paths, filenames, internal domains and secrets in tool output are replaced or redacted.
+- [x] Tool-output audit events contain only hashes, counts, source ids and reason codes.
+- [x] Unmanaged tool output is reported as unprotected rather than silently trusted.
+- [x] Build, tests and self-test are green.
 
 ## 205. Add restore-aware patch dry-run
 
@@ -2877,11 +2881,13 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 & 'C:\Users\alexey.andreev\AppData\Local\Microsoft\dotnet\dotnet.exe' run --project 'src\CodexRedactionGate\CodexRedactionGate.csproj' -- --self-test
 ```
 
-- [ ] A sanitized edit can be matched to its protected workspace, target path and sanitized source version.
-- [ ] Restorable pseudonyms are restored in the dry-run preview.
-- [ ] Non-restorable secrets remain redacted in the dry-run preview.
-- [ ] Stale, mismatched or out-of-workspace patches are blocked with raw-free reasons.
-- [ ] Build, tests and self-test are green.
+**Verification result 2026-07-22:** focused project-file workflow tests passed 10/10; full unit tests passed 337/337; `--self-test` passed; dry-run tests cover protected workspace/source-version matching, local restoration preview without writes, non-restorable redactions remaining redacted and stale-source blocking.
+
+- [x] A sanitized edit can be matched to its protected workspace, target path and sanitized source version.
+- [x] Restorable pseudonyms are restored in the dry-run preview.
+- [x] Non-restorable secrets remain redacted in the dry-run preview.
+- [x] Stale, mismatched or out-of-workspace patches are blocked with raw-free reasons.
+- [x] Build, tests and self-test are green.
 
 ## 206. Apply restore-aware local writes with approval
 

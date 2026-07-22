@@ -57,9 +57,16 @@ public sealed class LocalRestoreWorkflow
         ArgumentNullException.ThrowIfNull(sanitizedText);
 
         var stopwatch = Stopwatch.StartNew();
-        var restoreRequest = new RestoreRequest(
+        return Restore(new RestoreRequest(
             SanitizedText: sanitizedText,
-            Replacements: DiscoverReplacements(sanitizedText));
+            Replacements: DiscoverReplacements(sanitizedText)));
+    }
+
+    public LocalRestoreResult Restore(RestoreRequest restoreRequest)
+    {
+        ArgumentNullException.ThrowIfNull(restoreRequest);
+
+        var stopwatch = Stopwatch.StartNew();
         var restoration = _restorer.Restore(restoreRequest);
         stopwatch.Stop();
 
@@ -84,7 +91,7 @@ public sealed class LocalRestoreWorkflow
             AuditWriteResult: auditWriteResult);
     }
 
-    private static IReadOnlyList<Replacement> DiscoverReplacements(string text)
+    internal static IReadOnlyList<Replacement> DiscoverReplacements(string text)
     {
         var replacements = new List<Replacement>();
 

@@ -16,6 +16,7 @@ public sealed record ProductSmokeReport(
     bool UnloadConfirmationPassed,
     bool ComposerProtectionStatusPassed,
     bool ProjectFileProtectionStatusPassed,
+    bool ProjectFileReadOnlySmokePassed,
     bool DictionaryPolicySetupPassed,
     bool SampleSanitizePassed,
     bool DisposableApplyOnlyPassed,
@@ -192,10 +193,13 @@ public static class ProductSmokeRunner
             && Directory.Exists(layout.VaultDirectory);
 
         var nativeSubmit = NativeSubmitProductSmokeRunner.Run(hmacSecret);
+        var projectFileReadOnlySmoke = ProjectFileReadOnlySmokeRunner.Run(hmacSecret);
 
         var rawFreeArtifacts = renderedAudit
             + Environment.NewLine
             + string.Join(Environment.NewLine, NativeSubmitProductSmokeRunner.RenderRawFree(nativeSubmit))
+            + Environment.NewLine
+            + string.Join(Environment.NewLine, ProjectFileReadOnlySmokeRunner.RenderRawFree(projectFileReadOnlySmoke))
             + Environment.NewLine
             + RenderRawFree(new ProductSmokeReport(
                 Passed: false,
@@ -208,6 +212,7 @@ public static class ProductSmokeRunner
                 UnloadConfirmationPassed: unloadConfirmationPassed,
                 ComposerProtectionStatusPassed: composerProtectionStatusPassed,
                 ProjectFileProtectionStatusPassed: projectFileProtectionStatusPassed,
+                ProjectFileReadOnlySmokePassed: projectFileReadOnlySmoke.Passed,
                 DictionaryPolicySetupPassed: dictionaryPolicyPassed,
                 SampleSanitizePassed: samplePassed,
                 DisposableApplyOnlyPassed: disposableApplyOnlyPassed,
@@ -239,6 +244,7 @@ public static class ProductSmokeRunner
             && unloadConfirmationPassed
             && composerProtectionStatusPassed
             && projectFileProtectionStatusPassed
+            && projectFileReadOnlySmoke.Passed
             && rawFreePassed;
 
         return new ProductSmokeReport(
@@ -252,6 +258,7 @@ public static class ProductSmokeRunner
             UnloadConfirmationPassed: unloadConfirmationPassed,
             ComposerProtectionStatusPassed: composerProtectionStatusPassed,
             ProjectFileProtectionStatusPassed: projectFileProtectionStatusPassed,
+            ProjectFileReadOnlySmokePassed: projectFileReadOnlySmoke.Passed,
             DictionaryPolicySetupPassed: dictionaryPolicyPassed,
             SampleSanitizePassed: samplePassed,
             DisposableApplyOnlyPassed: disposableApplyOnlyPassed,
@@ -303,6 +310,7 @@ public static class ProductSmokeRunner
             $"unload_confirmation: {report.UnloadConfirmationPassed.ToString().ToLowerInvariant()}",
             $"composer_protected_status: {report.ComposerProtectionStatusPassed.ToString().ToLowerInvariant()}",
             $"project_files_protected_status: {report.ProjectFileProtectionStatusPassed.ToString().ToLowerInvariant()}",
+            $"project_file_read_only_smoke: {report.ProjectFileReadOnlySmokePassed.ToString().ToLowerInvariant()}",
             $"dictionary_policy_setup: {report.DictionaryPolicySetupPassed.ToString().ToLowerInvariant()}",
             $"sample_sanitize: {report.SampleSanitizePassed.ToString().ToLowerInvariant()}",
             $"apply_only_write_back: {report.DisposableApplyOnlyPassed.ToString().ToLowerInvariant()}",

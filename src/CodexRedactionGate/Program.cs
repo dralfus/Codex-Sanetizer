@@ -251,6 +251,41 @@ public static class Program
                 runtime.SanitizerFactory);
         }
 
+        if (args.Length == 1 && args[0] == "--project-file-smoke")
+        {
+            return RunProjectFileSmoke();
+        }
+
+        if (args.Length == 3 && args[0] == "--project-tool-output-sanitize")
+        {
+            return RunProjectToolOutputSanitize(
+                args[1],
+                args[2],
+                runtime.LayoutFactory,
+                runtime.SanitizerFactory);
+        }
+
+        if (args.Length == 2 && args[0] == "--project-tool-output-unmanaged")
+        {
+            return RunProjectToolOutputUnmanaged(args[1]);
+        }
+
+        if (args.Length == 8
+            && args[0] == "--project-patch-dry-run"
+            && args[2] == "--protected-workspace"
+            && args[4] == "--source-content-hash"
+            && args[6] == "--sanitized-edit")
+        {
+            return RunProjectPatchDryRun(
+                args[1],
+                args[3],
+                args[5],
+                args[7],
+                runtime.LayoutFactory,
+                runtime.SanitizerFactory,
+                runtime.RestoreWorkflowFactory);
+        }
+
         if (args.Length == 3 && args[0] == "--audit-cleanup" && args[1] == "--keep")
         {
             return int.TryParse(args[2], out var keepEvents) && keepEvents >= 0
@@ -1048,6 +1083,110 @@ public static class Program
         return result.Succeeded ? 0 : 1;
     }
 
+    private static int RunProjectFileSmoke()
+    {
+        var report = ProjectFileReadOnlySmokeRunner.Run(System.Text.Encoding.UTF8.GetBytes("project-file-smoke-secret"));
+        foreach (var line in ProjectFileReadOnlySmokeRunner.RenderRawFree(report))
+        {
+            Console.WriteLine(line);
+        }
+
+        return report.Passed ? 0 : 1;
+    }
+
+    private static int RunProjectToolOutputSanitize(
+        string workspacePath,
+        string toolOutput,
+        Func<DefaultStorageLayout> layoutFactory,
+        Func<IReadOnlyList<DictionaryTerm>, Sanitizer> sanitizerFactory)
+    {
+        var broker = new ProjectFileContextBroker(
+            sanitizerFactory(Array.Empty<DictionaryTerm>()),
+            layoutFactory(),
+            ProjectFileBrokerOptions.ProtectedWorkspaceDefault);
+        var result = broker.SanitizeManagedToolOutput(toolOutput, workspacePath);
+
+        Console.WriteLine($"status: {result.Code}");
+        WriteDiagnosticsAndWarnings(result.Diagnostics, result.Warnings);
+
+        if (result.ToolOutput is not null)
+        {
+            Console.WriteLine($"decision: {CliOutputFormatting.FormatDecision(result.ToolOutput.Decision)}");
+            Console.WriteLine($"replacement_count: {result.ToolOutput.ReplacementCount}");
+            Console.WriteLine("sanitized_tool_output:");
+            Console.WriteLine(result.ToolOutput.SanitizedText);
+        }
+
+        return result.Succeeded ? 0 : 1;
+    }
+
+    private static int RunProjectToolOutputUnmanaged(string workspacePath)
+    {
+        var result = ProjectFileContextBroker.ReportUnmanagedToolOutput(workspacePath);
+
+        Console.WriteLine($"status: {result.Code}");
+        WriteDiagnosticsAndWarnings(result.Diagnostics, result.Warnings);
+
+        return result.Succeeded ? 0 : 1;
+    }
+
+    private static int RunProjectPatchDryRun(
+        string filePath,
+        string workspacePath,
+        string sourceContentHash,
+        string sanitizedEdit,
+        Func<DefaultStorageLayout> layoutFactory,
+        Func<IReadOnlyList<DictionaryTerm>, Sanitizer> sanitizerFactory,
+        Func<DefaultStorageLayout, LocalRestoreWorkflow> restoreWorkflowFactory)
+    {
+        var layout = layoutFactory();
+        var broker = new ProjectFileContextBroker(
+            sanitizerFactory(Array.Empty<DictionaryTerm>()),
+            layout,
+            ProjectFileBrokerOptions.ProtectedWorkspaceDefault);
+        var source = broker.CreateSanitizedVirtualFile(filePath, workspacePath);
+        if (source.VirtualFile is null)
+        {
+            Console.WriteLine($"status: {source.Code}");
+            WriteDiagnosticsAndWarnings(source.Diagnostics, source.Warnings);
+
+            return 1;
+        }
+
+        var dryRun = new ProjectFilePatchDryRun(
+            request => restoreWorkflowFactory(layout).Restore(request).Restoration,
+            layout);
+        var sourceIdentity = source.VirtualFile with { ContentHash = sourceContentHash };
+        var result = dryRun.Preview(new ProjectFilePatchDryRunRequest(sourceIdentity, workspacePath, filePath, sanitizedEdit));
+
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"local_sensitive: {result.LocalSensitive.ToString().ToLowerInvariant()}");
+        WriteDiagnosticsAndWarnings(result.Diagnostics, result.Warnings);
+
+        if (result.PreviewText is not null)
+        {
+            Console.WriteLine("preview:");
+            Console.WriteLine(result.PreviewText);
+        }
+
+        return result.Succeeded ? 0 : 1;
+    }
+
+    private static void WriteDiagnosticsAndWarnings(
+        IReadOnlyDictionary<string, string> diagnostics,
+        IReadOnlyList<Warning> warnings)
+    {
+        foreach (var item in diagnostics.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            Console.WriteLine($"{item.Key}: {item.Value}");
+        }
+
+        foreach (var warning in warnings.DistinctBy(warning => warning.Code).OrderBy(warning => warning.Code, StringComparer.Ordinal))
+        {
+            Console.WriteLine($"warning.{warning.Code}: {warning.Severity}");
+        }
+    }
+
     private static int RunNativeProfileVerify(
         string profileId,
         string submitBinding,
@@ -1460,6 +1599,10 @@ public static class Program
         Console.WriteLine("  --project-workspace-protect workspace");
         Console.WriteLine("  --project-workspace-status workspace");
         Console.WriteLine("  --project-file-sanitize file [--protected-workspace workspace]");
+        Console.WriteLine("  --project-file-smoke");
+        Console.WriteLine("  --project-tool-output-sanitize workspace \"tool output\"");
+        Console.WriteLine("  --project-tool-output-unmanaged workspace");
+        Console.WriteLine("  --project-patch-dry-run file --protected-workspace workspace --source-content-hash hash --sanitized-edit \"text\"");
         Console.WriteLine("  --tray-app");
         Console.WriteLine("  --os-profiles-list");
         Console.WriteLine("  --os-compatibility-matrix");

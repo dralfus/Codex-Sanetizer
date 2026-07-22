@@ -193,14 +193,272 @@ public sealed class ProjectFileWorkflowTests
         }
     }
 
-    private static CliRuntime CreateRuntime(DefaultStorageLayout layout)
+    [Test]
+    public void ProjectFileReadOnlySmokeRunner_ProvesSanitizedReadOnlyPayload()
     {
+        var report = ProjectFileReadOnlySmokeRunner.Run(System.Text.Encoding.UTF8.GetBytes("project-file-smoke-test-secret"));
+        var rendered = string.Join(Environment.NewLine, ProjectFileReadOnlySmokeRunner.RenderRawFree(report));
+
+        Assert.That(report.Passed, Is.True);
+        Assert.That(report.WorkspaceRegistered, Is.True);
+        Assert.That(report.ReadSucceeded, Is.True);
+        Assert.That(report.PayloadSanitized, Is.True);
+        Assert.That(report.RawFreeEvidence, Is.True);
+        Assert.That(report.LiveProjectFilesProtected, Is.False);
+        Assert.That(rendered, Does.Contain("project_file_smoke: passed"));
+        Assert.That(rendered, Does.Contain("live_project_files_protected: false"));
+        Assert.That(rendered, Does.Not.Contain("deploy.corp.example.local"));
+        Assert.That(rendered, Does.Not.Contain("user1"));
+        Assert.That(rendered, Does.Not.Contain("P@ssw0rd!"));
+    }
+
+    [Test]
+    public void ProjectFileContextBroker_SanitizesManagedToolOutputAndReportsUnmanagedAsUnprotected()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            Directory.CreateDirectory(workspace);
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+            var broker = new ProjectFileContextBroker(
+                TestSanitizers.Create(),
+                layout,
+                ProjectFileBrokerOptions.ProtectedWorkspaceDefault);
+
+            var result = broker.SanitizeManagedToolOutput(
+                "Read C:\\Users\\user1\\secret.txt from 192.168.10.25 with password=P@ssw0rd!",
+                workspace,
+                "read-file");
+            var unmanaged = ProjectFileContextBroker.ReportUnmanagedToolOutput(workspace);
+            var diagnostics = JsonSerializer.Serialize(result.Diagnostics);
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.Code, Is.EqualTo("managed_tool_output_sanitized"));
+            Assert.That(result.ToolOutput, Is.Not.Null);
+            Assert.That(result.ToolOutput!.SanitizedText, Does.Not.Contain("user1"));
+            Assert.That(result.ToolOutput.SanitizedText, Does.Not.Contain("192.168.10.25"));
+            Assert.That(result.ToolOutput.SanitizedText, Does.Not.Contain("P@ssw0rd!"));
+            Assert.That(result.ToolOutput.SanitizedText, Does.Contain("PASSWORD_REDACTED"));
+            Assert.That(result.Diagnostics["tool_output_managed"], Is.EqualTo("true"));
+            Assert.That(result.Diagnostics["raw_tool_output_recorded"], Is.EqualTo("false"));
+            Assert.That(result.Diagnostics.Keys.Any(key => key.StartsWith("entity_count.", StringComparison.Ordinal)), Is.True);
+            Assert.That(diagnostics, Does.Not.Contain("user1"));
+            Assert.That(diagnostics, Does.Not.Contain("192.168.10.25"));
+            Assert.That(diagnostics, Does.Not.Contain("P@ssw0rd!"));
+
+            Assert.That(unmanaged.Succeeded, Is.False);
+            Assert.That(unmanaged.Code, Is.EqualTo("unmanaged_tool_output_unprotected"));
+            Assert.That(unmanaged.Diagnostics["tool_output_managed"], Is.EqualTo("false"));
+            Assert.That(JsonSerializer.Serialize(unmanaged.Diagnostics), Does.Not.Contain(workspace));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void ProjectFilePatchDryRun_RestoresPreviewWithoutWritingAndBlocksStaleSource()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            Directory.CreateDirectory(workspace);
+            var filePath = Path.Combine(workspace, "config.txt");
+            var originalText = "Connect to 192.168.10.25\r\npassword=P@ssw0rd!";
+            File.WriteAllText(filePath, originalText);
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+            var vault = new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("project-patch-dry-run-test-secret"));
+            var broker = new ProjectFileContextBroker(
+                new Sanitizer(vault),
+                layout,
+                ProjectFileBrokerOptions.ProtectedWorkspaceDefault);
+            var source = broker.CreateSanitizedVirtualFile(filePath, workspace);
+            var restoreWorkflow = new LocalRestoreWorkflow(
+                new LocalRestorer(vault),
+                new FileAuditSink(Path.Combine(tempDirectory, "audit")));
+            var dryRun = new ProjectFilePatchDryRun(request => restoreWorkflow.Restore(request).Restoration, layout);
+            var sanitizedEdit = source.VirtualFile!.SanitizedText.Replace("Connect", "Route", StringComparison.Ordinal);
+            var unrelatedPseudonym = vault.GetOrCreatePseudonym("domain", "other.workspace.example.local");
+
+            var preview = dryRun.Preview(new ProjectFilePatchDryRunRequest(
+                source.VirtualFile,
+                workspace,
+                filePath,
+                sanitizedEdit));
+            var unrelated = dryRun.Preview(new ProjectFilePatchDryRunRequest(
+                source.VirtualFile,
+                workspace,
+                filePath,
+                sanitizedEdit + Environment.NewLine + unrelatedPseudonym));
+            File.WriteAllText(filePath, "changed outside broker");
+            var stale = dryRun.Preview(new ProjectFilePatchDryRunRequest(
+                source.VirtualFile,
+                workspace,
+                filePath,
+                sanitizedEdit));
+
+            Assert.That(preview.Succeeded, Is.True);
+            Assert.That(preview.Code, Is.EqualTo("restore_aware_patch_preview_ready"));
+            Assert.That(preview.PreviewText, Does.Contain("Route to 192.168.10.25"));
+            Assert.That(preview.PreviewText, Does.Contain("PASSWORD_REDACTED"));
+            Assert.That(preview.LocalSensitive, Is.True);
+            Assert.That(preview.Diagnostics["write_performed"], Is.EqualTo("false"));
+            Assert.That(preview.Diagnostics["raw_patch_recorded"], Is.EqualTo("false"));
+            Assert.That(File.ReadAllText(filePath), Is.EqualTo("changed outside broker"));
+            Assert.That(unrelated.Succeeded, Is.False);
+            Assert.That(unrelated.Code, Is.EqualTo("unrelated_pseudonym_in_patch"));
+            Assert.That(stale.Succeeded, Is.False);
+            Assert.That(stale.Code, Is.EqualTo("source_version_mismatch"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Program_ProjectFileSmokeToolOutputAndPatchDryRunCommands_ExposeRawFreeStatus()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            Directory.CreateDirectory(workspace);
+            var filePath = Path.Combine(workspace, "config.txt");
+            File.WriteAllText(filePath, "Connect to 192.168.10.25\r\npassword=P@ssw0rd!");
+            var vault = new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("project-file-cli-test-secret"));
+            var runtime = CreateRuntime(layout, vault);
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+            var source = new ProjectFileContextBroker(
+                new Sanitizer(vault),
+                layout,
+                ProjectFileBrokerOptions.ProtectedWorkspaceDefault)
+                .CreateSanitizedVirtualFile(filePath, workspace);
+            var virtualFile = source.VirtualFile!;
+
+            var smoke = CaptureProgramOutput(() =>
+                Program.Main(new[] { "--project-file-smoke" }, runtime));
+            var tool = CaptureProgramOutput(() =>
+                Program.Main(new[]
+                {
+                    "--project-tool-output-sanitize",
+                    workspace,
+                    "Read C:\\Users\\user1\\secret.txt from 192.168.10.25 with password=P@ssw0rd!"
+                }, runtime));
+            var unmanaged = CaptureProgramOutput(() =>
+                Program.Main(new[] { "--project-tool-output-unmanaged", workspace }, runtime));
+            var patch = CaptureProgramOutput(() =>
+                Program.Main(new[]
+                {
+                    "--project-patch-dry-run",
+                    filePath,
+                    "--protected-workspace",
+                    workspace,
+                    "--source-content-hash",
+                    virtualFile.ContentHash,
+                    "--sanitized-edit",
+                    virtualFile.SanitizedText.Replace("Connect", "Route", StringComparison.Ordinal)
+                }, runtime));
+            File.WriteAllText(filePath, "changed outside broker");
+            var stalePatch = CaptureProgramOutput(() =>
+                Program.Main(new[]
+                {
+                    "--project-patch-dry-run",
+                    filePath,
+                    "--protected-workspace",
+                    workspace,
+                    "--source-content-hash",
+                    virtualFile.ContentHash,
+                    "--sanitized-edit",
+                    virtualFile.SanitizedText.Replace("Connect", "Route", StringComparison.Ordinal)
+                }, runtime));
+
+            Assert.That(smoke.ExitCode, Is.EqualTo(0));
+            Assert.That(smoke.Stdout, Does.Contain("project_file_smoke: passed"));
+            Assert.That(tool.ExitCode, Is.EqualTo(0));
+            Assert.That(tool.Stdout, Does.Contain("status: managed_tool_output_sanitized"));
+            Assert.That(tool.Stdout, Does.Contain("sanitized_tool_output:"));
+            Assert.That(tool.Stdout, Does.Not.Contain("user1"));
+            Assert.That(tool.Stdout, Does.Not.Contain("192.168.10.25"));
+            Assert.That(tool.Stdout, Does.Not.Contain("P@ssw0rd!"));
+            Assert.That(unmanaged.ExitCode, Is.EqualTo(1));
+            Assert.That(unmanaged.Stdout, Does.Contain("status: unmanaged_tool_output_unprotected"));
+            Assert.That(unmanaged.Stdout, Does.Not.Contain(workspace));
+            Assert.That(patch.ExitCode, Is.EqualTo(0));
+            Assert.That(patch.Stdout, Does.Contain("status: restore_aware_patch_preview_ready"));
+            Assert.That(patch.Stdout, Does.Contain("local_sensitive: true"));
+            Assert.That(patch.Stdout, Does.Contain("Route to 192.168.10.25"));
+            Assert.That(File.ReadAllText(filePath), Does.Not.Contain("Route to"));
+            Assert.That(stalePatch.ExitCode, Is.EqualTo(1));
+            Assert.That(stalePatch.Stdout, Does.Contain("status: source_version_mismatch"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void ProjectFileSelectionGuard_RejectsDirectoryLinkEscapingWorkspace()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Pass("Windows directory-link containment is Windows-specific.");
+        }
+
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            var outside = Path.Combine(tempDirectory, "outside");
+            var link = Path.Combine(workspace, "linked");
+            Directory.CreateDirectory(workspace);
+            Directory.CreateDirectory(outside);
+            File.WriteAllText(Path.Combine(outside, "config.txt"), "Connect to 192.168.10.25");
+            Directory.CreateSymbolicLink(link, outside);
+
+            var result = ProjectFileSelectionGuard.CheckWorkspaceContainment(
+                Path.Combine(link, "config.txt"),
+                workspace);
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo("outside_workspace"));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Assert.Pass("Creating directory links requires privileges on this Windows host.");
+        }
+        catch (IOException) when (!Directory.Exists(Path.Combine(tempDirectory, "workspace", "linked")))
+        {
+            Assert.Pass("Creating directory links requires privileges on this Windows host.");
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    private static CliRuntime CreateRuntime(DefaultStorageLayout layout, InMemoryHmacMappingVault? vault = null)
+    {
+        var mappingVault = vault ?? new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("project-file-test-secret"));
         return new CliRuntime(
-            _ => TestSanitizers.Create(),
+            _ => new Sanitizer(mappingVault),
             () => Sanitizer.LoadProductionPolicy(layout),
-            _ => TestSanitizers.Create(),
+            _ => new Sanitizer(mappingVault),
             () => layout,
-            LocalRestoreWorkflow.CreateProduction);
+            _ => new LocalRestoreWorkflow(
+                new LocalRestorer(mappingVault),
+                new FileAuditSink(Path.Combine(layout.RootDirectory, "audit"))));
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureProgramOutput(Func<int> action)
