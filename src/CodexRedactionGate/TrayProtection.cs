@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 
 namespace CodexRedactionGate;
 
@@ -313,12 +314,15 @@ internal static class TrayStatusFormatter
         return $"status={enabled} mode={state.Mode} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={state.ProjectFileStatus} protected_send_binding={state.ProtectedSendBinding} newline_binding={state.NewlineBinding} manual_scan_hotkey={state.ManualScanHotkey} native_submit={state.NativeSubmitStatus} readiness={state.ReadinessStatus} last={state.LastStatus} replacements={replacements}";
     }
 
-    public static string FormatNotifyIconText(TrayProtectionState state)
+    public static string FormatNotifyIconText(TrayProtectionState state, string? buildVersion = null)
     {
         ArgumentNullException.ThrowIfNull(state);
 
         var enabled = state.Enabled ? "enabled" : "disabled";
-        return TrimNotifyText($"CodexRG {enabled} {state.Mode} last={state.LastStatus} send={state.ProtectedSendBinding} manual={state.ManualScanHotkey}");
+        var product = string.IsNullOrWhiteSpace(buildVersion)
+            ? "CodexRG"
+            : $"CodexRG {buildVersion}";
+        return TrimNotifyText($"{product} {enabled} {state.Mode} last={state.LastStatus} send={state.ProtectedSendBinding} manual={state.ManualScanHotkey}");
     }
 
     public static string FormatStartupError(TrayProtectionState state)
@@ -343,6 +347,19 @@ internal static class TrayMenuContent
     public static TrayLocalCommand AuditViewerCommand { get; } = new("Audit viewer", "--audit-view");
 
     public static TrayLocalCommand RuleManagementCommand { get; } = new("Sensitive terms", "--dictionary-ui");
+
+    public static string FormatBuildVersionMenuItem(string buildVersion)
+    {
+        return $"Version: {NormalizeBuildVersion(buildVersion)}";
+    }
+
+    public static string FormatBuildVersionHelpText(string buildVersion)
+    {
+        return string.Join(
+            Environment.NewLine,
+            "Build version:",
+            NormalizeBuildVersion(buildVersion));
+    }
 
     public static string RestoreText { get; } = string.Join(
         Environment.NewLine,
@@ -389,8 +406,40 @@ internal static class TrayMenuContent
         "--policy-add-regex type pattern",
         "--policy-test \"text\" [--show-sanitized]",
         "--rules-export directory");
+
+    private static string NormalizeBuildVersion(string buildVersion)
+    {
+        return string.IsNullOrWhiteSpace(buildVersion)
+            ? "unknown"
+            : buildVersion.Trim();
+    }
 }
 
 internal sealed record TrayLocalCommand(
     string Label,
     string CliArgument);
+
+internal static class BuildVersion
+{
+    public static string Current => Resolve(Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly());
+
+    internal static string Resolve(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+
+        var informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        return Normalize(informationalVersion, assembly.GetName().Version);
+    }
+
+    internal static string Normalize(string? informationalVersion, Version? assemblyVersion)
+    {
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            return informationalVersion.Trim();
+        }
+
+        return assemblyVersion?.ToString() ?? "unknown";
+    }
+}

@@ -112,9 +112,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly ITrayLocalCommandLauncher _commandLauncher;
     private readonly ITrayProtectionDisableConfirmation _disableConfirmation;
     private readonly DefaultStorageLayout _layout;
+    private readonly string _buildVersion;
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _toggleItem;
+    private readonly ToolStripMenuItem _versionItem;
 
     public WindowsTrayApplicationContext(TrayProtectionController controller)
         : this(controller, DefaultStorageLayout.CreateDefault(), new WindowsTrayLocalCommandLauncher())
@@ -146,11 +148,14 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
         _commandLauncher = commandLauncher ?? throw new ArgumentNullException(nameof(commandLauncher));
         _disableConfirmation = disableConfirmation ?? throw new ArgumentNullException(nameof(disableConfirmation));
+        _buildVersion = BuildVersion.Current;
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
+        _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };
         _toggleItem = new ToolStripMenuItem("Stop protection", null, (_, _) => ToggleProtection());
 
         var menu = new ContextMenuStrip();
+        menu.Items.Add(_versionItem);
         menu.Items.Add(_statusItem);
         menu.Items.Add(_toggleItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -158,7 +163,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripMenuItem("Open sensitive terms", null, (_, _) => OpenDictionaryManagement()));
         menu.Items.Add(new ToolStripMenuItem("Open audit viewer", null, (_, _) => OpenCommand(TrayMenuContent.AuditViewerCommand)));
         menu.Items.Add(new ToolStripMenuItem("Open diagnostics", null, (_, _) => OpenCommand(TrayMenuContent.DiagnosticsCommand)));
-        menu.Items.Add(new ToolStripMenuItem("Command reference...", null, (_, _) => ShowLocalText("Commands", TrayMenuContent.RestoreText + Environment.NewLine + Environment.NewLine + TrayMenuContent.DiagnosticsText + Environment.NewLine + Environment.NewLine + TrayMenuContent.RuleManagementText)));
+        menu.Items.Add(new ToolStripMenuItem("Command reference...", null, (_, _) => ShowLocalText("Commands", TrayMenuContent.FormatBuildVersionHelpText(_buildVersion) + Environment.NewLine + Environment.NewLine + TrayMenuContent.RestoreText + Environment.NewLine + Environment.NewLine + TrayMenuContent.DiagnosticsText + Environment.NewLine + Environment.NewLine + TrayMenuContent.RuleManagementText)));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => Exit()));
 
@@ -212,7 +217,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void RefreshStatus()
     {
-        _notifyIcon.Text = TrayStatusFormatter.FormatNotifyIconText(_controller.State);
+        _notifyIcon.Text = TrayStatusFormatter.FormatNotifyIconText(_controller.State, _buildVersion);
+        _versionItem.Text = TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion);
         _statusItem.Text = TrayStatusFormatter.FormatMenuStatus(_controller.State);
         _toggleItem.Text = _controller.State.Enabled ? "Stop protection" : "Start protection";
     }

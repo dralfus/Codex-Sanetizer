@@ -3,6 +3,7 @@ param(
     [string] $Runtime = "win-x64",
     [string] $OutputDirectory = "artifacts\publish",
     [string] $ScannerSourceDirectory = "artifacts\scanners\gitleaks",
+    [string] $BuildVersion = "",
     [switch] $RequireScannerPackage
 )
 
@@ -104,12 +105,21 @@ New-Item -ItemType Directory -Force $output | Out-Null
 New-Item -ItemType Directory -Force $consoleOutput | Out-Null
 New-Item -ItemType Directory -Force $trayOutput | Out-Null
 
+$versionProperties = @()
+if (-not [string]::IsNullOrWhiteSpace($BuildVersion)) {
+    $versionProperties = @(
+        "-p:InformationalVersion=$BuildVersion",
+        "-p:IncludeSourceRevisionInInformationalVersion=false"
+    )
+}
+
 & $dotnet publish $project `
     -c $Configuration `
     -r $Runtime `
     --self-contained true `
     -p:UseAppHost=true `
     -p:PublishSingleFile=false `
+    @versionProperties `
     -o $consoleOutput
 
 if ($LASTEXITCODE -ne 0) {
@@ -122,6 +132,7 @@ if ($LASTEXITCODE -ne 0) {
     --self-contained true `
     -p:UseAppHost=true `
     -p:PublishSingleFile=false `
+    @versionProperties `
     -o $trayOutput
 
 if ($LASTEXITCODE -ne 0) {

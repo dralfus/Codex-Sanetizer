@@ -46,13 +46,28 @@ public static class ProductSmokeRunner
         ArgumentNullException.ThrowIfNull(hmacSecret);
 
         CopyInstalledArtifact(appSourceDirectory, installDirectory);
-        var appArtifactPath = Path.Combine(installDirectory, "CodexRedactionGate.Tray.exe");
-        if (!File.Exists(appArtifactPath))
-        {
-            appArtifactPath = Path.Combine(installDirectory, "CodexRedactionGate.exe");
-        }
+        var appArtifactPath = ResolveInstalledArtifactPath(installDirectory);
 
         return Run(layout, appArtifactPath, hmacSecret);
+    }
+
+    private static string ResolveInstalledArtifactPath(string installDirectory)
+    {
+        foreach (var fileName in new[]
+        {
+            "CodexRedactionGate.Tray.exe",
+            "CodexRedactionGate.exe",
+            "CodexRedactionGate.dll"
+        })
+        {
+            var candidate = Path.Combine(installDirectory, fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return Path.Combine(installDirectory, "CodexRedactionGate.Tray.exe");
     }
 
     public static ProductSmokeReport Run(DefaultStorageLayout layout, string appArtifactPath, byte[] hmacSecret)

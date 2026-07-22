@@ -22,6 +22,7 @@ if ([string]::IsNullOrWhiteSpace($BuildVersion)) {
     -Runtime $Runtime `
     -OutputDirectory $PublishDirectory `
     -ScannerSourceDirectory $ScannerSourceDirectory `
+    -BuildVersion $BuildVersion `
     -RequireScannerPackage:$RequireScannerPackage
 
 if ($LASTEXITCODE -ne 0) {

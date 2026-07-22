@@ -1333,6 +1333,56 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayNotifyIconText_CarriesBuildVersionAndStaysWithinWindowsLimit()
+    {
+        var text = TrayStatusFormatter.FormatNotifyIconText(
+            new TrayProtectionState(
+                Enabled: true,
+                Mode: "NativeSubmit",
+                Hotkey: "Ctrl+Shift+F9",
+                LastStatus: OsInteractionStatusIds.Protected,
+                LastDecision: null,
+                LastReplacementCount: null,
+                LastProfileId: "codex-desktop",
+                LastApplied: false,
+                LastSubmitted: false,
+                NativeSubmitEnabled: true,
+                NativeSubmitStatus: OsInteractionStatusIds.Protected,
+                ProtectedSendBinding: "Enter",
+                NewlineBinding: "Ctrl+Enter",
+                ManualScanHotkey: "Ctrl+Shift+F9",
+                ReadinessStatus: OsInteractionStatusIds.Protected,
+                ComposerProtected: true,
+                ResidentProcess: true),
+            "0.1.20260722.t1234");
+
+        Assert.That(text, Does.StartWith("CodexRG 0.1.20260722.t1234"));
+        Assert.That(text.Length, Is.LessThanOrEqualTo(63));
+        Assert.That(text, Does.Not.Contain("ACME Banking"));
+        Assert.That(text, Does.Not.Contain("SENSITIVE_MARKER"));
+    }
+
+    [Test]
+    public void TrayMenuContent_FormatsBuildVersionForResidentUi()
+    {
+        var menuItem = TrayMenuContent.FormatBuildVersionMenuItem(" 0.1.20260722.t1234 ");
+        var helpText = TrayMenuContent.FormatBuildVersionHelpText("0.1.20260722.t1234");
+
+        Assert.That(menuItem, Is.EqualTo("Version: 0.1.20260722.t1234"));
+        Assert.That(helpText, Does.Contain("Build version:"));
+        Assert.That(helpText, Does.Contain("0.1.20260722.t1234"));
+        Assert.That(TrayMenuContent.FormatBuildVersionMenuItem(" "), Is.EqualTo("Version: unknown"));
+    }
+
+    [Test]
+    public void BuildVersion_UsesInformationalVersionBeforeAssemblyVersion()
+    {
+        Assert.That(BuildVersion.Normalize(" 0.1.20260722.t1234 ", new Version(1, 2, 3, 4)), Is.EqualTo("0.1.20260722.t1234"));
+        Assert.That(BuildVersion.Normalize(null, new Version(1, 2, 3, 4)), Is.EqualTo("1.2.3.4"));
+        Assert.That(BuildVersion.Normalize(" ", null), Is.EqualTo("unknown"));
+    }
+
+    [Test]
     public void TrayProtectionController_SeparatesProtectedSendBindingFromManualHotkey()
     {
         var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
@@ -3667,6 +3717,9 @@ public partial class SanitizerTests
 
         Assert.That(script, Does.Contain("$ScannerSourceDirectory"));
         Assert.That(script, Does.Contain("$RequireScannerPackage"));
+        Assert.That(script, Does.Contain("[string] $BuildVersion"));
+        Assert.That(script, Does.Contain("-p:InformationalVersion=$BuildVersion"));
+        Assert.That(script, Does.Contain("-p:IncludeSourceRevisionInInformationalVersion=false"));
         Assert.That(script, Does.Contain("gitleaks.exe"));
         Assert.That(script, Does.Contain("gitleaks-provenance.json"));
         Assert.That(script, Does.Contain("Scanner package is partial"));
@@ -3687,6 +3740,7 @@ public partial class SanitizerTests
         Assert.That(installerScript, Does.Contain("Get-Command iscc"));
         Assert.That(installerScript, Does.Contain("Programs\\Inno Setup 6\\ISCC.exe"));
         Assert.That(installerScript, Does.Contain("/DMyAppVersion=$BuildVersion"));
+        Assert.That(installerScript, Does.Contain("-BuildVersion $BuildVersion"));
         Assert.That(installerScript, Does.Contain("CodexRedactionGateSetup-*.exe"));
         Assert.That(installerScript, Does.Contain("CodexRedactionGateSetup-$BuildVersion.exe"));
         Assert.That(installerScript, Does.Contain("Expected installer was not created"));
@@ -3699,6 +3753,7 @@ public partial class SanitizerTests
     {
         var traySourceText = ProductSourceText("WindowsTrayApp.cs");
 
+        Assert.That(traySourceText, Does.Contain("FormatBuildVersionMenuItem"));
         Assert.That(traySourceText, Does.Contain("Open sensitive terms"));
         Assert.That(traySourceText, Does.Contain("DictionaryManagementForm"));
         Assert.That(TrayMenuContent.RuleManagementCommand.CliArgument, Is.EqualTo("--dictionary-ui"));
@@ -3801,6 +3856,7 @@ public partial class SanitizerTests
                 DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data")),
                 TestSecret());
             var rendered = string.Join(Environment.NewLine, ProductSmokeRunner.RenderRawFree(report));
+            TestContext.WriteLine(rendered);
 
             Assert.That(report.Passed, Is.True);
             Assert.That(report.InstallArtifactPresent, Is.True);
