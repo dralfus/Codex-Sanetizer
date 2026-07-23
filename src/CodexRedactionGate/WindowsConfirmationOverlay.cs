@@ -16,6 +16,9 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
         "activate",
         "focus",
         "set_foreground_window",
+        "attach_thread_input",
+        "set_window_pos",
+        "bring_window_to_top",
         "flash_window"
     };
 
@@ -227,6 +230,46 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
             return _foregroundActivated;
         }
 
+        public IntPtr GetForegroundWindow()
+        {
+            return new IntPtr(7);
+        }
+
+        public uint GetWindowThreadProcessId(IntPtr hWnd)
+        {
+            return 100;
+        }
+
+        public uint GetCurrentThreadId()
+        {
+            return 200;
+        }
+
+        public bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach)
+        {
+            return true;
+        }
+
+        public bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags)
+        {
+            return true;
+        }
+
+        public bool BringWindowToTop(IntPtr hWnd)
+        {
+            return true;
+        }
+
+        public IntPtr SetActiveWindow(IntPtr hWnd)
+        {
+            return hWnd;
+        }
+
+        public IntPtr SetFocus(IntPtr hWnd)
+        {
+            return hWnd;
+        }
+
         public bool FlashWindow(IntPtr hWnd, bool invert)
         {
             return true;
@@ -262,6 +305,22 @@ internal interface IConfirmationOverlayNativeMethods
 
     bool SetForegroundWindow(IntPtr hWnd);
 
+    IntPtr GetForegroundWindow();
+
+    uint GetWindowThreadProcessId(IntPtr hWnd);
+
+    uint GetCurrentThreadId();
+
+    bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+
+    bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    bool BringWindowToTop(IntPtr hWnd);
+
+    IntPtr SetActiveWindow(IntPtr hWnd);
+
+    IntPtr SetFocus(IntPtr hWnd);
+
     bool FlashWindow(IntPtr hWnd, bool invert);
 }
 
@@ -280,12 +339,18 @@ internal static class ConfirmationOverlayForegroundActivation
         }
 
         nativeMethods.ShowWindow(window.Handle, SwShow);
+        nativeMethods.SetWindowPos(window.Handle, HwndTopMost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpShowWindow);
         window.TopMost = false;
         window.TopMost = true;
         window.BringToFront();
         window.Activate();
         window.Focus();
         var foregroundActivated = nativeMethods.SetForegroundWindow(window.Handle);
+        if (!foregroundActivated)
+        {
+            foregroundActivated = TryAttachToForegroundThread(window.Handle, nativeMethods);
+        }
+
         var actionRequiredStatusVisible = !foregroundActivated;
         if (actionRequiredStatusVisible)
         {
@@ -300,6 +365,43 @@ internal static class ConfirmationOverlayForegroundActivation
     }
 
     private const int SwShow = 5;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpShowWindow = 0x0040;
+    private static readonly IntPtr HwndTopMost = new(-1);
+
+    private static bool TryAttachToForegroundThread(IntPtr handle, IConfirmationOverlayNativeMethods nativeMethods)
+    {
+        var foreground = nativeMethods.GetForegroundWindow();
+        var foregroundThreadId = foreground == IntPtr.Zero
+            ? 0
+            : nativeMethods.GetWindowThreadProcessId(foreground);
+        var currentThreadId = nativeMethods.GetCurrentThreadId();
+        if (foregroundThreadId == 0 || currentThreadId == 0 || foregroundThreadId == currentThreadId)
+        {
+            nativeMethods.BringWindowToTop(handle);
+            nativeMethods.SetActiveWindow(handle);
+            nativeMethods.SetFocus(handle);
+            return nativeMethods.SetForegroundWindow(handle);
+        }
+
+        var attached = nativeMethods.AttachThreadInput(currentThreadId, foregroundThreadId, attach: true);
+        try
+        {
+            nativeMethods.BringWindowToTop(handle);
+            nativeMethods.SetActiveWindow(handle);
+            nativeMethods.SetFocus(handle);
+            nativeMethods.SetWindowPos(handle, HwndTopMost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpShowWindow);
+            return nativeMethods.SetForegroundWindow(handle);
+        }
+        finally
+        {
+            if (attached)
+            {
+                nativeMethods.AttachThreadInput(currentThreadId, foregroundThreadId, attach: false);
+            }
+        }
+    }
 }
 
 internal sealed class Win32ConfirmationOverlayNativeMethods : IConfirmationOverlayNativeMethods
@@ -320,6 +422,46 @@ internal sealed class Win32ConfirmationOverlayNativeMethods : IConfirmationOverl
         return SetForegroundWindowNative(hWnd);
     }
 
+    public IntPtr GetForegroundWindow()
+    {
+        return GetForegroundWindowNative();
+    }
+
+    public uint GetWindowThreadProcessId(IntPtr hWnd)
+    {
+        return GetWindowThreadProcessIdNative(hWnd, out _);
+    }
+
+    public uint GetCurrentThreadId()
+    {
+        return GetCurrentThreadIdNative();
+    }
+
+    public bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach)
+    {
+        return AttachThreadInputNative(idAttach, idAttachTo, attach);
+    }
+
+    public bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags)
+    {
+        return SetWindowPosNative(hWnd, hWndInsertAfter, x, y, cx, cy, flags);
+    }
+
+    public bool BringWindowToTop(IntPtr hWnd)
+    {
+        return BringWindowToTopNative(hWnd);
+    }
+
+    public IntPtr SetActiveWindow(IntPtr hWnd)
+    {
+        return SetActiveWindowNative(hWnd);
+    }
+
+    public IntPtr SetFocus(IntPtr hWnd)
+    {
+        return SetFocusNative(hWnd);
+    }
+
     public bool FlashWindow(IntPtr hWnd, bool invert)
     {
         return FlashWindowNative(hWnd, invert);
@@ -327,6 +469,30 @@ internal sealed class Win32ConfirmationOverlayNativeMethods : IConfirmationOverl
 
     [DllImport("user32.dll", EntryPoint = "SetForegroundWindow")]
     private static extern bool SetForegroundWindowNative(IntPtr hWnd);
+
+    [DllImport("user32.dll", EntryPoint = "GetForegroundWindow")]
+    private static extern IntPtr GetForegroundWindowNative();
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")]
+    private static extern uint GetWindowThreadProcessIdNative(IntPtr hWnd, out uint processId);
+
+    [DllImport("kernel32.dll", EntryPoint = "GetCurrentThreadId")]
+    private static extern uint GetCurrentThreadIdNative();
+
+    [DllImport("user32.dll", EntryPoint = "AttachThreadInput")]
+    private static extern bool AttachThreadInputNative(uint idAttach, uint idAttachTo, bool attach);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowPos")]
+    private static extern bool SetWindowPosNative(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll", EntryPoint = "BringWindowToTop")]
+    private static extern bool BringWindowToTopNative(IntPtr hWnd);
+
+    [DllImport("user32.dll", EntryPoint = "SetActiveWindow")]
+    private static extern IntPtr SetActiveWindowNative(IntPtr hWnd);
+
+    [DllImport("user32.dll", EntryPoint = "SetFocus")]
+    private static extern IntPtr SetFocusNative(IntPtr hWnd);
 
     [DllImport("user32.dll", EntryPoint = "ShowWindow")]
     private static extern bool ShowWindowNative(IntPtr hWnd, int nCmdShow);

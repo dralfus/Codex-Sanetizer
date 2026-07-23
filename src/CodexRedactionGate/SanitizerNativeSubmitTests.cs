@@ -410,6 +410,49 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_HandlesNextProtectedSendAfterCancel()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitFlowCalls = 0;
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                submitFlowCalls++;
+                var status = submitFlowCalls == 1
+                    ? OsInteractionStatusIds.Canceled
+                    : OsInteractionStatusIds.Submitted;
+                return new OsInteractionResult(
+                    status,
+                    CreateNativeSubmitSurface("codex-desktop"),
+                    null,
+                    null,
+                    Applied: status == OsInteractionStatusIds.Submitted,
+                    Submitted: status == OsInteractionStatusIds.Submitted,
+                    Diagnostics: new Dictionary<string, string> { ["profile_id"] = "codex-desktop" });
+            },
+            profile);
+
+        controller.Start();
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        var afterCancel = controller.State;
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(submitFlowCalls, Is.EqualTo(2));
+        Assert.That(afterCancel.LastStatus, Is.EqualTo(OsInteractionStatusIds.Canceled));
+        Assert.That(afterCancel.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+        Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
+        Assert.That(controller.State.LastSubmitted, Is.True);
+        Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+    }
+
+    [Test]
     public void SurfaceCompatibilityEvaluator_WarnsWhenSelectedAppVersionOrProfileNoLongerMatches()
     {
         var profile = CreateProtectedProfile();
