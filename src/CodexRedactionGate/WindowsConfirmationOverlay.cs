@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -8,6 +9,23 @@ namespace CodexRedactionGate;
 
 public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
 {
+    public static IReadOnlyList<string> ForegroundActivationRequestCapabilities { get; } = new[]
+    {
+        "show_in_taskbar",
+        "topmost",
+        "activate",
+        "focus",
+        "set_foreground_window",
+        "flash_window"
+    };
+
+    public static ConfirmationOverlayForegroundActivationResult RunForegroundActivationSmoke(bool foregroundActivated)
+    {
+        var window = new SmokeForegroundWindow();
+        var native = new SmokeForegroundNativeMethods(foregroundActivated);
+        return ConfirmationOverlayForegroundActivation.Request(window, native);
+    }
+
     public ConfirmationDecision RequestConfirmation(ConfirmationUiModel model)
     {
         ArgumentNullException.ThrowIfNull(model);
@@ -46,7 +64,7 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
         return decision ?? ConfirmationDecisionContract.Cancel(model);
     }
 
-    private sealed class ConfirmationDialog : Form
+    private sealed class ConfirmationDialog : Form, IConfirmationOverlayWindow
     {
         public ConfirmationDialog(ConfirmationUiModel model)
         {
@@ -59,7 +77,12 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
             TopMost = true;
             ShowInTaskbar = true;
             Load += (_, _) => BringDialogToFront();
-            Shown += (_, _) => BringDialogToFront();
+            Shown += (_, _) =>
+            {
+                BringDialogToFront();
+                BeginInvoke(new Action(BringDialogToFront));
+            };
+            Activated += (_, _) => TopMost = true;
 
             var promptBox = new RichTextBox
             {
@@ -112,17 +135,7 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
 
         private void BringDialogToFront()
         {
-            if (WindowState == FormWindowState.Minimized)
-            {
-                WindowState = FormWindowState.Normal;
-            }
-
-            ShowWindow(Handle, SwShow);
-            TopMost = true;
-            BringToFront();
-            Activate();
-            SetForegroundWindow(Handle);
-            FlashWindow(Handle, invert: true);
+            ConfirmationOverlayForegroundActivation.Request(this, Win32ConfirmationOverlayNativeMethods.Instance);
         }
 
         private static void Highlight(RichTextBox promptBox, ConfirmationUiModel model)
@@ -160,15 +173,164 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
             return string.Join(Environment.NewLine, lines);
         }
 
-        private const int SwShow = 5;
-
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        private static extern bool FlashWindow(IntPtr hWnd, bool invert);
     }
+
+    private sealed class SmokeForegroundWindow : IConfirmationOverlayWindow
+    {
+        public IntPtr Handle { get; } = new(42);
+
+        public FormWindowState WindowState { get; set; }
+
+        public bool TopMost { get; set; }
+
+        public string Text { get; set; } = "Codex Redaction Gate";
+
+        public bool BroughtToFront { get; private set; }
+
+        public bool Activated { get; private set; }
+
+        public bool Focused { get; private set; }
+
+        public void BringToFront()
+        {
+            BroughtToFront = true;
+        }
+
+        public void Activate()
+        {
+            Activated = true;
+        }
+
+        public bool Focus()
+        {
+            Focused = true;
+            return true;
+        }
+    }
+
+    private sealed class SmokeForegroundNativeMethods : IConfirmationOverlayNativeMethods
+    {
+        private readonly bool _foregroundActivated;
+
+        public SmokeForegroundNativeMethods(bool foregroundActivated)
+        {
+            _foregroundActivated = foregroundActivated;
+        }
+
+        public bool ShowWindow(IntPtr hWnd, int command)
+        {
+            return true;
+        }
+
+        public bool SetForegroundWindow(IntPtr hWnd)
+        {
+            return _foregroundActivated;
+        }
+
+        public bool FlashWindow(IntPtr hWnd, bool invert)
+        {
+            return true;
+        }
+    }
+}
+
+public sealed record ConfirmationOverlayForegroundActivationResult(
+    bool ForegroundActivated,
+    bool ActionRequiredStatusVisible,
+    IReadOnlyList<string> RequestedCapabilities);
+
+internal interface IConfirmationOverlayWindow
+{
+    IntPtr Handle { get; }
+
+    FormWindowState WindowState { get; set; }
+
+    bool TopMost { get; set; }
+
+    string Text { get; set; }
+
+    void BringToFront();
+
+    void Activate();
+
+    bool Focus();
+}
+
+internal interface IConfirmationOverlayNativeMethods
+{
+    bool ShowWindow(IntPtr hWnd, int command);
+
+    bool SetForegroundWindow(IntPtr hWnd);
+
+    bool FlashWindow(IntPtr hWnd, bool invert);
+}
+
+internal static class ConfirmationOverlayForegroundActivation
+{
+    public static ConfirmationOverlayForegroundActivationResult Request(
+        IConfirmationOverlayWindow window,
+        IConfirmationOverlayNativeMethods nativeMethods)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(nativeMethods);
+
+        if (window.WindowState == FormWindowState.Minimized)
+        {
+            window.WindowState = FormWindowState.Normal;
+        }
+
+        nativeMethods.ShowWindow(window.Handle, SwShow);
+        window.TopMost = false;
+        window.TopMost = true;
+        window.BringToFront();
+        window.Activate();
+        window.Focus();
+        var foregroundActivated = nativeMethods.SetForegroundWindow(window.Handle);
+        var actionRequiredStatusVisible = !foregroundActivated;
+        if (actionRequiredStatusVisible)
+        {
+            window.Text = "Codex Redaction Gate - Action required";
+        }
+
+        nativeMethods.FlashWindow(window.Handle, invert: true);
+        return new ConfirmationOverlayForegroundActivationResult(
+            foregroundActivated,
+            actionRequiredStatusVisible,
+            WindowsConfirmationOverlay.ForegroundActivationRequestCapabilities);
+    }
+
+    private const int SwShow = 5;
+}
+
+internal sealed class Win32ConfirmationOverlayNativeMethods : IConfirmationOverlayNativeMethods
+{
+    public static Win32ConfirmationOverlayNativeMethods Instance { get; } = new();
+
+    private Win32ConfirmationOverlayNativeMethods()
+    {
+    }
+
+    public bool ShowWindow(IntPtr hWnd, int command)
+    {
+        return ShowWindowNative(hWnd, command);
+    }
+
+    public bool SetForegroundWindow(IntPtr hWnd)
+    {
+        return SetForegroundWindowNative(hWnd);
+    }
+
+    public bool FlashWindow(IntPtr hWnd, bool invert)
+    {
+        return FlashWindowNative(hWnd, invert);
+    }
+
+    [DllImport("user32.dll", EntryPoint = "SetForegroundWindow")]
+    private static extern bool SetForegroundWindowNative(IntPtr hWnd);
+
+    [DllImport("user32.dll", EntryPoint = "ShowWindow")]
+    private static extern bool ShowWindowNative(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll", EntryPoint = "FlashWindow")]
+    private static extern bool FlashWindowNative(IntPtr hWnd, bool invert);
 }

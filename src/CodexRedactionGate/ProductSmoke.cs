@@ -25,6 +25,10 @@ public sealed record ProductSmokeReport(
     bool RestorePassed,
     bool UninstallSafePassed,
     bool NativeSubmitInterceptionPassed,
+    bool NativeSubmitRepeatabilityPassed,
+    bool NativeSubmitDuplicateGuardPassed,
+    bool NativeSubmitOverlayForegroundRequestPassed,
+    bool NativeSubmitOverlayForegroundRefusalStatusPassed,
     bool NativeProfileVerificationEntrypointsPassed,
     bool RawFreeArtifactsPassed,
     int AuditRowCount,
@@ -264,6 +268,10 @@ public static class ProductSmokeRunner
                 RestorePassed: restorePassed,
                 UninstallSafePassed: uninstallSafePassed,
                 NativeSubmitInterceptionPassed: nativeSubmit.Passed,
+                NativeSubmitRepeatabilityPassed: nativeSubmit.RepeatedSubmitPassed,
+                NativeSubmitDuplicateGuardPassed: nativeSubmit.DuplicateSendGuardPassed,
+                NativeSubmitOverlayForegroundRequestPassed: nativeSubmit.OverlayForegroundRequestPassed,
+                NativeSubmitOverlayForegroundRefusalStatusPassed: nativeSubmit.OverlayForegroundRefusalStatusPassed,
                 NativeProfileVerificationEntrypointsPassed: nativeProfileVerificationEntrypointsPassed,
                 RawFreeArtifactsPassed: false,
                 AuditRowCount: auditView.Rows.Count,
@@ -291,6 +299,10 @@ public static class ProductSmokeRunner
             && projectFileProtectionStatusPassed
             && projectFileReadOnlySmoke.Passed
             && projectFileProductSmoke.Passed
+            && nativeSubmit.RepeatedSubmitPassed
+            && nativeSubmit.DuplicateSendGuardPassed
+            && nativeSubmit.OverlayForegroundRequestPassed
+            && nativeSubmit.OverlayForegroundRefusalStatusPassed
             && nativeProfileVerificationEntrypointsPassed
             && rawFreePassed;
 
@@ -314,6 +326,10 @@ public static class ProductSmokeRunner
             RestorePassed: restorePassed,
             UninstallSafePassed: uninstallSafePassed,
             NativeSubmitInterceptionPassed: nativeSubmit.Passed,
+            NativeSubmitRepeatabilityPassed: nativeSubmit.RepeatedSubmitPassed,
+            NativeSubmitDuplicateGuardPassed: nativeSubmit.DuplicateSendGuardPassed,
+            NativeSubmitOverlayForegroundRequestPassed: nativeSubmit.OverlayForegroundRequestPassed,
+            NativeSubmitOverlayForegroundRefusalStatusPassed: nativeSubmit.OverlayForegroundRefusalStatusPassed,
             NativeProfileVerificationEntrypointsPassed: nativeProfileVerificationEntrypointsPassed,
             RawFreeArtifactsPassed: rawFreePassed,
             AuditRowCount: auditView.Rows.Count,
@@ -368,6 +384,10 @@ public static class ProductSmokeRunner
             $"restore: {report.RestorePassed.ToString().ToLowerInvariant()}",
             $"uninstall_safe_default: {report.UninstallSafePassed.ToString().ToLowerInvariant()}",
             $"native_submit_interception: {report.NativeSubmitInterceptionPassed.ToString().ToLowerInvariant()}",
+            $"native_submit_repeatability: {report.NativeSubmitRepeatabilityPassed.ToString().ToLowerInvariant()}",
+            $"native_submit_duplicate_guard: {report.NativeSubmitDuplicateGuardPassed.ToString().ToLowerInvariant()}",
+            $"native_submit_overlay_foreground_request: {report.NativeSubmitOverlayForegroundRequestPassed.ToString().ToLowerInvariant()}",
+            $"native_submit_overlay_foreground_refusal_status: {report.NativeSubmitOverlayForegroundRefusalStatusPassed.ToString().ToLowerInvariant()}",
             $"native_profile_verification_entrypoints: {report.NativeProfileVerificationEntrypointsPassed.ToString().ToLowerInvariant()}",
             $"raw_free_artifacts: {report.RawFreeArtifactsPassed.ToString().ToLowerInvariant()}",
             $"audit_rows: {report.AuditRowCount}",

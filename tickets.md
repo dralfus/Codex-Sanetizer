@@ -2985,3 +2985,67 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - [x] A profile is saved as `protected` only after focused composer verification succeeds for that profile.
 - [x] Failed verification remains `surface_unverified` or `binding_unknown` with raw-free diagnostics.
 - [x] Product smoke or release tests prove the Codex/ChatGPT native submit readiness path remains present every run.
+
+## 210. Make native submit confirmation repeatable
+
+**What to build:** Fix the live native submit flow so every matching Send gesture in a verified Codex/ChatGPT composer is treated as a fresh protected submit attempt. After one confirm, cancel, block or failure, Code Sanitizer must remain ready for the next protected Send instead of behaving like a one-shot replacement flow.
+
+**Blocked by:** None - can start immediately.
+
+**Do not:** Depend on a live cloud submission, reset protected profile verification, or use apply-only/manual hotkey evidence as proof that native submit is working.
+
+**Verification result 2026-07-23:** implemented resident native submit flow tracking that keeps protected readiness separate from the last flow result; build passed with 0 warnings/0 errors; focused native submit tests passed 11/11; full tests passed 353/353; `--product-smoke` printed `native_submit_repeatability: true`.
+
+- [x] Repeated matching Send gestures in the same protected session each run sanitizer/confirmation independently.
+- [x] Confirming the first replacement does not disable or satisfy later sensitive prompts.
+- [x] Cancel, block and failure paths leave the resident hook ready for the next protected Send.
+- [x] Raw-free diagnostics expose the last attempt status without storing prompt text or sensitive values.
+- [x] Focused tests cover repeated protected Send attempts using disposable/fake surfaces.
+
+## 211. Activate the replacement overlay in front of the AI app
+
+**What to build:** Make the native submit replacement confirmation overlay request active foreground display whenever it appears, so the user sees the security decision instead of a hidden background window.
+
+**Blocked by:** None - can start immediately.
+
+**Do not:** Log raw prompt text, screenshots, full window titles or raw sensitive terms while debugging focus behavior.
+
+**Verification result 2026-07-23:** strengthened `WindowsConfirmationOverlay` to request topmost foreground activation on show and again via the UI message queue; failed foreground activation produces a raw-free action-required status through the foreground activation seam; focused overlay tests passed 2/2; full tests passed 353/353.
+
+- [x] The replacement overlay requests foreground activation/topmost visibility when shown for a native submit decision.
+- [x] The overlay remains raw-free and shows sanitized text, counts and actions only through the existing confirmation model.
+- [x] If Windows refuses foreground activation, Code Sanitizer surfaces a visible raw-free warning/status and sends nothing raw.
+- [x] Regression tests cover the activation request at the confirmation UI boundary.
+- [x] Manual checklist instructs the tester to verify the overlay is the active foreground window.
+
+## 212. Guard duplicate sends while a confirmation is already open
+
+**What to build:** Handle the case where the user presses Send again while a replacement confirmation overlay is still open. Code Sanitizer must not replay the native submit binding or send raw input; it should keep the current decision active or report an in-progress status.
+
+**Blocked by:** 210. Make native submit confirmation repeatable; 211. Activate the replacement overlay in front of the AI app.
+
+**Do not:** Queue raw prompts, open multiple overlapping replacement windows for the same composer, or silently pass the second Send through.
+
+**Verification result 2026-07-23:** added an atomic resident-flow guard; duplicate protected Send while a confirmation flow is running is suppressed as `native_submit_in_progress` and does not replay the native submit binding; focused native submit tests passed 11/11; full tests passed 353/353.
+
+- [x] A duplicate protected Send during an open confirmation is suppressed or ignored safely.
+- [x] The existing overlay remains active or is brought back to foreground.
+- [x] The duplicate path records only raw-free in-progress/status diagnostics.
+- [x] After the user confirms, cancels or closes the overlay, the next protected Send is handled normally.
+- [x] Tests cover duplicate Send during confirm, cancel, block and failure flows.
+
+## 213. Add product smoke coverage for repeated native submit overlay behavior
+
+**What to build:** Extend release/product verification so repeated native submit behavior and overlay activation are checked every run with disposable surfaces. The smoke should prove that readiness, repeated Send handling, foreground overlay activation request and raw-free diagnostics remain present.
+
+**Blocked by:** 210. Make native submit confirmation repeatable; 211. Activate the replacement overlay in front of the AI app; 212. Guard duplicate sends while a confirmation is already open.
+
+**Do not:** Use real sensitive data, depend on a real Codex/ChatGPT cloud submission, or claim guaranteed OS foreground activation when Windows policy refuses focus.
+
+**Verification result 2026-07-23:** extended native/product smoke with separate raw-free statuses for repeated submit, duplicate guard, overlay foreground request and foreground-refusal status; smoke covers three resident Send attempts, each using the full confirm-and-send sanitizer/confirmation flow; `--product-smoke` passed and printed all statuses as `true`; full tests passed 353/353.
+
+- [x] Product smoke reports repeated native submit confirmation coverage as a separate raw-free status.
+- [x] Smoke covers at least three protected Send attempts in one resident session.
+- [x] Smoke covers overlay foreground activation request and duplicate-send handling.
+- [x] `--product-smoke` remains raw-free and does not include raw prompt, raw window title, screenshots or sensitive values.
+- [x] The OS adapter checklist includes the live manual retest: repeat protected Send at least three times and verify the overlay is active each time.

@@ -3877,11 +3877,22 @@ public partial class SanitizerTests
     public void WindowsConfirmationOverlay_RequestsForegroundActivationForReplacementDialog()
     {
         var sourceText = ProductSourceText("WindowsConfirmationOverlay.cs");
+        var foregroundActivated = WindowsConfirmationOverlay.RunForegroundActivationSmoke(foregroundActivated: true);
+        var foregroundDenied = WindowsConfirmationOverlay.RunForegroundActivationSmoke(foregroundActivated: false);
 
         Assert.That(sourceText, Does.Contain("ShowInTaskbar = true"));
         Assert.That(sourceText, Does.Contain("BringDialogToFront"));
+        Assert.That(sourceText, Does.Contain("BeginInvoke(new Action(BringDialogToFront))"));
+        Assert.That(sourceText, Does.Contain("Focus()"));
         Assert.That(sourceText, Does.Contain("SetForegroundWindow"));
+        Assert.That(sourceText, Does.Contain("foregroundActivated"));
+        Assert.That(sourceText, Does.Contain("Action required"));
         Assert.That(sourceText, Does.Contain("FlashWindow"));
+        Assert.That(foregroundActivated.ForegroundActivated, Is.True);
+        Assert.That(foregroundActivated.ActionRequiredStatusVisible, Is.False);
+        Assert.That(foregroundActivated.RequestedCapabilities, Does.Contain("set_foreground_window"));
+        Assert.That(foregroundDenied.ForegroundActivated, Is.False);
+        Assert.That(foregroundDenied.ActionRequiredStatusVisible, Is.True);
     }
 
     [Test]
@@ -3961,6 +3972,11 @@ public partial class SanitizerTests
             Assert.That(report.AuditViewPassed, Is.True);
             Assert.That(report.RestorePassed, Is.True);
             Assert.That(report.UninstallSafePassed, Is.True);
+            Assert.That(report.NativeSubmitInterceptionPassed, Is.True);
+            Assert.That(report.NativeSubmitRepeatabilityPassed, Is.True);
+            Assert.That(report.NativeSubmitDuplicateGuardPassed, Is.True);
+            Assert.That(report.NativeSubmitOverlayForegroundRequestPassed, Is.True);
+            Assert.That(report.NativeSubmitOverlayForegroundRefusalStatusPassed, Is.True);
             Assert.That(report.NativeProfileVerificationEntrypointsPassed, Is.True);
             Assert.That(report.RawFreeArtifactsPassed, Is.True);
             Assert.That(rendered, Does.Contain("supported_targets: windows_codex_chatgpt_desktop_only"));
@@ -3968,6 +3984,11 @@ public partial class SanitizerTests
             Assert.That(rendered, Does.Contain("apply_only_write_back: true"));
             Assert.That(rendered, Does.Contain("project_file_read_only_smoke: true"));
             Assert.That(rendered, Does.Contain("project_file_product_smoke: true"));
+            Assert.That(rendered, Does.Contain("native_submit_interception: true"));
+            Assert.That(rendered, Does.Contain("native_submit_repeatability: true"));
+            Assert.That(rendered, Does.Contain("native_submit_duplicate_guard: true"));
+            Assert.That(rendered, Does.Contain("native_submit_overlay_foreground_request: true"));
+            Assert.That(rendered, Does.Contain("native_submit_overlay_foreground_refusal_status: true"));
             Assert.That(rendered, Does.Contain("native_profile_verification_entrypoints: true"));
             Assert.That(rendered, Does.Not.Contain("192.168.10.25"));
             Assert.That(rendered, Does.Not.Contain("Product Smoke Customer"));
@@ -5834,6 +5855,10 @@ public class CliTests
         Assert.That(stdout, Does.Contain("apply_only_write_back: true"));
         Assert.That(stdout, Does.Contain("project_file_read_only_smoke: true"));
         Assert.That(stdout, Does.Contain("project_file_product_smoke: true"));
+        Assert.That(stdout, Does.Contain("native_submit_repeatability: true"));
+        Assert.That(stdout, Does.Contain("native_submit_duplicate_guard: true"));
+        Assert.That(stdout, Does.Contain("native_submit_overlay_foreground_request: true"));
+        Assert.That(stdout, Does.Contain("native_submit_overlay_foreground_refusal_status: true"));
         Assert.That(stdout, Does.Contain("audit_view: true"));
         Assert.That(stdout, Does.Contain("restore: true"));
         Assert.That(stdout, Does.Contain("uninstall_safe_default: true"));

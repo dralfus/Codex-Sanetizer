@@ -32,6 +32,7 @@ public static class OsInteractionStatusIds
     public const string SurfaceUnverified = "surface_unverified";
     public const string DegradedHotkeyOnly = "degraded_hotkey_only";
     public const string NativeSubmitGuarded = "native_submit_guarded";
+    public const string NativeSubmitInProgress = "native_submit_in_progress";
     public const string NativeSubmitPassThrough = "native_submit_pass_through";
     public const string EmergencyDisabled = "emergency_disabled";
     public const string EnterpriseBlocked = "enterprise_blocked";

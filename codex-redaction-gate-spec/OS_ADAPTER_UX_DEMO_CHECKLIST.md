@@ -80,6 +80,8 @@ Try a real Codex/ChatGPT app only after the disposable target works:
 9. Stop dry-run, start `--os-demo-hotkey-apply`.
 10. Trigger Ctrl+Enter, confirm, and verify the composer contains exactly `sanitized_text`. For Electron composers without writable `ValuePattern`, this write-back can use verified keyboard paste after confirmation.
 11. Verify cancel, block, focus loss, stale element, write failure and verification mismatch leave the app unsubmitted.
+12. Repeat the same protected Send flow at least three times in the same task and verify the replacement overlay appears every time sensitive text is detected.
+13. Verify each replacement overlay becomes the active foreground window; if Windows refuses focus activation, verify Code Sanitizer shows a visible raw-free status and sends nothing raw.
 
 Record app/channel/version evidence without prompt text:
 
@@ -105,6 +107,8 @@ Use `--send-mode-show` to inspect the gate and `--send-mode-disable` to turn the
 - Write-back failure must not submit.
 - Verification mismatch after write-back must not submit.
 - Block decisions must not modify or submit.
+- Repeated protected Send attempts must not become one-shot; each matching Send must run the sanitizer/confirmation path again.
+- Replacement confirmation overlay must request active foreground display when shown.
 - Diagnostics and audit must not include raw prompt text, screenshots or full window contents.
 
 ## Future Adapter Notes

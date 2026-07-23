@@ -309,6 +309,104 @@ public partial class SanitizerTests
         Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
         Assert.That(controller.State.LastSubmitted, Is.True);
         Assert.That(controller.State.LastProfileId, Is.EqualTo("codex-desktop"));
+        Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+        Assert.That(controller.State.ComposerProtected, Is.True);
+    }
+
+    [Test]
+    public void TrayProtectionController_RunsSuppressedSubmitFlowForEveryProtectedSend()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitFlowCalls = 0;
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                submitFlowCalls++;
+                return new OsInteractionResult(
+                    OsInteractionStatusIds.Submitted,
+                    CreateNativeSubmitSurface("codex-desktop"),
+                    null,
+                    null,
+                    Applied: true,
+                    Submitted: true,
+                    Diagnostics: new Dictionary<string, string> { ["profile_id"] = "codex-desktop" });
+            },
+            profile);
+
+        controller.Start();
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(submitFlowCalls, Is.EqualTo(3));
+        Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
+        Assert.That(controller.State.LastSubmitted, Is.True);
+        Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+        Assert.That(controller.State.ComposerProtected, Is.True);
+    }
+
+    [Test]
+    public void TrayProtectionController_SuppressesDuplicateSendDuringConfirmCancelAndBlockFlows()
+    {
+        foreach (var flowStatus in new[]
+        {
+            OsInteractionStatusIds.Submitted,
+            OsInteractionStatusIds.Canceled,
+            OsInteractionStatusIds.Blocked,
+            OsInteractionStatusIds.FailedClosed
+        })
+        {
+            var hook = new FakeNativeSubmitHookHost();
+            var profile = CreateProtectedProfile();
+            TrayProtectionController? controller = null;
+            var submitFlowCalls = 0;
+            var inProgressStatusSeen = false;
+            controller = new TrayProtectionController(
+                new FakeTrayHotkeyHost(),
+                () => throw new InvalidOperationException("Manual scan should not run."),
+                hook,
+                new NativeSubmitInterceptionController(
+                    profile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () =>
+                {
+                    submitFlowCalls++;
+                    if (submitFlowCalls == 1)
+                    {
+                        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+                        inProgressStatusSeen = controller!.State.LastStatus == OsInteractionStatusIds.NativeSubmitInProgress
+                            && controller.State.LastSubmitted == false
+                            && controller.State.NativeSubmitStatus == OsInteractionStatusIds.Protected;
+                    }
+
+                    return new OsInteractionResult(
+                        flowStatus,
+                        CreateNativeSubmitSurface("codex-desktop"),
+                        null,
+                        null,
+                        Applied: flowStatus == OsInteractionStatusIds.Submitted,
+                        Submitted: flowStatus == OsInteractionStatusIds.Submitted,
+                        Diagnostics: new Dictionary<string, string> { ["profile_id"] = "codex-desktop" });
+                },
+                profile);
+
+            controller.Start();
+            hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+            hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+            Assert.That(submitFlowCalls, Is.EqualTo(2), flowStatus);
+            Assert.That(inProgressStatusSeen, Is.True, flowStatus);
+            Assert.That(controller.State.LastStatus, Is.EqualTo(flowStatus), flowStatus);
+            Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected), flowStatus);
+            Assert.That(controller.State.ComposerProtected, Is.True, flowStatus);
+        }
     }
 
     [Test]
@@ -336,10 +434,18 @@ public partial class SanitizerTests
         Assert.That(report.BindingVerificationPassed, Is.True);
         Assert.That(report.GuardPassed, Is.True);
         Assert.That(report.ConfirmAndSendPassed, Is.True);
+        Assert.That(report.RepeatedSubmitPassed, Is.True);
+        Assert.That(report.DuplicateSendGuardPassed, Is.True);
+        Assert.That(report.OverlayForegroundRequestPassed, Is.True);
+        Assert.That(report.OverlayForegroundRefusalStatusPassed, Is.True);
         Assert.That(report.EmergencyDisablePassed, Is.True);
         Assert.That(report.EnterpriseEnforcementPassed, Is.True);
         Assert.That(report.MismatchWarningPassed, Is.True);
         Assert.That(rendered, Does.Contain("windows_codex_chatgpt_desktop_only"));
+        Assert.That(rendered, Does.Contain("repeated_submit_confirmation: true"));
+        Assert.That(rendered, Does.Contain("duplicate_send_guard: true"));
+        Assert.That(rendered, Does.Contain("overlay_foreground_request: true"));
+        Assert.That(rendered, Does.Contain("overlay_foreground_refusal_status: true"));
         Assert.That(rendered, Does.Not.Contain("192.168.10.25"));
     }
 
@@ -353,6 +459,10 @@ public partial class SanitizerTests
         Assert.That(stderr, Is.Empty);
         Assert.That(stdout, Does.Contain("native_submit_status: native_submit_smoke_passed"));
         Assert.That(stdout, Does.Contain("guard_interception: true"));
+        Assert.That(stdout, Does.Contain("repeated_submit_confirmation: true"));
+        Assert.That(stdout, Does.Contain("duplicate_send_guard: true"));
+        Assert.That(stdout, Does.Contain("overlay_foreground_request: true"));
+        Assert.That(stdout, Does.Contain("overlay_foreground_refusal_status: true"));
         Assert.That(stdout, Does.Not.Contain("192.168.10.25"));
     }
 

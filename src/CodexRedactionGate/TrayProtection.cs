@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 
 namespace CodexRedactionGate;
 
@@ -52,6 +53,7 @@ internal sealed class TrayProtectionController
     private readonly Func<OsInteractionResult>? _nativeSubmitRunner;
     private readonly SubmitBindingProfile? _nativeProfile;
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
+    private int _nativeSubmitFlowInProgress;
 
     public TrayProtectionController(ITrayHotkeyHost hotkeyHost, Func<OsInteractionResult> applyOnlyRunner)
         : this(hotkeyHost, applyOnlyRunner, null, null, null)
@@ -188,28 +190,76 @@ internal sealed class TrayProtectionController
             return;
         }
 
-        var result = _nativeSubmitController.HandleGesture(gesture, _nativeSubmitRunner);
+        if (Interlocked.Exchange(ref _nativeSubmitFlowInProgress, 1) == 1)
+        {
+            PublishNativeSubmitState(
+                OsInteractionStatusIds.NativeSubmitInProgress,
+                readinessStatus: OsInteractionStatusIds.Protected,
+                profileId: _nativeProfile?.ProfileId,
+                applied: false,
+                submitted: false);
+            return;
+        }
+
+        NativeSubmitInterceptionResult result;
+        try
+        {
+            result = _nativeSubmitController.HandleGesture(gesture, _nativeSubmitRunner);
+        }
+        finally
+        {
+            Volatile.Write(ref _nativeSubmitFlowInProgress, 0);
+        }
+
+        var readinessStatus = NativeSubmitReadinessStatusAfterFlow(result.Status);
+        PublishNativeSubmitState(
+            result.Status,
+            readinessStatus,
+            result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
+            result.Applied,
+            result.Submitted);
+    }
+
+    private void PublishNativeSubmitState(
+        string lastStatus,
+        string readinessStatus,
+        string? profileId,
+        bool applied,
+        bool submitted)
+    {
         State = new TrayProtectionState(
             Enabled: true,
             Mode: "NativeSubmit",
             Hotkey: _hotkeyHost.Binding.DisplayText,
-            LastStatus: result.Status,
+            LastStatus: lastStatus,
             LastDecision: null,
             LastReplacementCount: null,
-            LastProfileId: result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
-            LastApplied: result.Applied,
-            LastSubmitted: result.Submitted,
-            NativeSubmitEnabled: result.Status != OsInteractionStatusIds.DegradedHotkeyOnly,
-            NativeSubmitStatus: result.Status,
-            ProtectedSendBinding: ProtectedSendBindingText(result.Status),
+            LastProfileId: profileId,
+            LastApplied: applied,
+            LastSubmitted: submitted,
+            NativeSubmitEnabled: readinessStatus != OsInteractionStatusIds.DegradedHotkeyOnly
+                && readinessStatus != OsInteractionStatusIds.NotConfigured,
+            NativeSubmitStatus: readinessStatus,
+            ProtectedSendBinding: ProtectedSendBindingText(readinessStatus),
             NewlineBinding: NewlineBindingText(),
             ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
-            ReadinessStatus: result.Status,
-            ComposerProtected: result.Status == OsInteractionStatusIds.Protected,
+            ReadinessStatus: readinessStatus,
+            ComposerProtected: readinessStatus == OsInteractionStatusIds.Protected,
             ProjectFilesProtected: false,
             ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
             ResidentProcess: true);
         StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static string NativeSubmitReadinessStatusAfterFlow(string flowStatus)
+    {
+        return flowStatus is OsInteractionStatusIds.DegradedHotkeyOnly
+            or OsInteractionStatusIds.EnterpriseBlocked
+            or OsInteractionStatusIds.SurfaceUnverified
+            or OsInteractionStatusIds.BindingUnknown
+            or OsInteractionStatusIds.NotConfigured
+            ? flowStatus
+            : OsInteractionStatusIds.Protected;
     }
 
     private string NativeSubmitUnavailableStatus()

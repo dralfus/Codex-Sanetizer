@@ -1068,6 +1068,10 @@ public sealed record NativeSubmitProductSmokeReport(
     bool BindingVerificationPassed,
     bool GuardPassed,
     bool ConfirmAndSendPassed,
+    bool RepeatedSubmitPassed,
+    bool DuplicateSendGuardPassed,
+    bool OverlayForegroundRequestPassed,
+    bool OverlayForegroundRefusalStatusPassed,
     bool EmergencyDisablePassed,
     bool EnterpriseEnforcementPassed,
     bool MismatchWarningPassed,
@@ -1107,6 +1111,18 @@ public static class NativeSubmitProductSmokeRunner
         var confirmAndSend = controller.HandleGesture(
             new NativeKeyGesture("Enter"),
             () => RunConfirmAndSend(hmacSecret));
+        var residentSession = RunResidentSessionSmoke(profile, hmacSecret);
+        var foregroundActivatedSmoke = WindowsConfirmationOverlay.RunForegroundActivationSmoke(foregroundActivated: true);
+        var foregroundDeniedSmoke = WindowsConfirmationOverlay.RunForegroundActivationSmoke(foregroundActivated: false);
+        var overlayForegroundRequestPassed = foregroundActivatedSmoke.ForegroundActivated
+            && !foregroundActivatedSmoke.ActionRequiredStatusVisible
+            && foregroundActivatedSmoke.RequestedCapabilities.Contains("show_in_taskbar", StringComparer.Ordinal)
+            && foregroundActivatedSmoke.RequestedCapabilities.Contains("topmost", StringComparer.Ordinal)
+            && foregroundActivatedSmoke.RequestedCapabilities.Contains("activate", StringComparer.Ordinal)
+            && foregroundActivatedSmoke.RequestedCapabilities.Contains("focus", StringComparer.Ordinal)
+            && foregroundActivatedSmoke.RequestedCapabilities.Contains("set_foreground_window", StringComparer.Ordinal);
+        var overlayForegroundRefusalStatusPassed = !foregroundDeniedSmoke.ForegroundActivated
+            && foregroundDeniedSmoke.ActionRequiredStatusVisible;
         var emergencyDisable = controller.HandleGesture(NativeKeyGesture.CtrlAltShiftPause);
         var enterprise = new NativeSubmitInterceptionController(
             profile with { CapabilityStatus = OsInteractionStatusIds.DegradedHotkeyOnly },
@@ -1123,6 +1139,9 @@ public static class NativeSubmitProductSmokeRunner
             profile = profile.ToRawFreeDiagnostics(),
             guard,
             confirmAndSend,
+            residentSession,
+            overlayForegroundRequestPassed,
+            overlayForegroundRefusalStatusPassed,
             emergencyDisable,
             enterprise,
             mismatch
@@ -1137,6 +1156,10 @@ public static class NativeSubmitProductSmokeRunner
             && confirmAndSend.Status == OsInteractionStatusIds.Submitted
             && confirmAndSend.SuppressOriginalInput
             && confirmAndSend.Submitted
+            && residentSession.RepeatedSubmitPassed
+            && residentSession.DuplicateSendGuardPassed
+            && overlayForegroundRequestPassed
+            && overlayForegroundRefusalStatusPassed
             && emergencyDisable.Status == OsInteractionStatusIds.EmergencyDisabled
             && emergencyDisable.SuppressOriginalInput
             && enterprise.Status == OsInteractionStatusIds.EnterpriseBlocked
@@ -1149,6 +1172,10 @@ public static class NativeSubmitProductSmokeRunner
             bindingVerificationPassed,
             guard.Status == OsInteractionStatusIds.NativeSubmitGuarded && guard.SuppressOriginalInput,
             confirmAndSend.Status == OsInteractionStatusIds.Submitted && confirmAndSend.Submitted,
+            residentSession.RepeatedSubmitPassed,
+            residentSession.DuplicateSendGuardPassed,
+            overlayForegroundRequestPassed,
+            overlayForegroundRefusalStatusPassed,
             emergencyDisable.Status == OsInteractionStatusIds.EmergencyDisabled && emergencyDisable.SuppressOriginalInput,
             enterprise.Status == OsInteractionStatusIds.EnterpriseBlocked,
             mismatch.Status == OsInteractionStatusIds.SurfaceUnverified,
@@ -1168,11 +1195,88 @@ public static class NativeSubmitProductSmokeRunner
             $"binding_verification: {report.BindingVerificationPassed.ToString().ToLowerInvariant()}",
             $"guard_interception: {report.GuardPassed.ToString().ToLowerInvariant()}",
             $"confirm_and_send: {report.ConfirmAndSendPassed.ToString().ToLowerInvariant()}",
+            $"repeated_submit_confirmation: {report.RepeatedSubmitPassed.ToString().ToLowerInvariant()}",
+            $"duplicate_send_guard: {report.DuplicateSendGuardPassed.ToString().ToLowerInvariant()}",
+            $"overlay_foreground_request: {report.OverlayForegroundRequestPassed.ToString().ToLowerInvariant()}",
+            $"overlay_foreground_refusal_status: {report.OverlayForegroundRefusalStatusPassed.ToString().ToLowerInvariant()}",
             $"emergency_disable: {report.EmergencyDisablePassed.ToString().ToLowerInvariant()}",
             $"enterprise_enforcement: {report.EnterpriseEnforcementPassed.ToString().ToLowerInvariant()}",
             $"mismatch_warning: {report.MismatchWarningPassed.ToString().ToLowerInvariant()}",
             $"raw_free_artifacts: {report.RawFreeArtifactsPassed.ToString().ToLowerInvariant()}"
         };
+    }
+
+    private static ResidentSessionSmokeResult RunResidentSessionSmoke(SubmitBindingProfile profile, byte[] hmacSecret)
+    {
+        var hook = new SmokeNativeSubmitHookHost();
+        TrayProtectionController? controller = null;
+        var submitFlowCalls = 0;
+        var inProgressStatusSeen = false;
+
+        controller = new TrayProtectionController(
+            new SmokeTrayHotkeyHost("Ctrl+Shift+F9"),
+            () => new OsInteractionResult(
+                OsInteractionStatusIds.Applied,
+                Surface: null,
+                SanitizationResult: null,
+                ConfirmationModel: null,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>()),
+            hook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                submitFlowCalls++;
+                if (submitFlowCalls == 2)
+                {
+                    hook.Trigger(new NativeKeyGesture("Enter"));
+                    inProgressStatusSeen = controller!.State.LastStatus == OsInteractionStatusIds.NativeSubmitInProgress
+                        && controller.State.LastSubmitted == false
+                        && controller.State.NativeSubmitStatus == OsInteractionStatusIds.Protected;
+                }
+
+                var result = RunConfirmAndSend(hmacSecret);
+                return result with
+                {
+                    Diagnostics = MergeDiagnostics(result.Diagnostics, new Dictionary<string, string>
+                    {
+                        ["profile_id"] = profile.ProfileId,
+                        ["cloud_submission"] = "false"
+                    })
+                };
+            },
+            profile);
+
+        var started = controller.Start();
+        hook.Trigger(new NativeKeyGesture("Enter"));
+        hook.Trigger(new NativeKeyGesture("Enter"));
+        hook.Trigger(new NativeKeyGesture("Enter"));
+
+        var repeatedSubmitPassed = started
+            && submitFlowCalls == 3
+            && controller.State.LastStatus == OsInteractionStatusIds.Submitted
+            && controller.State.LastSubmitted
+            && controller.State.NativeSubmitStatus == OsInteractionStatusIds.Protected
+            && controller.State.ComposerProtected;
+        var duplicateSendGuardPassed = inProgressStatusSeen
+            && submitFlowCalls == 3;
+        return new ResidentSessionSmokeResult(repeatedSubmitPassed, duplicateSendGuardPassed);
+    }
+
+    private static IReadOnlyDictionary<string, string> MergeDiagnostics(
+        IReadOnlyDictionary<string, string> first,
+        IReadOnlyDictionary<string, string> second)
+    {
+        var merged = new Dictionary<string, string>(first, StringComparer.Ordinal);
+        foreach (var item in second)
+        {
+            merged[item.Key] = item.Value;
+        }
+
+        return merged;
     }
 
     private static OsInteractionResult RunConfirmAndSend(byte[] hmacSecret)
@@ -1266,6 +1370,66 @@ public static class NativeSubmitProductSmokeRunner
         public ConfirmationDecision RequestConfirmation(ConfirmationUiModel model)
         {
             return ConfirmationDecisionContract.Confirm(model);
+        }
+    }
+
+    private sealed record ResidentSessionSmokeResult(
+        bool RepeatedSubmitPassed,
+        bool DuplicateSendGuardPassed);
+
+    private sealed class SmokeNativeSubmitHookHost : INativeSubmitHookHost
+    {
+        private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
+        private Action<NativeKeyGesture>? _onSuppressedSubmit;
+
+        public string? LastErrorCode { get; private set; }
+
+        public bool Start(
+            Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
+            Action<NativeKeyGesture> onSuppressedSubmit)
+        {
+            _classify = classify ?? throw new ArgumentNullException(nameof(classify));
+            _onSuppressedSubmit = onSuppressedSubmit ?? throw new ArgumentNullException(nameof(onSuppressedSubmit));
+            LastErrorCode = null;
+            return true;
+        }
+
+        public void Stop()
+        {
+            _classify = null;
+            _onSuppressedSubmit = null;
+        }
+
+        public void Trigger(NativeKeyGesture gesture)
+        {
+            var result = _classify!(gesture);
+            if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
+            {
+                _onSuppressedSubmit!(gesture);
+            }
+        }
+    }
+
+    private sealed class SmokeTrayHotkeyHost : ITrayHotkeyHost
+    {
+        public SmokeTrayHotkeyHost(string displayText)
+        {
+            Binding = new HotkeyBinding("manual-scan-apply", displayText, "manual_scan_apply");
+        }
+
+        public HotkeyBinding Binding { get; }
+
+        public string? LastErrorCode { get; private set; }
+
+        public bool Start(Action onTriggered)
+        {
+            ArgumentNullException.ThrowIfNull(onTriggered);
+            LastErrorCode = null;
+            return true;
+        }
+
+        public void Stop()
+        {
         }
     }
 }

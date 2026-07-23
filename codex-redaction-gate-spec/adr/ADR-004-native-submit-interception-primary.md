@@ -49,6 +49,8 @@ If any condition fails, Code Sanitizer must not claim protection. If the pressed
 
 Onboarding and re-verification must run against the user's real desktop session, not an agent or build sandbox's foreground window. The product must provide a delayed verification path from the installed tray app and CLI: the user starts verification, focuses the Codex/ChatGPT composer before the countdown ends, and the profile is saved as `protected` only when that focused composer verifies. The release test surface must keep exercising this readiness path so regressions do not silently downgrade native submit protection to manual hotkey mode.
 
+Runtime protection must also be repeatable. Every matching Send gesture in a selected protected composer is a new guarded submit attempt; a previous confirmation must not disable or satisfy later prompts. The local confirmation overlay must request foreground activation whenever a replacement decision is required. If Windows refuses activation, the product must show raw-free visible status and must not submit raw text.
+
 ## Consequences
 
 Positive:
@@ -70,6 +72,7 @@ Negative:
 - Never intercept submit shortcuts outside explicitly enabled AI surface profiles.
 - Never claim `protected` when the active submit binding is unknown.
 - Never replay the native submit shortcut until the composer text is verified as sanitized or sanitizer result is `allow`.
+- Never treat confirmation overlay display as one-shot state; after confirm, cancel, block or failure, the resident hook must be ready for the next protected Send.
 - Provide an emergency bypass/disable action that is visible, audited raw-free, and not easy to trigger accidentally.
 - Raw prompts, raw config contents and raw composer text must not be logged.
 - Profile diagnostics may record app identity, control metadata, binding names, lengths, statuses and reason codes only.
