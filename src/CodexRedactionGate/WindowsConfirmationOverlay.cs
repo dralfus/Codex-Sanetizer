@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace CodexRedactionGate;
@@ -42,9 +43,38 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
         Exception? dialogException = null;
         var thread = new System.Threading.Thread(() =>
         {
+            ThreadExceptionEventHandler? threadExceptionHandler = null;
+            ConfirmationDialog? dialog = null;
             try
             {
-                using var dialog = new ConfirmationDialog(model);
+                try
+                {
+                    Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                threadExceptionHandler = (_, exceptionEvent) =>
+                {
+                    dialogException = exceptionEvent.Exception;
+                    try
+                    {
+                        if (dialog is not null && !dialog.IsDisposed)
+                        {
+                            dialog.DialogResult = DialogResult.Cancel;
+                            dialog.Close();
+                        }
+                    }
+                    catch (Exception closeException)
+                    {
+                        dialogException = closeException;
+                    }
+                };
+                Application.ThreadException += threadExceptionHandler;
+
+                using var ownedDialog = new ConfirmationDialog(model);
+                dialog = ownedDialog;
                 var result = dialog.ShowDialog();
                 decision = result == DialogResult.OK
                     ? ConfirmationDecisionContract.Confirm(model)
@@ -53,6 +83,13 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
             catch (Exception exception)
             {
                 dialogException = exception;
+            }
+            finally
+            {
+                if (threadExceptionHandler is not null)
+                {
+                    Application.ThreadException -= threadExceptionHandler;
+                }
             }
         });
 

@@ -3901,6 +3901,8 @@ public partial class SanitizerTests
         var sourceText = ProductSourceText("WindowsConfirmationOverlay.cs");
 
         Assert.That(sourceText, Does.Contain("Exception? dialogException"));
+        Assert.That(sourceText, Does.Contain("Application.ThreadException"));
+        Assert.That(sourceText, Does.Contain("SetUnhandledExceptionMode"));
         Assert.That(sourceText, Does.Contain("catch (Exception exception)"));
         Assert.That(sourceText, Does.Contain("return ConfirmationDecisionContract.Cancel(model);"));
     }
