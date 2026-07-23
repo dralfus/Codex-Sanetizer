@@ -3,12 +3,16 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace CodexRedactionGate;
 
 public static class Program
 {
+    internal static Func<TextSurfaceDiscoveryResult> NativeProfileDiscoveryFactory { get; set; } =
+        () => WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface();
+
     [STAThread]
     public static int Main(string[] args)
     {
@@ -381,7 +385,19 @@ public static class Program
 
         if (args.Length == 4 && args[0] == "--native-profile-verify")
         {
-            return RunNativeProfileVerify(args[1], args[2], args[3], runtime.LayoutFactory);
+            return Fail("Use --native-profile-verify-delay so verification runs after you focus the target Codex/ChatGPT composer.");
+        }
+
+        if (args.Length == 5 && args[0] == "--native-profile-verify-delay")
+        {
+            return int.TryParse(args[4], out var delaySeconds) && delaySeconds >= 0
+                ? RunNativeProfileVerify(
+                    args[1],
+                    args[2],
+                    args[3],
+                    TimeSpan.FromSeconds(Math.Min(delaySeconds, 30)),
+                    runtime.LayoutFactory)
+                : Fail("Expected --native-profile-verify-delay profile-id submit-binding newline-binding non-negative-delay-seconds.");
         }
 
         if (args.Length == 1 && args[0] == "--native-submit-smoke")
@@ -1295,9 +1311,18 @@ public static class Program
         string profileId,
         string submitBinding,
         string newlineBinding,
+        TimeSpan delay,
         Func<DefaultStorageLayout> layoutFactory)
     {
-        var discovery = WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface();
+        if (delay > TimeSpan.Zero)
+        {
+            Console.WriteLine("status: waiting_for_focus");
+            Console.WriteLine($"delay_seconds: {(int)delay.TotalSeconds}");
+            Console.WriteLine("Focus the target Codex/ChatGPT composer before the delay ends.");
+            Thread.Sleep(delay);
+        }
+
+        var discovery = NativeProfileDiscoveryFactory();
         var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             profileId,
             submitBinding,
@@ -1722,6 +1747,7 @@ public static class Program
         Console.WriteLine("  --product-smoke");
         Console.WriteLine("  --native-profiles-status");
         Console.WriteLine("  --native-profile-verify profile-id submit-binding newline-binding");
+        Console.WriteLine("  --native-profile-verify-delay profile-id submit-binding newline-binding seconds");
         Console.WriteLine("  --native-submit-smoke");
         Console.WriteLine("  --os-demo-send-gate");
         Console.WriteLine("  --os-demo-local-target");

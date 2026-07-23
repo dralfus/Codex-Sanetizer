@@ -61,6 +61,8 @@ The mapping table must be user-global across projects. The same real URL, domain
 43. As a Codex coding user, I want sanitized virtual files to preserve enough structure for useful coding assistance, so that the model can still reason about code after identifiers are pseudonymized.
 44. As a Codex coding user, I want model-generated edits restored locally before they are written to disk when policy allows, so that my real project remains usable while the cloud saw only placeholders.
 45. As a security reviewer, I want product status to distinguish composer protection from project-file protection, so that users do not over-trust the desktop submit interceptor.
+46. As a Codex/ChatGPT Desktop user, I want profile verification to run from my real desktop session with time to focus the target composer, so that protected status does not depend on an automation or sandbox session seeing the same foreground window.
+47. As a maintainer, I want every build to exercise the Codex/ChatGPT native submit readiness path, so that regressions cannot silently turn live input protection back into hotkey-only mode.
 
 ## Implementation Decisions
 
@@ -95,6 +97,8 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Native submit interception must include a visible, raw-free emergency disable path and hook-health watchdog. An emergency action disables protection temporarily; it must not silently send the raw prompt.
 - Enterprise mode may lock required protected profiles, prevent user removal, and disallow silent `degraded_hotkey_only` fallback for selected AI apps.
 - A verified AI profile must include package/app identity, version compatibility, executable/process signals, window identity, UI Automation composer shape, supported read/write patterns, binding source, binding values, and last verification result.
+- Native profile onboarding must provide a delayed verification path that runs in the user's desktop session. The user starts verification, focuses the Codex or ChatGPT composer before the countdown ends, and the profile is marked `protected` only if the focused composer and submit/newline bindings verify raw-free.
+- The installed tray app must expose profile verification for Codex Desktop and ChatGPT Desktop without requiring the user to copy `dotnet run` commands. Console commands may remain as diagnostics, but normal onboarding must be reachable from resident UI.
 - The system must never send the mapping table or HMAC secret to the cloud.
 - The system must show an explicit confirmation step when sensitive data was replaced.
 - The system must use a 10-second total hard cap for sanitizer work, target under 2 seconds for ordinary prompts, and fail closed on timeout.
@@ -121,6 +125,8 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Emergency escape tests should cover temporary disable, tray status changes, hook watchdog downgrade, and raw-free audit events.
 - Enterprise enforcement tests should cover locked profiles, forbidden hotkey-only degradation, and configured fail behavior for unverified surfaces.
 - Compatibility tests should cover app/package version mismatch, UIA composer mismatch, and `surface_unverified` diagnostics without raw prompt capture.
+- Native profile verification tests should cover delayed focused-composer verification, raw-free output, and command/tray discoverability for both Codex Desktop and ChatGPT Desktop.
+- Product smoke must continue to exercise the Windows Codex/ChatGPT native submit readiness path every run, including selected-profile gating and raw-free status reporting.
 - Timeout tests should verify fail-closed behavior at the 10-second hard cap and scanner-level errors.
 - Security regression tests should include near-miss samples and false-positive samples.
 - The highest-value seam is the redaction engine API: it can be tested without depending on Codex UI internals.

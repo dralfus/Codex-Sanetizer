@@ -15,6 +15,8 @@
 - The system must suppress the original submit input while local sanitization is running for a selected protected surface.
 - The primary Code Sanitizer trigger for protected AI apps must be the selected app's verified submit binding, not a separate global CS hotkey.
 - If Codex/ChatGPT uses `Enter` to send and `Ctrl+Enter` for newline, Code Sanitizer must intercept `Enter` only in the verified selected composer and must pass `Ctrl+Enter` through as newline.
+- The system must provide a delayed native profile verification workflow that runs from the user's real desktop session, gives the user time to focus the target Codex/ChatGPT composer, and never marks a profile protected from sandbox-only foreground evidence.
+- The installed tray UI must expose Codex Desktop and ChatGPT Desktop profile verification so enabling protection does not require copying console commands.
 - The system should integrate with Codex hooks when available.
 - The system must support an integration strategy that can replace the submitted prompt, not only block it.
 - The system must inspect text attachments, large pasted file contents and file snippets when the adapter can access their text before cloud submission.
@@ -167,6 +169,7 @@ The detector must identify at least:
 - Pressing the configured Send shortcut in a selected protected AI app does not send raw sensitive data; Code Sanitizer intercepts before cloud submission.
 - Pressing the same shortcut in an unselected application is not intercepted by Code Sanitizer.
 - The tray status shows the selected AI app's protected Send binding and separately shows any secondary manual scan/apply hotkey.
+- Every product smoke or release verification run proves that the Codex/ChatGPT native submit readiness path still exists, remains raw-free, and distinguishes `protected` from `surface_unverified`.
 - Attempting to exit the resident tray app shows a confirmation prompt and keeps protection running if the user cancels.
 - If the selected AI app's submit binding cannot be discovered or verified, the product does not show `Protected`.
 - Audit logs show that a URL and secret were detected without storing the raw URL or secret.

@@ -25,6 +25,7 @@ public sealed record ProductSmokeReport(
     bool RestorePassed,
     bool UninstallSafePassed,
     bool NativeSubmitInterceptionPassed,
+    bool NativeProfileVerificationEntrypointsPassed,
     bool RawFreeArtifactsPassed,
     int AuditRowCount,
     int SanitizedPlaceholderCount,
@@ -209,6 +210,29 @@ public static class ProductSmokeRunner
             && Directory.Exists(layout.VaultDirectory);
 
         var nativeSubmit = NativeSubmitProductSmokeRunner.Run(hmacSecret);
+        var codexVerification = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "codex-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            TextSurfaceDiscoveryResult.Success(CreateSmokeNativeSubmitSurface("codex-desktop")));
+        var chatGptVerification = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            TextSurfaceDiscoveryResult.Success(CreateSmokeNativeSubmitSurface("chatgpt-desktop")));
+        var mismatchVerification = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "codex-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            TextSurfaceDiscoveryResult.Success(CreateSmokeNativeSubmitSurface("chatgpt-desktop")));
+        var nativeProfileVerificationEntrypointsPassed = nativeSubmit.Passed
+            && codexVerification.IsProtected
+            && chatGptVerification.IsProtected
+            && mismatchVerification.CapabilityStatus == OsInteractionStatusIds.SurfaceUnverified
+            && TrayMenuContent.VerifyCodexProfileCommand.CliArgument.Contains("--native-profile-verify-delay codex-desktop", StringComparison.Ordinal)
+            && TrayMenuContent.VerifyChatGptProfileCommand.CliArgument.Contains("--native-profile-verify-delay chatgpt-desktop", StringComparison.Ordinal)
+            && TrayMenuContent.RuleManagementText.Contains("--native-profile-verify-delay codex-desktop", StringComparison.Ordinal)
+            && TrayMenuContent.RuleManagementText.Contains("--native-profile-verify-delay chatgpt-desktop", StringComparison.Ordinal);
         var projectFileReadOnlySmoke = ProjectFileReadOnlySmokeRunner.Run(hmacSecret);
         var projectFileProductSmoke = ProjectFileProductSmokeRunner.Run(hmacSecret);
 
@@ -240,6 +264,7 @@ public static class ProductSmokeRunner
                 RestorePassed: restorePassed,
                 UninstallSafePassed: uninstallSafePassed,
                 NativeSubmitInterceptionPassed: nativeSubmit.Passed,
+                NativeProfileVerificationEntrypointsPassed: nativeProfileVerificationEntrypointsPassed,
                 RawFreeArtifactsPassed: false,
                 AuditRowCount: auditView.Rows.Count,
                 SanitizedPlaceholderCount: sample.Replacements.Count,
@@ -266,6 +291,7 @@ public static class ProductSmokeRunner
             && projectFileProtectionStatusPassed
             && projectFileReadOnlySmoke.Passed
             && projectFileProductSmoke.Passed
+            && nativeProfileVerificationEntrypointsPassed
             && rawFreePassed;
 
         return new ProductSmokeReport(
@@ -288,6 +314,7 @@ public static class ProductSmokeRunner
             RestorePassed: restorePassed,
             UninstallSafePassed: uninstallSafePassed,
             NativeSubmitInterceptionPassed: nativeSubmit.Passed,
+            NativeProfileVerificationEntrypointsPassed: nativeProfileVerificationEntrypointsPassed,
             RawFreeArtifactsPassed: rawFreePassed,
             AuditRowCount: auditView.Rows.Count,
             SanitizedPlaceholderCount: sample.Replacements.Count,
@@ -341,6 +368,7 @@ public static class ProductSmokeRunner
             $"restore: {report.RestorePassed.ToString().ToLowerInvariant()}",
             $"uninstall_safe_default: {report.UninstallSafePassed.ToString().ToLowerInvariant()}",
             $"native_submit_interception: {report.NativeSubmitInterceptionPassed.ToString().ToLowerInvariant()}",
+            $"native_profile_verification_entrypoints: {report.NativeProfileVerificationEntrypointsPassed.ToString().ToLowerInvariant()}",
             $"raw_free_artifacts: {report.RawFreeArtifactsPassed.ToString().ToLowerInvariant()}",
             $"audit_rows: {report.AuditRowCount}",
             $"sanitized_placeholder_count: {report.SanitizedPlaceholderCount}"
@@ -366,6 +394,23 @@ public static class ProductSmokeRunner
             && manifestText.Contains("CodexRedactionGate.Tray.exe", StringComparison.Ordinal)
             && manifestText.Contains("Software\\Microsoft\\Windows\\CurrentVersion\\Run", StringComparison.Ordinal)
             && buildText.Contains("CodexRedactionGate.Tray.csproj", StringComparison.Ordinal);
+    }
+
+    private static TextSurfaceDescriptor CreateSmokeNativeSubmitSurface(string profileId)
+    {
+        return new TextSurfaceDescriptor(
+            $"product-smoke-native-profile:{profileId}",
+            profileId,
+            profileId,
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["surface_kind"] = "disposable_local_target",
+                ["cloud_submission"] = "false"
+            });
     }
 
     private static string FindRepositoryRoot(string startDirectory)

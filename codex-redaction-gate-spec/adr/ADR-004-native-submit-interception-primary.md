@@ -47,6 +47,8 @@ Submit interception is allowed only when all of these are true:
 
 If any condition fails, Code Sanitizer must not claim protection. If the pressed shortcut belongs to a selected protected surface but sanitizer processing cannot complete, it must suppress the original submit and fail closed.
 
+Onboarding and re-verification must run against the user's real desktop session, not an agent or build sandbox's foreground window. The product must provide a delayed verification path from the installed tray app and CLI: the user starts verification, focuses the Codex/ChatGPT composer before the countdown ends, and the profile is saved as `protected` only when that focused composer verifies. The release test surface must keep exercising this readiness path so regressions do not silently downgrade native submit protection to manual hotkey mode.
+
 ## Consequences
 
 Positive:

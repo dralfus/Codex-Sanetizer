@@ -14,6 +14,7 @@ dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-co
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-surface-diagnostic
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-composer-diagnostic
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-composer-diagnostic-delay 5
+dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --native-profile-verify-delay codex-desktop Enter Ctrl+Enter 10
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-demo-dry-run "Connect to 192.168.10.25"
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-demo-smoke
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-demo-send-gate
@@ -26,6 +27,7 @@ Expected behavior:
 - surface diagnostic prints raw-free foreground-window status and capability metadata;
 - composer diagnostic prints `supported_composer` when the focused element is a writable composer or a focused Electron/Chromium composer exposing UI Automation `TextPattern`, including Chrome/XAML `ControlType.Group` composer surfaces;
 - delayed composer diagnostic lets the user start the command, switch focus to Codex/ChatGPT, and then capture the actual composer instead of the terminal window;
+- delayed native profile verification lets the user start onboarding from their desktop session, focus the target Codex/ChatGPT composer, and save a protected profile only when that real composer verifies;
 - dry-run prints a local confirmation preview with highlighted sanitized placeholders;
 - smoke reports dry-run, apply-only, opt-in send, cancel, block and write-failure paths;
 - send gate is `safety_disabled` until supported Codex/ChatGPT apply-only evidence exists and local send mode is explicitly enabled with `--send-mode-enable`.
@@ -71,11 +73,13 @@ Try a real Codex/ChatGPT app only after the disposable target works:
 2. Focus the normal composer.
 3. Run `--os-composer-diagnostic-delay 5` from the terminal, immediately switch back to the Codex/ChatGPT composer, and wait for the diagnostic to finish.
 4. Continue only if it reports `status: supported_composer`.
-5. Start `--os-demo-hotkey`.
-6. Trigger Ctrl+Enter and verify dry-run does not modify selection, clipboard, focus or composer text.
-7. Stop dry-run, start `--os-demo-hotkey-apply`.
-8. Trigger Ctrl+Enter, confirm, and verify the composer contains exactly `sanitized_text`. For Electron composers without writable `ValuePattern`, this write-back can use verified keyboard paste after confirmation.
-9. Verify cancel, block, focus loss, stale element, write failure and verification mismatch leave the app unsubmitted.
+5. Run `--native-profile-verify-delay codex-desktop Enter Ctrl+Enter 10` or the matching ChatGPT command from the tray profile verification menu, then focus the same composer before the countdown ends.
+6. Continue only if `--native-profiles-status` reports the selected profile as `protected`.
+7. Start `--os-demo-hotkey`.
+8. Trigger Ctrl+Enter and verify dry-run does not modify selection, clipboard, focus or composer text.
+9. Stop dry-run, start `--os-demo-hotkey-apply`.
+10. Trigger Ctrl+Enter, confirm, and verify the composer contains exactly `sanitized_text`. For Electron composers without writable `ValuePattern`, this write-back can use verified keyboard paste after confirmation.
+11. Verify cancel, block, focus loss, stale element, write failure and verification mismatch leave the app unsubmitted.
 
 Record app/channel/version evidence without prompt text:
 

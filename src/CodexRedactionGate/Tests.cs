@@ -1543,6 +1543,8 @@ public partial class SanitizerTests
         Assert.That(text, Does.Contain("--hotkey-set \"Ctrl+Shift+F9\""));
         Assert.That(text, Does.Contain("Protected Send binding commands:"));
         Assert.That(text, Does.Contain("--native-profile-verify codex-desktop Enter Ctrl+Enter"));
+        Assert.That(text, Does.Contain("--native-profile-verify-delay codex-desktop Enter Ctrl+Enter 10"));
+        Assert.That(text, Does.Contain("--native-profile-verify-delay chatgpt-desktop Enter Ctrl+Enter 10"));
         Assert.That(text, Does.Contain("--send-mode-show"));
         Assert.That(text, Does.Contain("--send-mode-enable"));
         Assert.That(text, Does.Contain("--send-mode-disable"));
@@ -3842,8 +3844,12 @@ public partial class SanitizerTests
 
         Assert.That(traySourceText, Does.Contain("FormatBuildVersionMenuItem"));
         Assert.That(traySourceText, Does.Contain("Open sensitive terms"));
+        Assert.That(traySourceText, Does.Contain("Verify Codex Desktop profile"));
+        Assert.That(traySourceText, Does.Contain("Verify ChatGPT Desktop profile"));
         Assert.That(traySourceText, Does.Contain("DictionaryManagementForm"));
         Assert.That(TrayMenuContent.RuleManagementCommand.CliArgument, Is.EqualTo("--dictionary-ui"));
+        Assert.That(TrayMenuContent.VerifyCodexProfileCommand.CliArgument, Is.EqualTo("--native-profile-verify-delay codex-desktop Enter Ctrl+Enter 10"));
+        Assert.That(TrayMenuContent.VerifyChatGptProfileCommand.CliArgument, Is.EqualTo("--native-profile-verify-delay chatgpt-desktop Enter Ctrl+Enter 10"));
         Assert.That(traySourceText, Does.Not.Contain("Open rule management"));
     }
 
@@ -3955,12 +3961,14 @@ public partial class SanitizerTests
             Assert.That(report.AuditViewPassed, Is.True);
             Assert.That(report.RestorePassed, Is.True);
             Assert.That(report.UninstallSafePassed, Is.True);
+            Assert.That(report.NativeProfileVerificationEntrypointsPassed, Is.True);
             Assert.That(report.RawFreeArtifactsPassed, Is.True);
             Assert.That(rendered, Does.Contain("supported_targets: windows_codex_chatgpt_desktop_only"));
             Assert.That(rendered, Does.Contain("live_compatibility_note: use_disposable_local_target_first_then_throwaway_codex_or_chatgpt_desktop_task"));
             Assert.That(rendered, Does.Contain("apply_only_write_back: true"));
             Assert.That(rendered, Does.Contain("project_file_read_only_smoke: true"));
             Assert.That(rendered, Does.Contain("project_file_product_smoke: true"));
+            Assert.That(rendered, Does.Contain("native_profile_verification_entrypoints: true"));
             Assert.That(rendered, Does.Not.Contain("192.168.10.25"));
             Assert.That(rendered, Does.Not.Contain("Product Smoke Customer"));
             Assert.That(rendered, Does.Not.Contain("product-smoke.example.local"));
@@ -5680,6 +5688,103 @@ public class CliTests
     }
 
     [Test]
+    public void Main_NativeProfileVerifyDelayRejectsInvalidDelayWithoutProfileChanges()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var (exitCode, stdout, stderr) = RunCli(
+                layout,
+                "--native-profile-verify-delay",
+                "codex-desktop",
+                "Enter",
+                "Ctrl+Enter",
+                "later");
+            var profiles = SubmitBindingProfileStore.Load(layout);
+
+            Assert.That(exitCode, Is.EqualTo(1));
+            Assert.That(stdout, Is.Empty);
+            Assert.That(stderr, Does.Contain("--native-profile-verify-delay profile-id submit-binding newline-binding non-negative-delay-seconds"));
+            Assert.That(profiles.Profiles, Is.Empty);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Main_NativeProfileVerifyImmediateCommandDoesNotSaveProfile()
+    {
+        var tempDirectory = CreateTempDirectory();
+        var originalDiscoveryFactory = Program.NativeProfileDiscoveryFactory;
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            Program.NativeProfileDiscoveryFactory = () => TextSurfaceDiscoveryResult.Success(CreateCliNativeSubmitSurface("codex-desktop"));
+
+            var (exitCode, stdout, stderr) = RunCli(
+                layout,
+                "--native-profile-verify",
+                "codex-desktop",
+                "Enter",
+                "Ctrl+Enter");
+            var profiles = SubmitBindingProfileStore.Load(layout);
+
+            Assert.That(exitCode, Is.EqualTo(1));
+            Assert.That(stdout, Is.Empty);
+            Assert.That(stderr, Does.Contain("--native-profile-verify-delay"));
+            Assert.That(profiles.Profiles, Is.Empty);
+        }
+        finally
+        {
+            Program.NativeProfileDiscoveryFactory = originalDiscoveryFactory;
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Main_NativeProfileVerifyDelaySavesProtectedProfileAfterFocusedComposerVerification()
+    {
+        var tempDirectory = CreateTempDirectory();
+        var originalDiscoveryFactory = Program.NativeProfileDiscoveryFactory;
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            Program.NativeProfileDiscoveryFactory = () => TextSurfaceDiscoveryResult.Success(CreateCliNativeSubmitSurface("chatgpt-desktop"));
+
+            var (exitCode, stdout, stderr) = RunCli(
+                layout,
+                "--native-profile-verify-delay",
+                "chatgpt-desktop",
+                "Enter",
+                "Ctrl+Enter",
+                "0");
+            var profiles = SubmitBindingProfileStore.Load(layout);
+
+            Assert.That(exitCode, Is.EqualTo(0));
+            Assert.That(stderr, Is.Empty);
+            Assert.That(stdout, Does.Contain("status: protected"));
+            Assert.That(stdout, Does.Contain("submit_binding: Enter"));
+            Assert.That(stdout, Does.Contain("newline_binding: Ctrl+Enter"));
+            Assert.That(stdout, Does.Contain("cloud_submission: false"));
+            Assert.That(stdout, Does.Not.Contain("192.168.10.25"));
+            Assert.That(profiles.Profiles, Has.Count.EqualTo(1));
+            Assert.That(profiles.Profiles[0].ProfileId, Is.EqualTo("chatgpt-desktop"));
+            Assert.That(profiles.Profiles[0].IsProtected, Is.True);
+        }
+        finally
+        {
+            Program.NativeProfileDiscoveryFactory = originalDiscoveryFactory;
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
     public void Main_LocalDataCleanupKeepsDataUnlessExplicitlyConfirmed()
     {
         var tempDirectory = CreateTempDirectory();
@@ -5946,6 +6051,7 @@ public class CliTests
         Assert.That(stdout, Does.Contain("--tray-app"));
         Assert.That(stdout, Does.Contain("--os-compatibility-matrix"));
         Assert.That(stdout, Does.Contain("--product-smoke"));
+        Assert.That(stdout, Does.Contain("--native-profile-verify-delay profile-id submit-binding newline-binding seconds"));
         Assert.That(stdout, Does.Contain("--self-test"));
     }
 
@@ -5986,6 +6092,24 @@ public class CliTests
                     restoreLayout => new LocalRestoreWorkflow(
                         new LocalRestorer(new InMemoryHmacMappingVault(TestSecret())),
                         new FileAuditSink(restoreLayout.AuditDirectory)))));
+    }
+
+    private static TextSurfaceDescriptor CreateCliNativeSubmitSurface(string profileId)
+    {
+        return new TextSurfaceDescriptor(
+            $"cli-native-profile-test:{profileId}",
+            profileId,
+            profileId,
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["composer_status"] = OsInteractionStatusIds.SupportedComposer,
+                ["surface_kind"] = "test",
+                ["cloud_submission"] = "false"
+            });
     }
 
     private static SanitizeRequest CreateCliPromptRequest(string text)

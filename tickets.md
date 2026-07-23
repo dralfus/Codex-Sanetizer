@@ -2961,3 +2961,27 @@ These tickets turn the working Windows Codex/ChatGPT desktop apply-only demo int
 - [x] Smoke proves unsupported files and bypass paths fail closed or show unprotected status.
 - [x] Smoke proves `project_files_protected=true` only for the verified broker workflow.
 - [x] Build, tests, self-test and project-file product smoke are green.
+
+## 209. Add delayed desktop-session native profile verification
+
+**What to build:** Add a product onboarding path that verifies Codex Desktop and ChatGPT Desktop profiles from the user's real desktop session. The user can start verification from tray or CLI, focus the target composer during a countdown, and Code Sanitizer saves `protected` only when the focused composer and submit/newline bindings verify raw-free.
+
+**Blocked by:** None - can start immediately.
+
+**Do not:** Mark `codex-desktop` or `chatgpt-desktop` protected from sandbox-only foreground evidence, assume `Enter` without verification, or log raw prompt/window text.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+**Verification result 2026-07-23:** build green with 0 warnings/0 errors; full unit tests passed 351/351; `--product-smoke` passed and reports `native_profile_verification_entrypoints: true`. Direct production `--self-test` was not used as completion evidence because the current user-local DPAPI HMAC secret failed to unprotect in this execution context with `Ключ не может быть использован в указанном состоянии`; this is an environment/local-data issue, not a native profile verification regression.
+
+- [x] Tray exposes Codex Desktop and ChatGPT Desktop verification commands that do not require copying `dotnet run` text.
+- [x] CLI exposes delayed native profile verification so the user can focus the target composer after starting the command.
+- [x] A profile is saved as `protected` only after focused composer verification succeeds for that profile.
+- [x] Failed verification remains `surface_unverified` or `binding_unknown` with raw-free diagnostics.
+- [x] Product smoke or release tests prove the Codex/ChatGPT native submit readiness path remains present every run.
