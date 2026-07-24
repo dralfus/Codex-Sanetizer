@@ -566,6 +566,21 @@ public sealed class NativeSubmitInterceptionController
     private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
     private readonly IFirstRunSetupController? _firstRunSetupController;
 
+    /// <summary>
+    /// Публичное свойство для проверки статуса setup без reflection.
+    /// Возвращает true если setup required.
+    /// </summary>
+    public bool IsSetupRequired(DefaultStorageLayout layout)
+    {
+        if (_firstRunSetupController is null)
+        {
+            return false;
+        }
+
+        var setupResult = _firstRunSetupController.EnsureSetup(layout);
+        return setupResult.State.Required && !setupResult.Succeeded;
+    }
+
     public NativeSubmitInterceptionController(
         SubmitBindingProfile profile,
         NativeSubmitEmergencyState emergencyState,

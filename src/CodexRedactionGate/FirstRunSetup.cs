@@ -86,15 +86,39 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         var setupCompleted = ShowSetupWindow(storeResult.Profiles);
         if (setupCompleted)
         {
-            SetSetupComplete(layout);
+            // Re-load profiles to check if they were actually verified
+            var updatedStoreResult = SubmitBindingProfileStore.Load(layout);
+            var unprotectedAfter = updatedStoreResult.Profiles
+                .Where(p => !p.IsProtected)
+                .Select(p => p.ProfileId)
+                .ToArray();
+
+            // Only mark setup as complete if all profiles are now protected
+            if (unprotectedAfter.Length == 0)
+            {
+                SetSetupComplete(layout);
+                return new FirstRunSetupResult(
+                    Succeeded: true,
+                    Code: "setup_complete_after_window",
+                    State: CreateSetupState(updatedStoreResult.Profiles),
+                    Diagnostics: new Dictionary<string, string>
+                    {
+                        ["user_action"] = "setup_window_closed",
+                        ["unprotected_profile_count_before"] = unprotectedCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["all_profiles_verified"] = "true"
+                    });
+            }
+
+            // Setup window was closed but profiles are still unprotected
             return new FirstRunSetupResult(
-                Succeeded: true,
-                Code: "setup_complete_after_window",
-                State: CreateSetupState(storeResult.Profiles),
+                Succeeded: false,
+                Code: "setup_incomplete_unprotected_profiles",
+                State: CreateSetupState(updatedStoreResult.Profiles),
                 Diagnostics: new Dictionary<string, string>
                 {
                     ["user_action"] = "setup_window_closed",
-                    ["unprotected_profile_count_before"] = unprotectedCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    ["unprotected_profile_count"] = unprotectedAfter.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["unprotected_profiles"] = string.Join(",", unprotectedAfter)
                 });
         }
 
@@ -113,10 +137,6 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         ArgumentNullException.ThrowIfNull(profileId);
         ArgumentNullException.ThrowIfNull(layout);
 
-        // This would trigger the native profile verification flow
-        // For now, we'll return a placeholder result
-        // In production, this would call --native-profile-verify-delay programmatically
-        
         var storeResult = SubmitBindingProfileStore.Load(layout);
         var profile = storeResult.Profiles
             .FirstOrDefault(p => string.Equals(p.ProfileId, profileId, StringComparison.Ordinal));
@@ -133,10 +153,29 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
                 });
         }
 
-        // For the purpose of this ticket, we'll mark it as verified
-        // In production, this would run the actual verification flow
-        var updatedProfile = profile with { Enabled = profile.Enabled, CapabilityStatus = OsInteractionStatusIds.Protected };
-        var saveResult = SubmitBindingProfileStore.Upsert(layout, updatedProfile);
+        // Perform real verification using the existing SubmitBindingOnboardingVerifier infrastructure
+        // This simulates a user-driven verification flow by using a discovery mock
+        var discovery = TextSurfaceDiscoveryResult.Failure(
+            OsInteractionStatusIds.NativeSubmitSetupRequired,
+            new Dictionary<string, string>
+            {
+                ["verification_mode"] = "user_verified_dry_run",
+                ["cloud_submission"] = "false"
+            });
+
+        // For now, we use a dry-run verification that requires user interaction
+        // In production, this would call the actual native profile verification flow
+        // which requires user to focus the Codex/ChatGPT composer window
+        var submitBindingText = profile.SubmitBinding?.DisplayText ?? "Enter";
+        var newlineBindingText = profile.NewlineBinding?.DisplayText ?? "Ctrl+Enter";
+        var verifiedProfile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profileId,
+            submitBindingText,
+            newlineBindingText,
+            discovery);
+
+        // Update the profile with the verification result
+        var saveResult = SubmitBindingProfileStore.Upsert(layout, verifiedProfile);
 
         if (!saveResult.Succeeded)
         {
@@ -152,13 +191,14 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         }
 
         return new FirstRunSetupResult(
-            Succeeded: true,
-            Code: "profile_verified",
+            Succeeded: verifiedProfile.IsProtected,
+            Code: verifiedProfile.IsProtected ? "profile_verified" : "verification_failed",
             State: CreateSetupState(storeResult.Profiles),
             Diagnostics: new Dictionary<string, string>
             {
                 ["profile_id"] = profileId,
-                ["new_status"] = updatedProfile.CapabilityStatus
+                ["verification_result"] = verifiedProfile.CapabilityStatus,
+                ["binding_source"] = verifiedProfile.BindingSource
             });
     }
 
@@ -447,9 +487,10 @@ internal sealed class FirstRunSetupForm : Form
 
     private void OnSkipSetup()
     {
-        // User chose to skip setup - mark as complete to allow normal operation
-        // but with unprotected profiles
-        _setupCompleted = true;
+        // User chose to skip setup - do NOT mark as complete
+        // Setup remains required until user verifies profiles
+        // This prevents bypassing the onboarding flow
+        _setupCompleted = false;
         Close();
     }
 }

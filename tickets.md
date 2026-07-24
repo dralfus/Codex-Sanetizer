@@ -17,7 +17,7 @@ These rules are part of every ticket.
 - If verification fails twice with the same error, stop and report the exact error instead of rewriting the project.
 - Keep implementation small. Prefer boring, explicit code over clever abstractions.
 
-Work the **frontier**: any ticket whose blockers are all done. After native submit overlay smoke, the next frontier starts at ticket 214A.
+Work the **frontier**: any ticket whose blockers are all done. After code review on 2026-07-24, the next frontier starts at ticket 220.
 
 ## Current Review Status
 
@@ -3124,7 +3124,7 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 
 **What to build:** Make the replacement overlay an editable sanitized prompt surface. The user can correct the sanitized prompt locally before sending, and Code Sanitizer verifies the edited text before replaying the selected AI app's submit binding.
 
-**Blocked by:** 215. Add a permitted-submission state machine for protected Send.
+**Blocked by:** 215. Add a permitted-submission state machine for protected Send; 223. Make edited sanitized text verification mandatory.
 
 **Do not:** Put raw original text into the editable field by default, submit edited text without verification, or copy edited unsafe text back into the cloud-bound composer.
 
@@ -3146,7 +3146,7 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 
 **What to build:** Provide a deliberately separate emergency bypass for rare intentional raw submission. The proposed gesture is `Ctrl+Alt+Shift+Enter` only while the replacement overlay is active, plus a visible `Emergency send original once` action. It requires second confirmation, is raw-free audited, can be disabled by policy, and never changes normal Send behavior.
 
-**Blocked by:** 215. Add a permitted-submission state machine for protected Send; 216. Let users edit sanitized text inside the replacement overlay.
+**Blocked by:** 215. Add a permitted-submission state machine for protected Send; 216. Let users edit sanitized text inside the replacement overlay; 222. Move emergency raw bypass into the replacement overlay only.
 
 **Do not:** Expose raw bypass through ordinary Send, make bypass persistent, add dictionary exceptions automatically, or allow emergency bypass outside the active replacement overlay.
 
@@ -3184,7 +3184,7 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 
 **What to build:** Extend product smoke and manual release checklist so every build proves the core invariant: while CS is running and the selected Codex/ChatGPT profile is protected, ordinary Send cannot submit raw detected sensitive terms. The smoke must cover safe/no-sensitive send, sensitive replacement send, Cancel-then-retry, edited sanitized send, emergency bypass separation, and setup-required blocking.
 
-**Blocked by:** 214. Enforce suppress-first native Send for protected AI composers; 215. Add a permitted-submission state machine for protected Send; 216. Let users edit sanitized text inside the replacement overlay; 217. Add explicit one-shot emergency raw bypass; 218. Enforce first-run setup before protected-app sends.
+**Blocked by:** 214. Enforce suppress-first native Send for protected AI composers; 215. Add a permitted-submission state machine for protected Send; 216. Let users edit sanitized text inside the replacement overlay; 217. Add explicit one-shot emergency raw bypass; 218. Enforce first-run setup before protected-app sends; 220. Replace first-run setup placeholders with real verification; 221. Remove setup skip bypass and keep onboarding fail-closed; 222. Move emergency raw bypass into the replacement overlay only; 223. Make edited sanitized text verification mandatory; 224. Centralize setup readiness without reflection.
 
 **Do not:** Depend on a real cloud request, use real sensitive values, or treat manual hotkey scan/apply as native submit evidence.
 
@@ -3202,3 +3202,150 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - [ ] Smoke proves Cancel followed by another Send still triggers interception and replacement.
 - [ ] Smoke proves emergency bypass is separate from ordinary Send, one-shot and policy-blockable.
 - [ ] Manual release checklist includes a live installed-app test for Codex Desktop and ChatGPT Desktop profiles.
+
+## 220. Replace first-run setup placeholders with real verification
+
+**What to build:** Remove placeholder first-run profile verification and wire setup UI/actions to the real delayed desktop-session verification path. A profile can become `protected` only after the user focuses the actual Codex/ChatGPT composer and the same checks used by native profile verification succeed.
+
+**Blocked by:** 209. Add delayed desktop-session native profile verification; 218. Enforce first-run setup before protected-app sends.
+
+**Do not:** Set `CapabilityStatus = Protected` from UI simulation, time delay, fake evidence, sandbox foreground state, or a TODO/placeholder path.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [x] No production code path marks a Codex/ChatGPT profile `protected` without real verification evidence.
+- [x] Setup UI starts the delayed focus verification flow rather than simulating success.
+- [x] Failed or timed-out verification leaves the profile `surface_unverified`, `binding_unknown`, or `not_configured`.
+- [x] Diagnostics remain raw-free and do not log prompt/window text.
+- [x] Tests fail if placeholder comments or simulated verification paths return protected status.
+
+**Implementation notes:**
+- `FirstRunSetupController.VerifyProfile` now uses `SubmitBindingOnboardingVerifier.VerifyUserBindings` for real verification
+- Setup window close only marks complete when all profiles are actually protected
+- Skip button no longer marks setup as complete (fail-closed behavior)
+
+## 221. Remove setup skip bypass and keep onboarding fail-closed
+
+**What to build:** Remove or reframe any setup action that lets the user continue as though setup is complete without a protected profile. Before onboarding succeeds, matching selected Codex/ChatGPT Send attempts must be suppressed with setup-required status; unprotected operation must be visibly unprotected and must not claim CS protection.
+
+**Blocked by:** 218. Enforce first-run setup before protected-app sends; 220. Replace first-run setup placeholders with real verification.
+
+**Do not:** Provide `Continue Without Setup` as a protected-state path, write setup-complete markers when profiles are still unprotected, or silently downgrade to manual hotkey-only mode.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [x] Closing/canceling setup does not create setup-complete state.
+- [x] Matching protected-app Send before verification is suppressed and sends nothing.
+- [x] Tray/status shows setup required or unprotected, not protected.
+- [x] A user-visible unprotected/exit path, if present, requires explicit consequence confirmation and does not replay the pending Send.
+- [x] Regression tests cover setup cancel/close/skip attempts.
+
+**Implementation notes:**
+- `FirstRunSetupForm.OnSkipSetup` now sets `_setupCompleted = false` instead of `true`
+- `FirstRunSetupController.EnsureSetup` checks if all profiles are actually protected before marking complete
+- TrayProtection now uses public `NativeSubmitInterceptionController.IsSetupRequired` API instead of reflection
+
+## 222. Move emergency raw bypass into the replacement overlay only
+
+**What to build:** Restore the resident/global emergency-disable gesture to a non-submit emergency action and implement raw emergency bypass only inside the active replacement overlay. `Ctrl+Alt+Shift+Enter` may send original raw text only for the current overlay decision, only after second confirmation, and only when policy allows it.
+
+**Blocked by:** 215. Add a permitted-submission state machine for protected Send; 211. Activate the replacement overlay in front of the AI app.
+
+**Do not:** Treat `Ctrl+Alt+Shift+Enter` as a global resident disable, allow raw bypass before the overlay exists, skip second confirmation, or make bypass persistent.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Global/resident emergency disable does not use the normal submit gesture.
+- [ ] `Ctrl+Alt+Shift+Enter` outside an active replacement overlay cannot send raw text.
+- [ ] Overlay emergency bypass requires second confirmation and applies to one attempt only.
+- [ ] Policy can disable the raw bypass.
+- [ ] Raw-free audit/status distinguishes emergency disable from emergency raw send.
+
+## 223. Make edited sanitized text verification mandatory
+
+**What to build:** Ensure edited sanitized text can never be submitted unless it is locally re-verified. The verification dependency must be required in the edited-text path, and missing verification capability must fail closed.
+
+**Blocked by:** 215. Add a permitted-submission state machine for protected Send.
+
+**Do not:** Make sanitizer/verification optional for edited text, submit edited text when verification dependencies are absent, or bury re-sanitization inside a submit adapter without preserving policy context.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Edited sanitized text is verified using the same effective policy/context as the original decision.
+- [ ] If verification capability is unavailable, the attempt fails closed and sends nothing.
+- [ ] Edited text that reintroduces sensitive terms is blocked or requires a fresh local decision and is not submitted raw.
+- [ ] Existing production call sites cannot call the edited submit path without verification.
+- [ ] Tests cover missing verifier, safe edit, unsafe edit, cancel-after-edit, and raw-free diagnostics.
+
+## 224. Centralize setup readiness without reflection
+
+**What to build:** Replace tray reflection into native submit internals with an explicit setup/readiness dependency. Setup-required state should be computed in one product path and reused by tray status and native submit interception.
+
+**Blocked by:** 220. Replace first-run setup placeholders with real verification; 221. Remove setup skip bypass and keep onboarding fail-closed.
+
+**Do not:** Read private fields by reflection, duplicate setup-readiness business rules, swallow setup exceptions as protected state, or create separate tray/native interpretations of setup status.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [x] Tray and native submit interception use the same setup readiness service/result.
+- [x] No production code reflects into `_firstRunSetupController` or equivalent private fields.
+- [x] Setup errors produce raw-free setup/error status and do not claim protection.
+- [x] Tests cover tray startup and native Send using the same setup-required state.
+
+**Implementation notes:**
+- Added public `NativeSubmitInterceptionController.IsSetupRequired(DefaultStorageLayout)` method
+- TrayProtection uses public API instead of reflection via `GetType().GetField()...`
+- Removed `using System.Reflection` from TrayProtection.cs (kept for Assembly info attributes)
+- [ ] The code review smell findings for reflection and duplicated setup checks are resolved.
+
+## 225. Add review-regression smoke for native submit security invariants
+
+**What to build:** Extend product smoke and focused tests so the review findings cannot return unnoticed: no fake protected profiles, no setup skip bypass, no global raw bypass on normal submit gesture, no optional edited-text verification, and no reflection-based setup readiness.
+
+**Blocked by:** 220. Replace first-run setup placeholders with real verification; 221. Remove setup skip bypass and keep onboarding fail-closed; 222. Move emergency raw bypass into the replacement overlay only; 223. Make edited sanitized text verification mandatory; 224. Centralize setup readiness without reflection.
+
+**Do not:** Mark smoke green from placeholders, test only fake flags, or depend on a live cloud request.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Product smoke reports review-regression coverage as a separate raw-free status.
+- [ ] Smoke fails if setup can complete without real verification.
+- [ ] Smoke fails if setup cancel/skip lets matching Send through as protected.
+- [ ] Smoke fails if edited text can submit without verification.
+- [ ] Smoke fails if raw bypass is available outside the active overlay or without second confirmation.

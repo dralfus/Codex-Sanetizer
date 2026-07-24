@@ -86,26 +86,19 @@ internal sealed class TrayProtectionController
 
     public bool Start()
     {
-        // Check first-run setup status
+        // Check first-run setup status using public API (no reflection)
         var setupRequired = false;
         if (_nativeSubmitController is not null)
         {
             try
             {
                 var setupLayout = DefaultStorageLayout.CreateDefault();
-                var setupController = _nativeSubmitController.GetType()
-                    .GetField("_firstRunSetupController", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?
-                    .GetValue(_nativeSubmitController) as IFirstRunSetupController;
-                
-                if (setupController is not null)
-                {
-                    var setupResult = setupController.EnsureSetup(setupLayout);
-                    setupRequired = setupResult.State.Required && !setupResult.Succeeded;
-                }
+                setupRequired = _nativeSubmitController.IsSetupRequired(setupLayout);
             }
             catch
             {
-                // Ignore setup errors during startup
+                // Ignore setup errors during startup - fail closed by treating as required
+                setupRequired = true;
             }
         }
 
