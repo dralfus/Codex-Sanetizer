@@ -16,6 +16,11 @@
 - The primary Code Sanitizer trigger for protected AI apps must be the selected app's verified submit binding, not a separate global CS hotkey.
 - If Codex/ChatGPT uses `Enter` to send and `Ctrl+Enter` for newline, Code Sanitizer must intercept `Enter` only in the verified selected composer and must pass `Ctrl+Enter` through as newline.
 - Every matching Send gesture in a verified selected composer must be handled as a fresh protected submit attempt while protection is enabled.
+- While Code Sanitizer is running and the selected Codex/ChatGPT profile is protected, the normal composer Send path must not be able to submit a prompt that still contains detected sensitive terms.
+- From a selected protected Codex/ChatGPT surface, cloud submission is allowed only when the prompt contains no detected sensitive terms, when verified sanitized text is submitted from the replacement overlay, or when the separate emergency bypass action is explicitly confirmed for that one attempt.
+- Canceling a replacement decision must not disable, satisfy, or bypass the next protected Send attempt.
+- After Cancel, pressing Send again in the same composer, with the same text or edited text, must run the native submit handler again.
+- If no selected AI profile is protected after installation, the system must show an active setup/profile-verification window and suppress selected AI app submit attempts until setup succeeds.
 - The system must provide a delayed native profile verification workflow that runs from the user's real desktop session, gives the user time to focus the target Codex/ChatGPT composer, and never marks a profile protected from sandbox-only foreground evidence.
 - The installed tray UI must expose Codex Desktop and ChatGPT Desktop profile verification so enabling protection does not require copying console commands.
 - The system should integrate with Codex hooks when available.
@@ -84,6 +89,12 @@ The detector must identify at least:
 - The confirmation screen must not require the user to manually run commands.
 - The confirmation screen must request active foreground display when it appears for a native submit decision.
 - Confirming a sanitized prompt must submit only `sanitized_text`, never the original prompt.
+- Canceling must submit nothing and must not grant pass-through for any later Send.
+- The user must be able to edit sanitized text inside the confirmation screen before sending.
+- Edited sanitized text must be verified locally before it is submitted.
+- If edited sanitized text contains forbidden values or cannot be verified, the system must fail closed and send nothing.
+- Sending original raw text with detected sensitive values must require a separate emergency bypass action, not the normal Send key and not Cancel.
+- The emergency bypass action must be one-shot, require second confirmation, be audited raw-free, and be disableable by enterprise policy.
 - Hotkey-triggered scan/apply may exist as a secondary manual feature, but it must not be the default protection claim.
 - Any secondary manual CS hotkey must be labeled as manual scan/apply and must not be shown as proof that native submit interception is protected.
 - The system should avoid showing full original values in the confirmation by default.
@@ -149,6 +160,8 @@ The detector must identify at least:
 - Normal operation must not require remembering a separate sanitizer hotkey before pressing Send.
 - The tray app must require explicit confirmation before stop protection, exit, unload, or any action that disables the resident protection process.
 - The unload confirmation must clearly state that selected AI apps will no longer be protected while Code Sanitizer is stopped.
+- After installation, the resident app must guide the user through Codex/ChatGPT profile setup from UI, including an active delayed-focus verification window.
+- Until setup marks a selected profile `protected`, the product must not silently allow matching selected AI app Send attempts as if protection were active.
 - The user should be able to keep the system always on.
 - The confirmation flow should be short and predictable.
 - False positives must be tunable through allowlists.
@@ -173,6 +186,10 @@ The detector must identify at least:
 - The tray status shows the selected AI app's protected Send binding and separately shows any secondary manual scan/apply hotkey.
 - Every product smoke or release verification run proves that the Codex/ChatGPT native submit readiness path still exists, remains raw-free, and distinguishes `protected` from `surface_unverified`.
 - Regression tests prove that repeated protected Send attempts continue to show the replacement confirmation path when sensitive text is detected.
+- Regression tests prove that Cancel followed by another Send still triggers interception and replacement when sensitive text is present.
+- Regression tests prove that edited sanitized text is submitted only after verification and that edited unsafe text is blocked.
+- Regression tests prove that raw emergency bypass is separate from normal Send/Cancel, one-shot, audited raw-free, and policy-blockable.
+- First-run tests prove that setup is shown after installation and selected AI app Send attempts fail closed until the profile is protected.
 - Regression tests prove that the replacement confirmation overlay requests active foreground display.
 - Attempting to exit the resident tray app shows a confirmation prompt and keeps protection running if the user cancels.
 - If the selected AI app's submit binding cannot be discovered or verified, the product does not show `Protected`.

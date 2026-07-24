@@ -1,6 +1,6 @@
 # Tickets: Codex Redaction Gate MVP
 
-Build a Windows-first local Codex Redaction Gate MVP that sanitizes prompts, text attachments and large pasted content before cloud submission, using .NET, source-built Gitleaks, file-based vault storage, `Confirm sanitized prompt` UX and local response restoration. Source specs: `codex-redaction-gate-spec/SPEC.md`, `codex-redaction-gate-spec/MVP_IMPLEMENTATION_SPEC.md`, and `codex-redaction-gate-spec/PROJECT_FILE_WORKFLOW_SPEC.md`.
+Build a Windows-first local Codex Redaction Gate MVP that sanitizes prompts, text attachments and large pasted content before cloud submission, using .NET, source-built Gitleaks, file-based vault storage, `Confirm sanitized prompt` UX and local response restoration. Source specs: `codex-redaction-gate-spec/SPEC.md`, `codex-redaction-gate-spec/MVP_IMPLEMENTATION_SPEC.md`, `codex-redaction-gate-spec/PROJECT_FILE_WORKFLOW_SPEC.md`, and `codex-redaction-gate-spec/NATIVE_SUBMIT_CANCEL_EDIT_BYPASS_ONBOARDING_SPEC.md`.
 
 ## Execution Rules For Agents
 
@@ -17,7 +17,7 @@ These rules are part of every ticket.
 - If verification fails twice with the same error, stop and report the exact error instead of rewriting the project.
 - Keep implementation small. Prefer boring, explicit code over clever abstractions.
 
-Work the **frontier**: any ticket whose blockers are all done. After installed-app protection smoke, the next frontier starts at ticket 200.
+Work the **frontier**: any ticket whose blockers are all done. After native submit overlay smoke, the next frontier starts at ticket 214A.
 
 ## Current Review Status
 
@@ -3049,3 +3049,158 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - [x] Smoke covers overlay foreground activation request and duplicate-send handling.
 - [x] `--product-smoke` remains raw-free and does not include raw prompt, raw window title, screenshots or sensitive values.
 - [x] The OS adapter checklist includes the live manual retest: repeat protected Send at least three times and verify the overlay is active each time.
+
+## 214A. Fix confirmed replacement write-back to the protected composer
+
+**What to build:** Fix the live Codex/ChatGPT replacement flow so approving the replacement overlay actually applies the verified sanitized text to the focused protected composer before any submit replay. The user-visible result after Confirm must be the sanitized version in the AI app composer/submitted prompt, not the original raw text.
+
+**Blocked by:** 210. Make native submit confirmation repeatable; 211. Activate the replacement overlay in front of the AI app; 212. Guard duplicate sends while a confirmation is already open.
+
+**Do not:** Send the raw composer text after Confirm, treat overlay approval as sufficient without write-back verification, use clipboard or broad `Ctrl+A` paths without composer verification, or log raw prompt/window text while diagnosing the write failure.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Confirming a replacement writes the sanitized text into the same verified protected composer that triggered the Send.
+- [ ] The write-back path verifies the composer contains the expected sanitized text before replaying the submit binding.
+- [ ] If write-back or verification fails, Code Sanitizer sends nothing and reports a raw-free failure status.
+- [ ] The original raw text is never submitted as a fallback after a confirmed replacement.
+- [ ] Regression/product smoke covers the live-equivalent flow: sensitive prompt -> overlay Confirm -> sanitized composer text/submission evidence.
+
+## 214. Enforce suppress-first native Send for protected AI composers
+
+**What to build:** Make the selected Codex/ChatGPT native Send path suppress the original key gesture before sanitizer work starts. When the focused surface and verified submit binding match a protected profile, the raw composer text must not be able to leave through the ordinary Send path while Code Sanitizer decides what to do.
+
+**Blocked by:** 209. Add delayed desktop-session native profile verification; 210. Make native submit confirmation repeatable; 212. Guard duplicate sends while a confirmation is already open; 214A. Fix confirmed replacement write-back to the protected composer.
+
+**Do not:** Intercept unselected applications, pass through the matched Send while sanitizer work is pending, log raw composer text, or rely on manual scan/apply hotkey behavior as proof.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] A matching Send in a selected protected Codex/ChatGPT composer is consumed before any sanitizer, overlay or replay work.
+- [ ] If the prompt has no detected sensitive terms, Code Sanitizer may replay the verified submit binding once.
+- [ ] If sensitive terms are detected, the original Send is not replayed before the replacement decision.
+- [ ] If capture, sanitizer, overlay, timeout or verification fails, the attempt fails closed and sends nothing.
+- [ ] Non-matching apps and non-submit keys pass through without CS interception.
+
+## 215. Add a permitted-submission state machine for protected Send
+
+**What to build:** Centralize the rules for when Code Sanitizer may submit from a selected protected Codex/ChatGPT surface. The allowed paths are exactly: no detected sensitive terms, verified sanitized text from the replacement overlay, or an explicit one-shot emergency bypass. Everything else sends nothing.
+
+**Blocked by:** 214. Enforce suppress-first native Send for protected AI composers.
+
+**Do not:** Use boolean flags that can survive into the next prompt as implicit allow tokens, treat Cancel as approval, or allow a generic "send raw next time" state.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Allow/no-sensitive decisions replay submit once and record raw-free status.
+- [ ] Confirm decisions submit only verified sanitized text from the replacement overlay.
+- [ ] Cancel, close, block and failure decisions submit nothing and leave the next Send guarded.
+- [ ] State from a previous prompt cannot authorize a later prompt.
+- [ ] Tests cover the full decision matrix without live cloud submission.
+
+## 216. Let users edit sanitized text inside the replacement overlay
+
+**What to build:** Make the replacement overlay an editable sanitized prompt surface. The user can correct the sanitized prompt locally before sending, and Code Sanitizer verifies the edited text before replaying the selected AI app's submit binding.
+
+**Blocked by:** 215. Add a permitted-submission state machine for protected Send.
+
+**Do not:** Put raw original text into the editable field by default, submit edited text without verification, or copy edited unsafe text back into the cloud-bound composer.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] The overlay shows sanitized text in an editable control while raw values remain hidden by default.
+- [ ] Confirm submits the edited sanitized text only after local verification succeeds.
+- [ ] Edited text that reintroduces sensitive terms fails closed and sends nothing.
+- [ ] Cancel after editing sends nothing and the next ordinary Send runs the handler again.
+- [ ] Audit/status records the edited sanitized submission path without raw original values.
+
+## 217. Add explicit one-shot emergency raw bypass
+
+**What to build:** Provide a deliberately separate emergency bypass for rare intentional raw submission. The proposed gesture is `Ctrl+Alt+Shift+Enter` only while the replacement overlay is active, plus a visible `Emergency send original once` action. It requires second confirmation, is raw-free audited, can be disabled by policy, and never changes normal Send behavior.
+
+**Blocked by:** 215. Add a permitted-submission state machine for protected Send; 216. Let users edit sanitized text inside the replacement overlay.
+
+**Do not:** Expose raw bypass through ordinary Send, make bypass persistent, add dictionary exceptions automatically, or allow emergency bypass outside the active replacement overlay.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Ordinary Send cannot trigger raw bypass.
+- [ ] Emergency bypass works only from the active replacement overlay and only for the current attempt.
+- [ ] Emergency bypass requires a second confirmation that clearly states raw text will be sent once.
+- [ ] Enterprise/local policy can disable emergency bypass.
+- [ ] Audit/status proves bypass happened without recording raw prompt text or raw sensitive values.
+
+## 218. Enforce first-run setup before protected-app sends
+
+**What to build:** After installation or startup, if no selected Codex/ChatGPT profile is protected, show an active setup/profile verification window and suppress matching selected AI app Send attempts until onboarding succeeds.
+
+**Blocked by:** 209. Add delayed desktop-session native profile verification; 214. Enforce suppress-first native Send for protected AI composers.
+
+**Do not:** Claim `Protected` from sandbox-only evidence, silently downgrade to manual hotkey-only protection, or let selected AI app Send pass through as if Code Sanitizer were configured.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] First-run resident startup opens an active setup/profile verification window when no selected profile is protected.
+- [ ] The setup window exposes Codex Desktop and ChatGPT Desktop verification without console commands.
+- [ ] Matching selected AI app Send attempts before setup completion are suppressed with raw-free `setup_required` or equivalent status.
+- [ ] Successful delayed focus verification marks only the verified profile as protected.
+- [ ] Product smoke covers the setup-required fail-closed state without live cloud submission.
+
+## 219. Add release smoke for the "cannot forget CS" invariant
+
+**What to build:** Extend product smoke and manual release checklist so every build proves the core invariant: while CS is running and the selected Codex/ChatGPT profile is protected, ordinary Send cannot submit raw detected sensitive terms. The smoke must cover safe/no-sensitive send, sensitive replacement send, Cancel-then-retry, edited sanitized send, emergency bypass separation, and setup-required blocking.
+
+**Blocked by:** 214. Enforce suppress-first native Send for protected AI composers; 215. Add a permitted-submission state machine for protected Send; 216. Let users edit sanitized text inside the replacement overlay; 217. Add explicit one-shot emergency raw bypass; 218. Enforce first-run setup before protected-app sends.
+
+**Do not:** Depend on a real cloud request, use real sensitive values, or treat manual hotkey scan/apply as native submit evidence.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Product smoke reports a separate raw-free status for the protected Send invariant.
+- [ ] Smoke proves no-sensitive prompts can submit through the protected native path.
+- [ ] Smoke proves sensitive prompts submit only via verified sanitized overlay approval.
+- [ ] Smoke proves Cancel followed by another Send still triggers interception and replacement.
+- [ ] Smoke proves emergency bypass is separate from ordinary Send, one-shot and policy-blockable.
+- [ ] Manual release checklist includes a live installed-app test for Codex Desktop and ChatGPT Desktop profiles.

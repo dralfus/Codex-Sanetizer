@@ -51,6 +51,12 @@ Onboarding and re-verification must run against the user's real desktop session,
 
 Runtime protection must also be repeatable. Every matching Send gesture in a selected protected composer is a new guarded submit attempt; a previous confirmation must not disable or satisfy later prompts. The local confirmation overlay must request foreground activation whenever a replacement decision is required. If Windows refuses activation, the product must show raw-free visible status and must not submit raw text.
 
+Cancel is not a bypass. Cancel sends nothing for the current attempt and returns the user to editing, but the next press of the selected AI app's Send shortcut must run the native submit handler again. Raw submission with detected sensitive values may exist only as a separate emergency bypass action, proposed as `Ctrl+Alt+Shift+Enter` while the replacement overlay is active plus a visible one-shot button. That bypass requires second confirmation, raw-free audit, and enterprise policy control.
+
+The replacement overlay is also an edit surface for sanitized text. A user may manually adjust the sanitized prompt before approving, but the edited sanitized text must be verified locally before the adapter replays the AI app submit binding.
+
+First-run setup is part of the protected product state. After installation, if no selected Codex/ChatGPT profile is protected, the resident app must show an active setup window with delayed focus verification and must suppress matching selected AI app submit attempts with a raw-free setup-required status until the profile is verified.
+
 ## Consequences
 
 Positive:
@@ -73,6 +79,10 @@ Negative:
 - Never claim `protected` when the active submit binding is unknown.
 - Never replay the native submit shortcut until the composer text is verified as sanitized or sanitizer result is `allow`.
 - Never treat confirmation overlay display as one-shot state; after confirm, cancel, block or failure, the resident hook must be ready for the next protected Send.
+- Never treat Cancel as approval, pass-through, or a future bypass.
+- Never send edited sanitized text until it has been locally verified.
+- Never expose raw emergency bypass through the normal Send key; emergency bypass must be explicit, one-shot, confirmed twice, audited raw-free, and policy-blockable.
+- Never claim protection after installation until a selected AI profile is actually verified as `protected`; unconfigured selected surfaces must fail closed.
 - Provide an emergency bypass/disable action that is visible, audited raw-free, and not easy to trigger accidentally.
 - Raw prompts, raw config contents and raw composer text must not be logged.
 - Profile diagnostics may record app identity, control metadata, binding names, lengths, statuses and reason codes only.

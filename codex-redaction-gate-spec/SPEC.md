@@ -65,6 +65,10 @@ The mapping table must be user-global across projects. The same real URL, domain
 47. As a maintainer, I want every build to exercise the Codex/ChatGPT native submit readiness path, so that regressions cannot silently turn live input protection back into hotkey-only mode.
 48. As a Codex/ChatGPT Desktop user, I want the replacement confirmation overlay to become active whenever it appears, so that I do not miss a hidden security decision.
 49. As a Codex/ChatGPT Desktop user, I want every protected Send attempt to trigger a fresh sanitizer decision, so that one successful replacement does not make later sensitive prompts bypass the overlay.
+50. As a Codex/ChatGPT Desktop user, I want Cancel in the replacement window to send nothing and preserve future interception, so that canceling once cannot let the next raw prompt bypass Code Sanitizer.
+51. As a Codex/ChatGPT Desktop user, I want to edit the sanitized prompt inside the replacement window before sending, so that I can fix the prompt without returning sensitive text to the cloud-bound composer.
+52. As a Codex/ChatGPT Desktop user, I want raw submission with detected sensitive terms to require a separate emergency bypass action, so that normal Send and Cancel can never accidentally approve raw data.
+53. As a first-time Windows user, I want setup/profile verification to appear after installation and block unsafe sends until protected, so that installing Code Sanitizer does not leave an unconfigured gap.
 
 ## Implementation Decisions
 
@@ -103,6 +107,11 @@ The mapping table must be user-global across projects. The same real URL, domain
 - The installed tray app must expose profile verification for Codex Desktop and ChatGPT Desktop without requiring the user to copy `dotnet run` commands. Console commands may remain as diagnostics, but normal onboarding must be reachable from resident UI.
 - Native submit interception must be repeatable for every matching Send gesture while protection is enabled. Confirmation, cancellation, block and failure paths must return the resident hook to a ready state for the next protected Send.
 - The confirmation overlay for native submit decisions must request active foreground display when shown. If foreground activation is refused by Windows, Code Sanitizer must produce visible raw-free status rather than silently hiding the decision window.
+- Cancel in the replacement overlay is scoped only to the current submit attempt. It sends nothing and must not create a pass-through, allow token, profile downgrade, or remembered bypass for the next Send.
+- The replacement overlay must include an editable sanitized-text path. Edited sanitized text must be locally verified before submission, and any edit that reintroduces sensitive values must fail closed.
+- Sending original raw text that still contains detected sensitive terms requires a distinct emergency bypass action, proposed as `Ctrl+Alt+Shift+Enter` while the replacement window is active plus a visible one-shot button. It must require a second confirmation, be audited raw-free, and be policy-blockable.
+- While Code Sanitizer is running and a selected Codex/ChatGPT profile is protected, normal composer Send must never submit a prompt that still contains detected sensitive terms. Cloud submission from that surface is allowed only when the prompt has no detected sensitive terms, when verified sanitized text is submitted from the replacement overlay, or when the explicit emergency bypass action is confirmed for that one attempt.
+- After installation, if no selected Codex/ChatGPT profile is protected, the resident app must show an active setup window and suppress selected AI app submit attempts with a raw-free setup-required status until delayed focus verification succeeds.
 - The system must never send the mapping table or HMAC secret to the cloud.
 - The system must show an explicit confirmation step when sensitive data was replaced.
 - The system must use a 10-second total hard cap for sanitizer work, target under 2 seconds for ordinary prompts, and fail closed on timeout.
@@ -132,6 +141,9 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Native profile verification tests should cover delayed focused-composer verification, raw-free output, and command/tray discoverability for both Codex Desktop and ChatGPT Desktop.
 - Product smoke must continue to exercise the Windows Codex/ChatGPT native submit readiness path every run, including selected-profile gating and raw-free status reporting.
 - Native submit regression tests should trigger repeated protected Send gestures and prove the overlay/sanitizer path runs for each attempt, not only the first one.
+- Native submit regression tests should cover Cancel followed by another Send with the same or edited composer text and prove the sanitizer/confirmation path runs again.
+- Confirmation overlay tests should cover manual editing of sanitized text, verification before submit, rejection of edited text that reintroduces sensitive values, and explicit emergency bypass behavior.
+- First-run setup tests should cover installer-launched resident startup with no protected profile, active delayed-focus setup, and fail-closed submit attempts before setup completes.
 - Confirmation overlay tests should prove the replacement window requests active foreground display and remains raw-free.
 - Timeout tests should verify fail-closed behavior at the 10-second hard cap and scanner-level errors.
 - Security regression tests should include near-miss samples and false-positive samples.

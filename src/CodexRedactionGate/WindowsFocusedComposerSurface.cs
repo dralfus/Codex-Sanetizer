@@ -653,8 +653,18 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             return null;
         }
 
-        if (!string.Equals(discovery.Surface.SurfaceId, surface.SurfaceId, StringComparison.Ordinal)
-            || !string.Equals(discovery.Surface.ProfileId, surface.ProfileId, StringComparison.Ordinal))
+        // Only check ProfileId and WindowHandle, not ElementRuntimeIdHash
+        // This ensures the element can be found even if the focused element changes
+        // (e.g., after showing a confirmation overlay)
+        if (!string.Equals(discovery.Surface.ProfileId, surface.ProfileId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        // Extract window handle from surface metadata and verify it matches
+        if (!surface.Metadata.TryGetValue("window_handle", out var expectedWindowHandle)
+            || !discovery.Surface.Metadata.TryGetValue("window_handle", out var actualWindowHandle)
+            || !string.Equals(expectedWindowHandle, actualWindowHandle, StringComparison.Ordinal))
         {
             return null;
         }
