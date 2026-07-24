@@ -36,6 +36,7 @@ public static class OsInteractionStatusIds
     public const string NativeSubmitPassThrough = "native_submit_pass_through";
     public const string EmergencyDisabled = "emergency_disabled";
     public const string EnterpriseBlocked = "enterprise_blocked";
+    public const string NativeSubmitSetupRequired = "native_submit_setup_required";
 }
 
 public sealed record TextSurfaceDescriptor(

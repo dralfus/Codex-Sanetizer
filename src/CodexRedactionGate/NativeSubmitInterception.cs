@@ -164,6 +164,7 @@ public sealed record NativeKeyGesture(
     bool ImeComposing = false,
     bool DeadKey = false)
 {
+    public static NativeKeyGesture CtrlAltShiftEnter { get; } = new("ENTER", Ctrl: true, Alt: true, Shift: true);
     public static NativeKeyGesture CtrlAltShiftPause { get; } = new("PAUSE", Ctrl: true, Alt: true, Shift: true);
 }
 
@@ -563,19 +564,22 @@ public sealed class NativeSubmitInterceptionController
     private readonly NativeSubmitEnterprisePolicy _policy;
     private readonly Func<DateTimeOffset> _clock;
     private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
+    private readonly IFirstRunSetupController? _firstRunSetupController;
 
     public NativeSubmitInterceptionController(
         SubmitBindingProfile profile,
         NativeSubmitEmergencyState emergencyState,
         NativeSubmitEnterprisePolicy? policy = null,
         Func<DateTimeOffset>? clock = null,
-        Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null)
+        Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null,
+        IFirstRunSetupController? firstRunSetupController = null)
     {
         _profile = profile ?? throw new ArgumentNullException(nameof(profile));
         _emergencyState = emergencyState ?? throw new ArgumentNullException(nameof(emergencyState));
         _policy = policy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _activeSurfaceDiscovery = activeSurfaceDiscovery;
+        _firstRunSetupController = firstRunSetupController;
     }
 
     public NativeSubmitInterceptionResult HandleGesture(
@@ -590,6 +594,24 @@ public sealed class NativeSubmitInterceptionController
             ["capability_status"] = _profile.CapabilityStatus,
             ["managed_mode"] = _policy.ManagedMode.ToString().ToLowerInvariant()
         };
+
+        // Check first-run setup requirement
+        if (_firstRunSetupController is not null)
+        {
+            var setupLayout = DefaultStorageLayout.CreateDefault();
+            var setupResult = _firstRunSetupController.EnsureSetup(setupLayout);
+            if (!setupResult.Succeeded && setupResult.State.Required)
+            {
+                diagnostics["setup_required"] = "true";
+                diagnostics["unprotected_profiles"] = string.Join(",", setupResult.State.UnprotectedProfileIds);
+                return new NativeSubmitInterceptionResult(
+                    OsInteractionStatusIds.NativeSubmitSetupRequired,
+                    SuppressOriginalInput: true,
+                    Applied: false,
+                    Submitted: false,
+                    Diagnostics: diagnostics);
+            }
+        }
 
         if (IsEmergencyGesture(gesture))
         {
@@ -721,7 +743,7 @@ public sealed class NativeSubmitInterceptionController
 
     private static bool IsEmergencyGesture(NativeKeyGesture gesture)
     {
-        return NativeKeyGesture.CtrlAltShiftPause.Key.Equals(gesture.Key, StringComparison.OrdinalIgnoreCase)
+        return NativeKeyGesture.CtrlAltShiftEnter.Key.Equals(gesture.Key, StringComparison.OrdinalIgnoreCase)
             && gesture.Ctrl
             && gesture.Alt
             && gesture.Shift;
@@ -1123,7 +1145,7 @@ public static class NativeSubmitProductSmokeRunner
             && foregroundActivatedSmoke.RequestedCapabilities.Contains("set_foreground_window", StringComparer.Ordinal);
         var overlayForegroundRefusalStatusPassed = !foregroundDeniedSmoke.ForegroundActivated
             && foregroundDeniedSmoke.ActionRequiredStatusVisible;
-        var emergencyDisable = controller.HandleGesture(NativeKeyGesture.CtrlAltShiftPause);
+        var emergencyDisable = controller.HandleGesture(NativeKeyGesture.CtrlAltShiftEnter);
         var enterprise = new NativeSubmitInterceptionController(
             profile with { CapabilityStatus = OsInteractionStatusIds.DegradedHotkeyOnly },
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),

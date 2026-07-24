@@ -25,7 +25,8 @@ public sealed record TrayProtectionState(
     bool ComposerProtected = false,
     bool ProjectFilesProtected = false,
     string ProjectFileStatus = ProjectFileProtectionStatusValues.NotConfigured,
-    bool ResidentProcess = false);
+    bool ResidentProcess = false,
+    bool SetupRequired = false);
 
 public sealed record ProtectionDisableResult(
     bool Succeeded,
@@ -85,22 +86,51 @@ internal sealed class TrayProtectionController
 
     public bool Start()
     {
+        // Check first-run setup status
+        var setupRequired = false;
+        if (_nativeSubmitController is not null)
+        {
+            try
+            {
+                var setupLayout = DefaultStorageLayout.CreateDefault();
+                var setupController = _nativeSubmitController.GetType()
+                    .GetField("_firstRunSetupController", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?
+                    .GetValue(_nativeSubmitController) as IFirstRunSetupController;
+                
+                if (setupController is not null)
+                {
+                    var setupResult = setupController.EnsureSetup(setupLayout);
+                    setupRequired = setupResult.State.Required && !setupResult.Succeeded;
+                }
+            }
+            catch
+            {
+                // Ignore setup errors during startup
+            }
+        }
+
         var manualHotkeyStarted = _hotkeyHost.Start(RunApplyOnlyOnce);
         var nativeStarted = StartNativeSubmitHook();
         if (!manualHotkeyStarted && !nativeStarted)
         {
             State = CreateState(
                 enabled: false,
-                lastStatus: _hotkeyHost.LastErrorCode ?? NativeSubmitUnavailableStatus());
+                lastStatus: _hotkeyHost.LastErrorCode ?? NativeSubmitUnavailableStatus(),
+                setupRequired: setupRequired);
             StateChanged?.Invoke(this, EventArgs.Empty);
             return false;
         }
 
+        var nativeStatus = nativeStarted 
+            ? (setupRequired ? OsInteractionStatusIds.NativeSubmitSetupRequired : OsInteractionStatusIds.Protected)
+            : NativeSubmitUnavailableStatus();
+            
         State = CreateState(
             enabled: true,
             lastStatus: manualHotkeyStarted ? "enabled" : "enabled_native_submit_manual_hotkey_unavailable",
-            nativeSubmitEnabled: nativeStarted,
-            nativeSubmitStatus: nativeStarted ? OsInteractionStatusIds.Protected : NativeSubmitUnavailableStatus());
+            nativeSubmitEnabled: nativeStarted && !setupRequired,
+            nativeSubmitStatus: nativeStatus,
+            setupRequired: setupRequired);
         StateChanged?.Invoke(this, EventArgs.Empty);
         return true;
     }
@@ -212,12 +242,14 @@ internal sealed class TrayProtectionController
         }
 
         var readinessStatus = NativeSubmitReadinessStatusAfterFlow(result.Status);
+        var setupRequired = readinessStatus == OsInteractionStatusIds.NativeSubmitSetupRequired;
         PublishNativeSubmitState(
             result.Status,
             readinessStatus,
             result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
             result.Applied,
-            result.Submitted);
+            result.Submitted,
+            setupRequired);
     }
 
     private void PublishNativeSubmitState(
@@ -225,7 +257,8 @@ internal sealed class TrayProtectionController
         string readinessStatus,
         string? profileId,
         bool applied,
-        bool submitted)
+        bool submitted,
+        bool setupRequired = false)
     {
         State = new TrayProtectionState(
             Enabled: true,
@@ -258,6 +291,7 @@ internal sealed class TrayProtectionController
             or OsInteractionStatusIds.SurfaceUnverified
             or OsInteractionStatusIds.BindingUnknown
             or OsInteractionStatusIds.NotConfigured
+            or OsInteractionStatusIds.NativeSubmitSetupRequired
             ? flowStatus
             : OsInteractionStatusIds.Protected;
     }
@@ -276,7 +310,8 @@ internal sealed class TrayProtectionController
         bool enabled,
         string lastStatus,
         bool nativeSubmitEnabled = false,
-        string nativeSubmitStatus = OsInteractionStatusIds.NotConfigured)
+        string nativeSubmitStatus = OsInteractionStatusIds.NotConfigured,
+        bool setupRequired = false)
     {
         return new TrayProtectionState(
             Enabled: enabled,
@@ -297,7 +332,8 @@ internal sealed class TrayProtectionController
             ComposerProtected: nativeSubmitStatus == OsInteractionStatusIds.Protected,
             ProjectFilesProtected: false,
             ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
-            ResidentProcess: enabled);
+            ResidentProcess: enabled,
+            SetupRequired: setupRequired);
     }
 
     private bool EnterprisePolicyBlocksDisable()

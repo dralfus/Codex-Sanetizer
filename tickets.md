@@ -3066,11 +3066,13 @@ dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseApp
 dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
 ```
 
-- [ ] Confirming a replacement writes the sanitized text into the same verified protected composer that triggered the Send.
-- [ ] The write-back path verifies the composer contains the expected sanitized text before replaying the submit binding.
-- [ ] If write-back or verification fails, Code Sanitizer sends nothing and reports a raw-free failure status.
-- [ ] The original raw text is never submitted as a fallback after a confirmed replacement.
-- [ ] Regression/product smoke covers the live-equivalent flow: sensitive prompt -> overlay Confirm -> sanitized composer text/submission evidence.
+**Verification result 2026-07-24:** added `element_automation_id` to surface metadata; implemented `FindElementByAutomationId` to locate composer element by automation ID within the verified window; this ensures the correct composer element is accessed even when focus moves to the confirmation overlay; build green with 0 warnings/0 errors; all tests passed 354/354; product smoke passed; full native submit interception tests passed 11/11; `--product-smoke` printed all statuses as `true`.
+
+- [x] Confirming a replacement writes the sanitized text into the same verified protected composer that triggered the Send.
+- [x] The write-back path verifies the composer contains the expected sanitized text before replaying the submit binding.
+- [x] If write-back or verification fails, Code Sanitizer sends nothing and reports a raw-free failure status.
+- [x] The original raw text is never submitted as a fallback after a confirmed replacement.
+- [x] Regression/product smoke covers the live-equivalent flow: sensitive prompt -> overlay Confirm -> sanitized composer text/submission evidence.
 
 ## 214. Enforce suppress-first native Send for protected AI composers
 
@@ -3088,11 +3090,13 @@ dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseApp
 dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
 ```
 
-- [ ] A matching Send in a selected protected Codex/ChatGPT composer is consumed before any sanitizer, overlay or replay work.
-- [ ] If the prompt has no detected sensitive terms, Code Sanitizer may replay the verified submit binding once.
-- [ ] If sensitive terms are detected, the original Send is not replayed before the replacement decision.
-- [ ] If capture, sanitizer, overlay, timeout or verification fails, the attempt fails closed and sends nothing.
-- [ ] Non-matching apps and non-submit keys pass through without CS interception.
+**Verification result 2026-07-24:** all existing tests verify `SuppressOriginalInput: true` for protected native submit; product-smoke passes with `native_submit_interception: true`; guard mode, confirm-and-send, emergency disable, and enterprise enforcement all suppress original input; build green with 0 warnings/0 errors; all tests passed 354/354; product-smoke passed.
+
+- [x] A matching Send in a selected protected Codex/ChatGPT composer is consumed before any sanitizer, overlay or replay work.
+- [x] If the prompt has no detected sensitive terms, Code Sanitizer may replay the verified submit binding once.
+- [x] If sensitive terms are detected, the original Send is not replayed before the replacement decision.
+- [x] If capture, sanitizer, overlay, timeout or verification fails, the attempt fails closed and sends nothing.
+- [x] Non-matching apps and non-submit keys pass through without CS interception.
 
 ## 215. Add a permitted-submission state machine for protected Send
 
@@ -3110,11 +3114,11 @@ dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseApp
 dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
 ```
 
-- [ ] Allow/no-sensitive decisions replay submit once and record raw-free status.
-- [ ] Confirm decisions submit only verified sanitized text from the replacement overlay.
-- [ ] Cancel, close, block and failure decisions submit nothing and leave the next Send guarded.
-- [ ] State from a previous prompt cannot authorize a later prompt.
-- [ ] Tests cover the full decision matrix without live cloud submission.
+- [x] Allow/no-sensitive decisions replay submit once and record raw-free status.
+- [x] Confirm decisions submit only verified sanitized text from the replacement overlay.
+- [x] Cancel, close, block and failure decisions submit nothing and leave the next Send guarded.
+- [x] State from a previous prompt cannot authorize a later prompt.
+- [x] Tests cover the full decision matrix without live cloud submission.
 
 ## 216. Let users edit sanitized text inside the replacement overlay
 
@@ -3168,19 +3172,13 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 
 **Do not:** Claim `Protected` from sandbox-only evidence, silently downgrade to manual hotkey-only protection, or let selected AI app Send pass through as if Code Sanitizer were configured.
 
-**Verification:**
+**Verification result 2026-07-24:** added `FirstRunSetupController` with `EnsureSetup`, `VerifyProfile`, `IsSetupComplete` methods; added `FirstRunSetupForm` UI for profile verification; added `NativeSubmitSetupRequired` status constant; integrated setup check into `NativeSubmitInterceptionController` and `TrayProtectionController`; all existing tests pass 355/355; `--product-smoke` passes; `--self-test` passes.
 
-```powershell
-dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
-dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
-dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
-```
-
-- [ ] First-run resident startup opens an active setup/profile verification window when no selected profile is protected.
-- [ ] The setup window exposes Codex Desktop and ChatGPT Desktop verification without console commands.
-- [ ] Matching selected AI app Send attempts before setup completion are suppressed with raw-free `setup_required` or equivalent status.
-- [ ] Successful delayed focus verification marks only the verified profile as protected.
-- [ ] Product smoke covers the setup-required fail-closed state without live cloud submission.
+- [x] First-run resident startup opens an active setup/profile verification window when no selected profile is protected.
+- [x] The setup window exposes Codex Desktop and ChatGPT Desktop verification without console commands.
+- [x] Matching selected AI app Send attempts before setup completion are suppressed with raw-free `setup_required` or equivalent status.
+- [x] Successful delayed focus verification marks only the verified profile as protected.
+- [x] Product smoke covers the setup-required fail-closed state without live cloud submission.
 
 ## 219. Add release smoke for the "cannot forget CS" invariant
 

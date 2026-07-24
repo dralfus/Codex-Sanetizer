@@ -62,7 +62,8 @@ public static class WindowsTrayApp
                 : new NativeSubmitInterceptionController(
                     nativeProfile,
                     new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-                    activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface),
+                    activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
+                    firstRunSetupController: new FirstRunSetupController()),
             nativeProfile is null
                 ? null
                 : () =>
