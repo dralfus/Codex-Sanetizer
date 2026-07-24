@@ -25,13 +25,139 @@ public sealed record FirstRunSetupResult(
 public interface IFirstRunSetupController
 {
     FirstRunSetupResult EnsureSetup(DefaultStorageLayout layout);
+    FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout);
     FirstRunSetupResult VerifyProfile(string profileId, DefaultStorageLayout layout);
     bool IsSetupComplete(DefaultStorageLayout layout);
 }
 
+internal interface IFirstRunProfileVerifier
+{
+    SubmitBindingProfile Verify(SubmitBindingProfile profile);
+}
+
+internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileVerifier
+{
+    private readonly TimeSpan _verificationDelay;
+    private readonly Func<TextSurfaceDiscoveryResult> _discoveryFactory;
+
+    public FocusedComposerFirstRunProfileVerifier()
+        : this(TimeSpan.FromSeconds(10), () => WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface())
+    {
+    }
+
+    internal FocusedComposerFirstRunProfileVerifier(
+        TimeSpan verificationDelay,
+        Func<TextSurfaceDiscoveryResult> discoveryFactory)
+    {
+        _verificationDelay = verificationDelay;
+        _discoveryFactory = discoveryFactory ?? throw new ArgumentNullException(nameof(discoveryFactory));
+    }
+
+    public SubmitBindingProfile Verify(SubmitBindingProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        if (_verificationDelay > TimeSpan.Zero)
+        {
+            Thread.Sleep(_verificationDelay);
+        }
+
+        var discovery = _discoveryFactory();
+        return SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profile.ProfileId,
+            profile.SubmitBinding?.DisplayText ?? "Enter",
+            profile.NewlineBinding?.DisplayText ?? "Ctrl+Enter",
+            discovery,
+            profile.CompatibilityEvidence);
+    }
+}
+
 internal sealed class FirstRunSetupController : IFirstRunSetupController
 {
+    private readonly IFirstRunProfileVerifier _profileVerifier;
+    private readonly Func<IReadOnlyList<SubmitBindingProfile>, DefaultStorageLayout, IFirstRunSetupController, bool> _showSetupWindow;
+
+    public FirstRunSetupController()
+        : this(new FocusedComposerFirstRunProfileVerifier(), ShowSetupWindow)
+    {
+    }
+
+    internal FirstRunSetupController(
+        IFirstRunProfileVerifier profileVerifier,
+        Func<IReadOnlyList<SubmitBindingProfile>, DefaultStorageLayout, IFirstRunSetupController, bool>? showSetupWindow = null)
+    {
+        _profileVerifier = profileVerifier ?? throw new ArgumentNullException(nameof(profileVerifier));
+        _showSetupWindow = showSetupWindow ?? ShowSetupWindow;
+    }
+
     public FirstRunSetupResult EnsureSetup(DefaultStorageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var initialStatus = GetSetupStatus(layout);
+        if (!initialStatus.State.Required)
+        {
+            SetSetupComplete(layout);
+            return new FirstRunSetupResult(
+                Succeeded: true,
+                Code: "setup_complete",
+                State: initialStatus.State,
+                Diagnostics: initialStatus.Diagnostics);
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "setup_requires_windows",
+                State: initialStatus.State,
+                Diagnostics: Merge(initialStatus.Diagnostics, new Dictionary<string, string>
+                {
+                    ["platform"] = "non_windows"
+                }));
+        }
+
+        var storeResult = SubmitBindingProfileStore.Load(layout);
+        var setupCompleted = _showSetupWindow(storeResult.Profiles, layout, this);
+        if (setupCompleted)
+        {
+            var finalStatus = GetSetupStatus(layout);
+            if (!finalStatus.State.Required)
+            {
+                SetSetupComplete(layout);
+                return new FirstRunSetupResult(
+                    Succeeded: true,
+                    Code: "setup_complete_after_window",
+                    State: finalStatus.State,
+                    Diagnostics: Merge(finalStatus.Diagnostics, new Dictionary<string, string>
+                    {
+                        ["user_action"] = "setup_window_closed",
+                        ["all_profiles_verified"] = "true"
+                    }));
+            }
+
+            return new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "setup_incomplete_unprotected_profiles",
+                State: finalStatus.State,
+                Diagnostics: Merge(finalStatus.Diagnostics, new Dictionary<string, string>
+                {
+                    ["user_action"] = "setup_window_closed",
+                    ["all_profiles_verified"] = "false"
+                }));
+        }
+
+        return new FirstRunSetupResult(
+            Succeeded: false,
+            Code: "setup_cancelled",
+            State: initialStatus.State,
+            Diagnostics: Merge(initialStatus.Diagnostics, new Dictionary<string, string>
+            {
+                ["user_action"] = "setup_window_cancelled"
+            }));
+    }
+
+    public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
@@ -48,87 +174,16 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
                 });
         }
 
-        var unprotectedProfiles = storeResult.Profiles
-            .Where(p => !p.IsProtected)
-            .Select(p => p.ProfileId)
-            .OrderBy(id => id, StringComparer.Ordinal)
-            .ToArray();
-
-        var unprotectedCount = unprotectedProfiles.Length;
-        var protectedCount = storeResult.Profiles.Count;
-
-        if (unprotectedCount == 0)
-        {
-            SetSetupComplete(layout);
-            return new FirstRunSetupResult(
-                Succeeded: true,
-                Code: "setup_complete",
-                State: CreateSetupState(storeResult.Profiles),
-                Diagnostics: new Dictionary<string, string>
-                {
-                    ["profiles_protected_count"] = protectedCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                });
-        }
-
-        // Show setup window and wait for user action
-        if (!OperatingSystem.IsWindows())
-        {
-            return new FirstRunSetupResult(
-                Succeeded: false,
-                Code: "setup_requires_windows",
-                State: CreateSetupState(storeResult.Profiles),
-                Diagnostics: new Dictionary<string, string>
-                {
-                    ["unprotected_profile_count"] = unprotectedCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                });
-        }
-
-        var setupCompleted = ShowSetupWindow(storeResult.Profiles);
-        if (setupCompleted)
-        {
-            // Re-load profiles to check if they were actually verified
-            var updatedStoreResult = SubmitBindingProfileStore.Load(layout);
-            var unprotectedAfter = updatedStoreResult.Profiles
-                .Where(p => !p.IsProtected)
-                .Select(p => p.ProfileId)
-                .ToArray();
-
-            // Only mark setup as complete if all profiles are now protected
-            if (unprotectedAfter.Length == 0)
-            {
-                SetSetupComplete(layout);
-                return new FirstRunSetupResult(
-                    Succeeded: true,
-                    Code: "setup_complete_after_window",
-                    State: CreateSetupState(updatedStoreResult.Profiles),
-                    Diagnostics: new Dictionary<string, string>
-                    {
-                        ["user_action"] = "setup_window_closed",
-                        ["unprotected_profile_count_before"] = unprotectedCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        ["all_profiles_verified"] = "true"
-                    });
-            }
-
-            // Setup window was closed but profiles are still unprotected
-            return new FirstRunSetupResult(
-                Succeeded: false,
-                Code: "setup_incomplete_unprotected_profiles",
-                State: CreateSetupState(updatedStoreResult.Profiles),
-                Diagnostics: new Dictionary<string, string>
-                {
-                    ["user_action"] = "setup_window_closed",
-                    ["unprotected_profile_count"] = unprotectedAfter.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    ["unprotected_profiles"] = string.Join(",", unprotectedAfter)
-                });
-        }
-
+        var state = CreateSetupState(storeResult.Profiles);
         return new FirstRunSetupResult(
-            Succeeded: false,
-            Code: "setup_cancelled",
-            State: CreateSetupState(storeResult.Profiles),
+            Succeeded: !state.Required,
+            Code: state.Required ? "setup_required" : "setup_complete",
+            State: state,
             Diagnostics: new Dictionary<string, string>
             {
-                ["user_action"] = "setup_window_cancelled"
+                ["profiles_load_status"] = storeResult.Code,
+                ["profile_count"] = storeResult.Profiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["unprotected_profile_count"] = state.UnprotectedProfileIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
             });
     }
 
@@ -153,28 +208,7 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
                 });
         }
 
-        // Perform real verification using the existing SubmitBindingOnboardingVerifier infrastructure
-        // This simulates a user-driven verification flow by using a discovery mock
-        var discovery = TextSurfaceDiscoveryResult.Failure(
-            OsInteractionStatusIds.NativeSubmitSetupRequired,
-            new Dictionary<string, string>
-            {
-                ["verification_mode"] = "user_verified_dry_run",
-                ["cloud_submission"] = "false"
-            });
-
-        // For now, we use a dry-run verification that requires user interaction
-        // In production, this would call the actual native profile verification flow
-        // which requires user to focus the Codex/ChatGPT composer window
-        var submitBindingText = profile.SubmitBinding?.DisplayText ?? "Enter";
-        var newlineBindingText = profile.NewlineBinding?.DisplayText ?? "Ctrl+Enter";
-        var verifiedProfile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
-            profileId,
-            submitBindingText,
-            newlineBindingText,
-            discovery);
-
-        // Update the profile with the verification result
+        var verifiedProfile = _profileVerifier.Verify(profile);
         var saveResult = SubmitBindingProfileStore.Upsert(layout, verifiedProfile);
 
         if (!saveResult.Succeeded)
@@ -190,16 +224,22 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
                 });
         }
 
+        var updatedStatus = GetSetupStatus(layout);
+        if (!updatedStatus.State.Required)
+        {
+            SetSetupComplete(layout);
+        }
+
         return new FirstRunSetupResult(
             Succeeded: verifiedProfile.IsProtected,
             Code: verifiedProfile.IsProtected ? "profile_verified" : "verification_failed",
-            State: CreateSetupState(storeResult.Profiles),
-            Diagnostics: new Dictionary<string, string>
+            State: updatedStatus.State,
+            Diagnostics: Merge(updatedStatus.Diagnostics, new Dictionary<string, string>
             {
                 ["profile_id"] = profileId,
                 ["verification_result"] = verifiedProfile.CapabilityStatus,
                 ["binding_source"] = verifiedProfile.BindingSource
-            });
+            }));
     }
 
     public bool IsSetupComplete(DefaultStorageLayout layout)
@@ -230,7 +270,23 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         File.WriteAllText(setupMarkerPath, $"complete:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}");
     }
 
-    private static bool ShowSetupWindow(IReadOnlyList<SubmitBindingProfile> profiles)
+    private static IReadOnlyDictionary<string, string> Merge(
+        IReadOnlyDictionary<string, string> first,
+        IReadOnlyDictionary<string, string> second)
+    {
+        var merged = new Dictionary<string, string>(first, StringComparer.Ordinal);
+        foreach (var item in second)
+        {
+            merged[item.Key] = item.Value;
+        }
+
+        return merged;
+    }
+
+    private static bool ShowSetupWindow(
+        IReadOnlyList<SubmitBindingProfile> profiles,
+        DefaultStorageLayout layout,
+        IFirstRunSetupController setupController)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -242,7 +298,7 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         {
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             
-            using var form = new FirstRunSetupForm(profiles);
+            using var form = new FirstRunSetupForm(profiles, layout, setupController);
             Application.Run(form);
             result = form.SetupCompleted;
         });
@@ -258,6 +314,8 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
 internal sealed class FirstRunSetupForm : Form
 {
     private readonly IReadOnlyList<SubmitBindingProfile> _profiles;
+    private readonly DefaultStorageLayout _layout;
+    private readonly IFirstRunSetupController _setupController;
     private bool _setupCompleted;
     private Button? _verifyCodexButton;
     private Button? _verifyChatGptButton;
@@ -265,9 +323,14 @@ internal sealed class FirstRunSetupForm : Form
 
     public bool SetupCompleted => _setupCompleted;
 
-    public FirstRunSetupForm(IReadOnlyList<SubmitBindingProfile> profiles)
+    public FirstRunSetupForm(
+        IReadOnlyList<SubmitBindingProfile> profiles,
+        DefaultStorageLayout layout,
+        IFirstRunSetupController setupController)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
+        _layout = layout ?? throw new ArgumentNullException(nameof(layout));
+        _setupController = setupController ?? throw new ArgumentNullException(nameof(setupController));
 
         Text = "First-Time Setup - Codex Redaction Gate";
         StartPosition = FormStartPosition.CenterScreen;
@@ -294,7 +357,7 @@ internal sealed class FirstRunSetupForm : Form
 
         var instructionLabel2 = new Label
         {
-            Text = "Click Verify for each profile you want to protect. The verification process will test the connection.",
+            Text = "Click Verify, focus the matching Codex/ChatGPT composer, and wait until verification completes locally.",
             Dock = DockStyle.Top,
             AutoSize = false,
             Height = 45,
@@ -356,7 +419,7 @@ internal sealed class FirstRunSetupForm : Form
 
         _skipButton = new Button
         {
-            Text = "Continue Without Setup",
+            Text = "Exit setup",
             Width = 140
         };
         _skipButton.Click += (_, _) => OnSkipSetup();
@@ -371,7 +434,8 @@ internal sealed class FirstRunSetupForm : Form
         Controls.Add(profilesPanel);
         Controls.Add(buttonsPanel);
 
-        AcceptButton = _skipButton;
+        AcceptButton = _verifyCodexButton;
+        CancelButton = _skipButton;
     }
 
     private Panel CreateProfileCard(SubmitBindingProfile profile)
@@ -428,8 +492,6 @@ internal sealed class FirstRunSetupForm : Form
 
     private void OnVerifyProfile(string profileId)
     {
-        // In production, this would launch the verification flow
-        // For this ticket, we'll just mark it as verified in the UI
         var updatedProfile = _profiles
             .FirstOrDefault(p => string.Equals(p.ProfileId, profileId, StringComparison.Ordinal));
 
@@ -447,12 +509,46 @@ internal sealed class FirstRunSetupForm : Form
                 }
             }
 
-            // Simulate verification delay
-            Thread.Sleep(500);
+            TopMost = false;
+            WindowState = FormWindowState.Minimized;
+            Hide();
+            Application.DoEvents();
 
-            // Mark as verified
-            _setupCompleted = true;
-            Close();
+            var result = _setupController.VerifyProfile(profileId, _layout);
+
+            Show();
+            WindowState = FormWindowState.Normal;
+            TopMost = true;
+            Activate();
+
+            if (card is not null)
+            {
+                var statusLabel = card.Controls.OfType<Label>().FirstOrDefault(l =>
+                    l.Text == "⟳ Verifying..."
+                    || l.Text == "○ Not verified"
+                    || l.Text == "✓ Protected");
+                if (statusLabel is not null)
+                {
+                    statusLabel.Text = result.Succeeded ? "✓ Protected" : "○ Not verified";
+                    statusLabel.ForeColor = result.Succeeded ? Color.Green : Color.Gray;
+                }
+            }
+
+            if (!result.Succeeded)
+            {
+                MessageBox.Show(
+                    $"Verification failed. status={result.Code}. Protected Send will remain blocked until setup succeeds.",
+                    "Codex Redaction Gate - Setup required",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!result.State.Required)
+            {
+                _setupCompleted = true;
+                Close();
+            }
         }
     }
 
@@ -487,9 +583,17 @@ internal sealed class FirstRunSetupForm : Form
 
     private void OnSkipSetup()
     {
-        // User chose to skip setup - do NOT mark as complete
-        // Setup remains required until user verifies profiles
-        // This prevents bypassing the onboarding flow
+        var confirmed = MessageBox.Show(
+            "Exit setup? Codex/ChatGPT protected Send will remain blocked until profile verification succeeds.",
+            "Code Sanitizer - setup is not complete",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+        if (!confirmed)
+        {
+            return;
+        }
+
         _setupCompleted = false;
         Close();
     }

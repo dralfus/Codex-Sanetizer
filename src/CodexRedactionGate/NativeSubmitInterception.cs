@@ -566,10 +566,6 @@ public sealed class NativeSubmitInterceptionController
     private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
     private readonly IFirstRunSetupController? _firstRunSetupController;
 
-    /// <summary>
-    /// Публичное свойство для проверки статуса setup без reflection.
-    /// Возвращает true если setup required.
-    /// </summary>
     public bool IsSetupRequired(DefaultStorageLayout layout)
     {
         if (_firstRunSetupController is null)
@@ -577,7 +573,7 @@ public sealed class NativeSubmitInterceptionController
             return false;
         }
 
-        var setupResult = _firstRunSetupController.EnsureSetup(layout);
+        var setupResult = _firstRunSetupController.GetSetupStatus(layout);
         return setupResult.State.Required && !setupResult.Succeeded;
     }
 
@@ -609,24 +605,6 @@ public sealed class NativeSubmitInterceptionController
             ["capability_status"] = _profile.CapabilityStatus,
             ["managed_mode"] = _policy.ManagedMode.ToString().ToLowerInvariant()
         };
-
-        // Check first-run setup requirement
-        if (_firstRunSetupController is not null)
-        {
-            var setupLayout = DefaultStorageLayout.CreateDefault();
-            var setupResult = _firstRunSetupController.EnsureSetup(setupLayout);
-            if (!setupResult.Succeeded && setupResult.State.Required)
-            {
-                diagnostics["setup_required"] = "true";
-                diagnostics["unprotected_profiles"] = string.Join(",", setupResult.State.UnprotectedProfileIds);
-                return new NativeSubmitInterceptionResult(
-                    OsInteractionStatusIds.NativeSubmitSetupRequired,
-                    SuppressOriginalInput: true,
-                    Applied: false,
-                    Submitted: false,
-                    Diagnostics: diagnostics);
-            }
-        }
 
         if (IsEmergencyGesture(gesture))
         {
@@ -666,6 +644,12 @@ public sealed class NativeSubmitInterceptionController
         if (activeTargetGate is not null)
         {
             return activeTargetGate;
+        }
+
+        var setupGate = SuppressSelectedSubmitIfSetupRequired(diagnostics);
+        if (setupGate is not null)
+        {
+            return setupGate;
         }
 
         var enforcement = EvaluateEnterpriseEnforcement(hookHealthy);
@@ -758,7 +742,7 @@ public sealed class NativeSubmitInterceptionController
 
     private static bool IsEmergencyGesture(NativeKeyGesture gesture)
     {
-        return NativeKeyGesture.CtrlAltShiftEnter.Key.Equals(gesture.Key, StringComparison.OrdinalIgnoreCase)
+        return NativeKeyGesture.CtrlAltShiftPause.Key.Equals(gesture.Key, StringComparison.OrdinalIgnoreCase)
             && gesture.Ctrl
             && gesture.Alt
             && gesture.Shift;
@@ -821,6 +805,36 @@ public sealed class NativeSubmitInterceptionController
 
         diagnostics["active_surface_gate"] = "selected_profile";
         return null;
+    }
+
+    private NativeSubmitInterceptionResult? SuppressSelectedSubmitIfSetupRequired(
+        Dictionary<string, string> diagnostics)
+    {
+        if (_firstRunSetupController is null)
+        {
+            return null;
+        }
+
+        var setupLayout = DefaultStorageLayout.CreateDefault();
+        var setupResult = _firstRunSetupController.GetSetupStatus(setupLayout);
+        if (setupResult.Succeeded || !setupResult.State.Required)
+        {
+            return null;
+        }
+
+        if (!setupResult.State.UnprotectedProfileIds.Contains(_profile.ProfileId, StringComparer.Ordinal))
+        {
+            return null;
+        }
+
+        diagnostics["setup_required"] = "true";
+        diagnostics["unprotected_profiles"] = string.Join(",", setupResult.State.UnprotectedProfileIds);
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitSetupRequired,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: diagnostics);
     }
 
     private static IReadOnlyDictionary<string, string> Merge(
@@ -1160,7 +1174,7 @@ public static class NativeSubmitProductSmokeRunner
             && foregroundActivatedSmoke.RequestedCapabilities.Contains("set_foreground_window", StringComparer.Ordinal);
         var overlayForegroundRefusalStatusPassed = !foregroundDeniedSmoke.ForegroundActivated
             && foregroundDeniedSmoke.ActionRequiredStatusVisible;
-        var emergencyDisable = controller.HandleGesture(NativeKeyGesture.CtrlAltShiftEnter);
+        var emergencyDisable = controller.HandleGesture(NativeKeyGesture.CtrlAltShiftPause);
         var enterprise = new NativeSubmitInterceptionController(
             profile with { CapabilityStatus = OsInteractionStatusIds.DegradedHotkeyOnly },
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),

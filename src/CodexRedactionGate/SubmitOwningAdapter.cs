@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace CodexRedactionGate;
 
@@ -30,7 +31,7 @@ public sealed class SubmitOwningAdapter
         _confirmationProvider = confirmationProvider;
     }
 
-    public SubmitOutcome Handle(SanitizationResult result)
+    public SubmitOutcome Handle(SanitizationResult result, ISanitizer? sanitizer = null)
     {
         ArgumentNullException.ThrowIfNull(result);
 
@@ -63,7 +64,43 @@ public sealed class SubmitOwningAdapter
             return new SubmitOutcome(Submitted: false, Status: "canceled");
         }
 
-        return Submit(decision.Payload.SanitizedText);
+        var textToSubmit = decision.Payload.SanitizedText;
+        if (!string.Equals(textToSubmit, result.SanitizedText, StringComparison.Ordinal))
+        {
+            if (sanitizer is null)
+            {
+                return new SubmitOutcome(Submitted: false, Status: "edited_text_verifier_missing");
+            }
+
+            var editedRequest = new SanitizeRequest(
+                ContentParts: new[] { new ContentPart("prompt", ContentSources.PromptText, textToSubmit, new Dictionary<string, string>()) },
+                Context: new SanitizationContext(
+                    Application: "edited-prompt",
+                    WorkspacePath: null,
+                    ProjectId: null,
+                    SessionId: null,
+                    PolicyProfile: "default"),
+                Options: new SanitizationOptions(
+                    AllowSessionAliases: false,
+                    AllowSecretStorage: false,
+                    ConfirmationMode: "none"));
+
+            var editedResult = sanitizer.Sanitize(editedRequest);
+
+            if (editedResult.Decision == SanitizeDecision.Block)
+            {
+                return new SubmitOutcome(Submitted: false, Status: "edited_text_blocked");
+            }
+
+            if (editedResult.Decision == SanitizeDecision.Allow)
+            {
+                return Submit(editedResult.SanitizedText);
+            }
+
+            return new SubmitOutcome(Submitted: false, Status: "edited_text_requires_confirmation");
+        }
+
+        return Submit(textToSubmit);
     }
 
     private SubmitOutcome Submit(string text)

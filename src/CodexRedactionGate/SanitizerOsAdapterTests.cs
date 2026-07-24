@@ -72,6 +72,43 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void OsInteractionOrchestrator_EditedOverlayTextIsLocallyVerifiedBeforeWriteBack()
+    {
+        var surface = CreateFakeTextSurface("Connect to 192.168.10.25");
+        var orchestrator = CreateOsOrchestrator(
+            surface,
+            _ => new ConfirmationDecision(true, new ApprovedSanitizedPayload("Connect to secure-server")));
+
+        var result = orchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Submitted));
+        Assert.That(surface.CurrentText, Is.EqualTo("Connect to secure-server"));
+        Assert.That(surface.SubmitCount, Is.EqualTo(1));
+        Assert.That(result.Diagnostics["edited_text_verified"], Is.EqualTo("true"));
+    }
+
+    [Test]
+    public void OsInteractionOrchestrator_EditedOverlayTextThatStillRequiresConfirmationFailsClosed()
+    {
+        var surface = CreateFakeTextSurface("Connect to 192.168.10.25");
+        var orchestrator = CreateOsOrchestrator(
+            surface,
+            _ => new ConfirmationDecision(true, new ApprovedSanitizedPayload("Connect to 10.20.30.40")));
+
+        var result = orchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+        Assert.That(result.Applied, Is.False);
+        Assert.That(result.Submitted, Is.False);
+        Assert.That(surface.CurrentText, Is.EqualTo("Connect to 192.168.10.25"));
+        Assert.That(surface.WriteCount, Is.EqualTo(0));
+        Assert.That(surface.SubmitCount, Is.EqualTo(0));
+        Assert.That(result.Diagnostics["edited_text_verified"], Is.EqualTo("false"));
+        Assert.That(result.Diagnostics["edited_text_status"], Is.EqualTo("requires_confirmation"));
+        Assert.That(System.Text.Json.JsonSerializer.Serialize(result.Diagnostics), Does.Not.Contain("10.20.30.40"));
+    }
+
+    [Test]
     public void OsInteractionOrchestrator_BlockAppliesAndSubmitsNothing()
     {
         var surface = CreateFakeTextSurface("Reject BLOCK_THIS");

@@ -5000,6 +5000,64 @@ public partial class SanitizerTests
         }
     }
 
+    [Test]
+    public void SubmitOwningAdapter_EditedTextIsReSanitizedAndVerified()
+    {
+        var submitter = new RecordingPromptSubmitter();
+        var sanitizer = new Sanitizer(new InMemoryHmacMappingVault(TestSecret()));
+        var editedText = "Connect to secure-server";
+        var confirmationProvider = new FixedConfirmationProvider(model =>
+            new ConfirmationDecision(
+                Approved: true,
+                Payload: new ApprovedSanitizedPayload(editedText)));
+
+        var adapter = new SubmitOwningAdapter(submitter, confirmationProvider);
+        var result = sanitizer.Sanitize(CreatePromptRequest("Connect to 192.168.10.25"));
+
+        var outcome = adapter.Handle(result, sanitizer);
+
+        Assert.That(outcome.Submitted, Is.True, $"Expected submitted but got status: {outcome.Status}");
+        Assert.That(submitter.SubmittedTexts.Single(), Is.EqualTo("Connect to secure-server"));
+    }
+
+    [Test]
+    public void SubmitOwningAdapter_EditedTextFailsClosedWithoutVerifier()
+    {
+        var submitter = new RecordingPromptSubmitter();
+        var confirmationProvider = new FixedConfirmationProvider(_ =>
+            new ConfirmationDecision(
+                Approved: true,
+                Payload: new ApprovedSanitizedPayload("Connect to secure-server")));
+        var adapter = new SubmitOwningAdapter(submitter, confirmationProvider);
+        var result = new Sanitizer(new InMemoryHmacMappingVault(TestSecret()))
+            .Sanitize(CreatePromptRequest("Connect to 192.168.10.25"));
+
+        var outcome = adapter.Handle(result);
+
+        Assert.That(outcome.Submitted, Is.False);
+        Assert.That(outcome.Status, Is.EqualTo("edited_text_verifier_missing"));
+        Assert.That(submitter.SubmittedTexts, Is.Empty);
+    }
+
+    [Test]
+    public void SubmitOwningAdapter_EditedTextThatStillNeedsConfirmationSendsNothing()
+    {
+        var submitter = new RecordingPromptSubmitter();
+        var confirmationProvider = new FixedConfirmationProvider(_ =>
+            new ConfirmationDecision(
+                Approved: true,
+                Payload: new ApprovedSanitizedPayload("Connect to 10.20.30.40")));
+        var sanitizer = new Sanitizer(new InMemoryHmacMappingVault(TestSecret()));
+        var adapter = new SubmitOwningAdapter(submitter, confirmationProvider);
+        var result = sanitizer.Sanitize(CreatePromptRequest("Connect to 192.168.10.25"));
+
+        var outcome = adapter.Handle(result, sanitizer);
+
+        Assert.That(outcome.Submitted, Is.False);
+        Assert.That(outcome.Status, Is.EqualTo("edited_text_requires_confirmation"));
+        Assert.That(submitter.SubmittedTexts, Is.Empty);
+    }
+
     private sealed class RecordingSecretScanner : ISecretScanner
     {
         private readonly SecretScanResult _result;

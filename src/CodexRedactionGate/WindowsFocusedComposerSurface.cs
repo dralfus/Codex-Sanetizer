@@ -115,6 +115,7 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
                     ["write_strategy"] = snapshot.CanWriteValue ? "windows-ui-automation-value-pattern" : "verified-composer-keyboard-paste",
                     ["submit_strategy"] = match.Profile.SubmitStrategy,
                     ["window_handle"] = snapshot.WindowHandle.ToInt64().ToString("X", System.Globalization.CultureInfo.InvariantCulture),
+                    ["element_automation_id"] = snapshot.ElementAutomationId,
                     ["focused_element_hash"] = snapshot.ElementRuntimeIdHash,
                     ["composer_status"] = OsInteractionStatusIds.SupportedComposer,
                     ["classification_reason"] = composer.Reason,
@@ -669,7 +670,36 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             return null;
         }
 
-        return AutomationElement.FocusedElement;
+        // Try to find the element by AutomationId within the verified window
+        // This allows us to find the element even if focus has moved to another window
+        var windowHandle = IntPtr.Zero;
+        if (IntPtr.TryParse(expectedWindowHandle, System.Globalization.NumberStyles.HexNumber, null, out windowHandle))
+        {
+            if (surface.Metadata.TryGetValue("element_automation_id", out var automationId)
+                && !string.IsNullOrEmpty(automationId))
+            {
+                var element = FindElementByAutomationId(windowHandle, automationId);
+                if (element is not null)
+                {
+                    return element;
+                }
+            }
+
+            // Fallback to FocusedElement if we cannot find by AutomationId
+            // This handles cases where the element might have been recreated
+            // BUT we must verify the element is in the same window to avoid writing to wrong element
+            var fallback = AutomationElement.FocusedElement;
+            if (fallback != null)
+            {
+                var fallbackHandle = new IntPtr(fallback.Current.NativeWindowHandle);
+                if (fallbackHandle == windowHandle)
+                {
+                    return fallback;
+                }
+            }
+        }
+
+        return null; // Fail closed if we cannot verify the element
     }
 
     private static ValuePattern? GetValuePattern(AutomationElement element)
@@ -736,6 +766,25 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         }
 
         return result!;
+    }
+
+    private static AutomationElement? FindElementByAutomationId(IntPtr windowHandle, string automationId)
+    {
+        try
+        {
+            var windowElement = AutomationElement.FromHandle(windowHandle);
+            if (windowElement is null)
+            {
+                return null;
+            }
+
+            var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+            return windowElement.FindFirst(TreeScope.Descendants, condition);
+        }
+        catch (Exception) when (OperatingSystem.IsWindows())
+        {
+            return null;
+        }
     }
 
     private sealed class ClipboardSnapshot

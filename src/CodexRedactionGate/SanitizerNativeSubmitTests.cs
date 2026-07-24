@@ -144,6 +144,49 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void NativeSubmitInterception_SetupRequiredSuppressesOnlySelectedSubmitBinding()
+    {
+        var profile = CreateProtectedProfile();
+        var setup = FixedFirstRunSetupController.RequiredFor("codex-desktop");
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: setup);
+
+        var unrelated = controller.HandleGesture(new NativeKeyGesture("A", Ctrl: true));
+        var newline = controller.HandleGesture(new NativeKeyGesture("Enter", Shift: true));
+        var selectedSubmit = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(unrelated.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(unrelated.SuppressOriginalInput, Is.False);
+        Assert.That(newline.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(newline.SuppressOriginalInput, Is.False);
+        Assert.That(selectedSubmit.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
+        Assert.That(selectedSubmit.SuppressOriginalInput, Is.True);
+        Assert.That(setup.EnsureSetupCalls, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void NativeSubmitInterception_SetupRequiredPassesThroughUnselectedForegroundProfile()
+    {
+        var profile = CreateProtectedProfile();
+        var setup = FixedFirstRunSetupController.RequiredFor("codex-desktop");
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")),
+            firstRunSetupController: setup);
+
+        var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(result.Diagnostics["pass_through_reason"], Is.EqualTo("active_profile_mismatch"));
+        Assert.That(setup.EnsureSetupCalls, Is.EqualTo(0));
+    }
+
+    [Test]
     public void WindowsNativeSubmitHookHost_TreatsSendKeysEventsAsInjected()
     {
         Assert.That(WindowsNativeSubmitHookHost.IsInjectedKeyboardEvent(0x10), Is.True);
@@ -493,6 +536,101 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void FirstRunSetupController_VerifyProfileUsesFocusedDiscoveryEvidence()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Upsert(layout, CreateUnprotectedProfile("codex-desktop"));
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop"))),
+                (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by VerifyProfile."));
+
+            var result = controller.VerifyProfile("codex-desktop", layout);
+            var stored = SubmitBindingProfileStore.Load(layout).Profiles.Single();
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(stored.IsProtected, Is.True);
+            Assert.That(stored.Diagnostics["cloud_submission"], Is.EqualTo("false"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupController_VerifyProfileFailsClosedWhenFocusedDiscoveryFails()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Upsert(layout, CreateUnprotectedProfile("codex-desktop"));
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer)),
+                (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by VerifyProfile."));
+
+            var result = controller.VerifyProfile("codex-desktop", layout);
+            var stored = SubmitBindingProfileStore.Load(layout).Profiles.Single();
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(stored.IsProtected, Is.False);
+            Assert.That(stored.CapabilityStatus, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+            Assert.That(controller.IsSetupComplete(layout), Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupController_GetSetupStatusDoesNotOpenSetupWindow()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Upsert(layout, CreateUnprotectedProfile("codex-desktop"));
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer)),
+                (_, _, _) => throw new InvalidOperationException("GetSetupStatus must be side-effect free."));
+
+            var result = controller.GetSetupStatus(layout);
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.State.Required, Is.True);
+            Assert.That(result.State.UnprotectedProfileIds, Does.Contain("codex-desktop"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupForm_RequiresConfirmedUnprotectedExitInsteadOfSkip()
+    {
+        var source = ProductSourceText("FirstRunSetup.cs");
+
+        Assert.That(source, Does.Not.Contain("Continue Without Setup"));
+        Assert.That(source, Does.Contain("Exit setup"));
+        Assert.That(source, Does.Contain("protected Send will remain blocked"));
+        Assert.That(source, Does.Contain("AcceptButton = _verifyCodexButton"));
+    }
+
+    [Test]
     public void Program_NativeSubmitSmoke_PrintsRawFreeNativeSubmitStatus()
     {
         var (exitCode, stdout, stderr) = CaptureProgramOutput(() =>
@@ -559,6 +697,19 @@ public partial class SanitizerTests
                 ["package_version"] = "26.715.2305.0",
                 ["control_type"] = "ControlType.Group"
             });
+    }
+
+    private static SubmitBindingProfile CreateUnprotectedProfile(string profileId)
+    {
+        return new SubmitBindingProfile(
+            profileId,
+            Enabled: false,
+            BindingSource: "not_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Shift+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.BindingUnknown,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
     }
 
     private static TextSurfaceDescriptor CreateNativeSubmitSurface(string profileId)
@@ -643,6 +794,73 @@ public partial class SanitizerTests
 
         public void Stop()
         {
+        }
+    }
+
+    private sealed class FixedFirstRunSetupController : IFirstRunSetupController
+    {
+        private readonly FirstRunSetupResult _result;
+
+        private FixedFirstRunSetupController(FirstRunSetupResult result)
+        {
+            _result = result;
+        }
+
+        public int EnsureSetupCalls { get; private set; }
+
+        public static FixedFirstRunSetupController RequiredFor(params string[] profileIds)
+        {
+            return new FixedFirstRunSetupController(new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "setup_required",
+                State: new FirstRunSetupState(
+                    Required: true,
+                    UnprotectedProfileIds: profileIds,
+                    Status: "pending",
+                    VerifiedCodex: false,
+                    VerifiedChatGpt: false),
+                Diagnostics: new Dictionary<string, string>()));
+        }
+
+        public FirstRunSetupResult EnsureSetup(DefaultStorageLayout layout)
+        {
+            EnsureSetupCalls++;
+            return _result;
+        }
+
+        public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout)
+        {
+            return _result;
+        }
+
+        public FirstRunSetupResult VerifyProfile(string profileId, DefaultStorageLayout layout)
+        {
+            return _result;
+        }
+
+        public bool IsSetupComplete(DefaultStorageLayout layout)
+        {
+            return !_result.State.Required;
+        }
+    }
+
+    private sealed class StaticFirstRunProfileVerifier : IFirstRunProfileVerifier
+    {
+        private readonly TextSurfaceDiscoveryResult _discovery;
+
+        public StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult discovery)
+        {
+            _discovery = discovery;
+        }
+
+        public SubmitBindingProfile Verify(SubmitBindingProfile profile)
+        {
+            return SubmitBindingOnboardingVerifier.VerifyUserBindings(
+                profile.ProfileId,
+                profile.SubmitBinding?.DisplayText ?? "Enter",
+                profile.NewlineBinding?.DisplayText ?? "Ctrl+Enter",
+                _discovery,
+                profile.CompatibilityEvidence);
         }
     }
 }

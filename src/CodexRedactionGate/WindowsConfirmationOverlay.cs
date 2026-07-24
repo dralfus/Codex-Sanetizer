@@ -77,7 +77,7 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
                 dialog = ownedDialog;
                 var result = dialog.ShowDialog();
                 decision = result == DialogResult.OK
-                    ? ConfirmationDecisionContract.Confirm(model)
+                    ? new ConfirmationDecision(true, new ApprovedSanitizedPayload(dialog.EditedSanitizedText))
                     : ConfirmationDecisionContract.Cancel(model);
             }
             catch (Exception exception)
@@ -106,6 +106,8 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
 
     private sealed class ConfirmationDialog : Form, IConfirmationOverlayWindow
     {
+        private readonly RichTextBox _promptBox;
+
         public ConfirmationDialog(ConfirmationUiModel model)
         {
             Text = "Codex Redaction Gate";
@@ -124,15 +126,15 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
             };
             Activated += (_, _) => TopMost = true;
 
-            var promptBox = new RichTextBox
+            _promptBox = new RichTextBox
             {
-                ReadOnly = true,
+                ReadOnly = false,
                 Dock = DockStyle.Fill,
                 Text = model.SanitizedPrompt,
                 Font = new Font(FontFamily.GenericMonospace, 10),
                 DetectUrls = false
             };
-            Highlight(promptBox, model);
+            Highlight(_promptBox, model);
 
             var details = new TextBox
             {
@@ -166,12 +168,14 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
 
             buttons.Controls.Add(confirm);
             buttons.Controls.Add(cancel);
-            Controls.Add(promptBox);
+            Controls.Add(_promptBox);
             Controls.Add(details);
             Controls.Add(buttons);
             AcceptButton = confirm;
             CancelButton = cancel;
         }
+
+        public string EditedSanitizedText => _promptBox.Text;
 
         private void BringDialogToFront()
         {

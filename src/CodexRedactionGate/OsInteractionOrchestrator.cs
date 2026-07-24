@@ -102,6 +102,32 @@ public sealed class OsInteractionOrchestrator
             }
 
             outgoingText = decision.Payload.SanitizedText;
+            if (!string.Equals(outgoingText, result.SanitizedText, StringComparison.Ordinal))
+            {
+                var editedResult = _sanitizer.Sanitize(CreateRequest(outgoingText, surface));
+                if (editedResult.Decision == SanitizeDecision.Block)
+                {
+                    return Finish(OsInteractionStatusIds.Blocked, surface, result, model, false, false, Merge(
+                        diagnostics,
+                        ("edited_text_verified", "false"),
+                        ("edited_text_status", "blocked")));
+                }
+
+                if (editedResult.Decision == SanitizeDecision.Confirm)
+                {
+                    return Finish(OsInteractionStatusIds.FailedClosed, surface, result, model, false, false, Merge(
+                        diagnostics,
+                        ("edited_text_verified", "false"),
+                        ("edited_text_status", "requires_confirmation")));
+                }
+
+                outgoingText = editedResult.SanitizedText;
+                diagnostics = Merge(
+                    diagnostics,
+                    ("edited_text_verified", "true"),
+                    ("edited_text_status", "allow"),
+                    ("edited_sanitized_length", editedResult.SanitizedText.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
         }
         else if (options.DryRun)
         {

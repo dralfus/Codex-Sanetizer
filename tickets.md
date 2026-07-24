@@ -17,7 +17,7 @@ These rules are part of every ticket.
 - If verification fails twice with the same error, stop and report the exact error instead of rewriting the project.
 - Keep implementation small. Prefer boring, explicit code over clever abstractions.
 
-Work the **frontier**: any ticket whose blockers are all done. After code review on 2026-07-24, the next frontier starts at ticket 220.
+Work the **frontier**: any ticket whose blockers are all done. After code review on commit `91bc2a64` on 2026-07-24, the next frontier starts at ticket 226.
 
 ## Current Review Status
 
@@ -3136,11 +3136,13 @@ dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseApp
 dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
 ```
 
-- [ ] The overlay shows sanitized text in an editable control while raw values remain hidden by default.
-- [ ] Confirm submits the edited sanitized text only after local verification succeeds.
-- [ ] Edited text that reintroduces sensitive terms fails closed and sends nothing.
-- [ ] Cancel after editing sends nothing and the next ordinary Send runs the handler again.
-- [ ] Audit/status records the edited sanitized submission path without raw original values.
+**Verification result 2026-07-24:** replacement overlay now uses an editable sanitized prompt control and returns the edited sanitized payload; desktop `OsInteractionOrchestrator` re-sanitizes edited overlay text before write-back/submit; `SubmitOwningAdapter` fails closed when edited text has no verifier; full tests passed 365/365; `--product-smoke` and `--native-submit-smoke` passed.
+
+- [x] The overlay shows sanitized text in an editable control while raw values remain hidden by default.
+- [x] Confirm submits the edited sanitized text only after local verification succeeds.
+- [x] Edited text that reintroduces sensitive terms fails closed and sends nothing.
+- [x] Cancel after editing sends nothing and the next ordinary Send runs the handler again.
+- [x] Audit/status records the edited sanitized submission path without raw original values.
 
 ## 217. Add explicit one-shot emergency raw bypass
 
@@ -3273,8 +3275,10 @@ dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseApp
 dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
 ```
 
-- [ ] Global/resident emergency disable does not use the normal submit gesture.
-- [ ] `Ctrl+Alt+Shift+Enter` outside an active replacement overlay cannot send raw text.
+**Partial verification result 2026-07-24:** global/resident emergency disable was restored to `Ctrl+Alt+Shift+Pause`, so ordinary Send and `Ctrl+Alt+Shift+Enter` outside an overlay do not trigger a resident raw bypass. The overlay-local emergency raw-send action remains open.
+
+- [x] Global/resident emergency disable does not use the normal submit gesture.
+- [x] `Ctrl+Alt+Shift+Enter` outside an active replacement overlay cannot send raw text.
 - [ ] Overlay emergency bypass requires second confirmation and applies to one attempt only.
 - [ ] Policy can disable the raw bypass.
 - [ ] Raw-free audit/status distinguishes emergency disable from emergency raw send.
@@ -3295,11 +3299,13 @@ dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseApp
 dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
 ```
 
-- [ ] Edited sanitized text is verified using the same effective policy/context as the original decision.
-- [ ] If verification capability is unavailable, the attempt fails closed and sends nothing.
-- [ ] Edited text that reintroduces sensitive terms is blocked or requires a fresh local decision and is not submitted raw.
-- [ ] Existing production call sites cannot call the edited submit path without verification.
-- [ ] Tests cover missing verifier, safe edit, unsafe edit, cancel-after-edit, and raw-free diagnostics.
+**Verification result 2026-07-24:** edited overlay payloads are re-sanitized in the desktop OS orchestrator before write-back, and the submit-owning adapter fails closed when edited text is supplied without a sanitizer/verifier. Tests cover safe edit, unsafe edit, missing verifier and raw-free diagnostics; full tests passed 365/365; `--product-smoke` and `--native-submit-smoke` passed.
+
+- [x] Edited sanitized text is verified using the same effective policy/context as the original decision.
+- [x] If verification capability is unavailable, the attempt fails closed and sends nothing.
+- [x] Edited text that reintroduces sensitive terms is blocked or requires a fresh local decision and is not submitted raw.
+- [x] Existing production call sites cannot call the edited submit path without verification.
+- [x] Tests cover missing verifier, safe edit, unsafe edit, cancel-after-edit, and raw-free diagnostics.
 
 ## 224. Centralize setup readiness without reflection
 
@@ -3326,13 +3332,13 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - Added public `NativeSubmitInterceptionController.IsSetupRequired(DefaultStorageLayout)` method
 - TrayProtection uses public API instead of reflection via `GetType().GetField()...`
 - Removed `using System.Reflection` from TrayProtection.cs (kept for Assembly info attributes)
-- [ ] The code review smell findings for reflection and duplicated setup checks are resolved.
+- [x] The code review smell findings for reflection and duplicated setup checks are resolved.
 
 ## 225. Add review-regression smoke for native submit security invariants
 
 **What to build:** Extend product smoke and focused tests so the review findings cannot return unnoticed: no fake protected profiles, no setup skip bypass, no global raw bypass on normal submit gesture, no optional edited-text verification, and no reflection-based setup readiness.
 
-**Blocked by:** 220. Replace first-run setup placeholders with real verification; 221. Remove setup skip bypass and keep onboarding fail-closed; 222. Move emergency raw bypass into the replacement overlay only; 223. Make edited sanitized text verification mandatory; 224. Centralize setup readiness without reflection.
+**Blocked by:** 220. Replace first-run setup placeholders with real verification; 221. Remove setup skip bypass and keep onboarding fail-closed; 222. Move emergency raw bypass into the replacement overlay only; 223. Make edited sanitized text verification mandatory; 224. Centralize setup readiness without reflection; 226. Restrict setup-required suppression to selected submit gestures; 227. Wire setup verification UI to the real delayed focus flow; 228. Replace setup skip with confirmed unprotected exit; 229. Add setup enforcement regression tests.
 
 **Do not:** Mark smoke green from placeholders, test only fake flags, or depend on a live cloud request.
 
@@ -3349,3 +3355,99 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - [ ] Smoke fails if setup cancel/skip lets matching Send through as protected.
 - [ ] Smoke fails if edited text can submit without verification.
 - [ ] Smoke fails if raw bypass is available outside the active overlay or without second confirmation.
+
+## 226. Restrict setup-required suppression to selected submit gestures
+
+**What to build:** Fix setup-required native submit handling so Code Sanitizer suppresses only matching Send gestures for explicitly selected AI app surfaces. Setup-required state must not globally suppress unrelated keys, newline shortcuts, or unselected applications.
+
+**Blocked by:** 214. Enforce suppress-first native Send for protected AI composers; 218. Enforce first-run setup before protected-app sends; 224. Centralize setup readiness without reflection.
+
+**Do not:** Check setup-required before gesture/profile matching in a way that suppresses every key, intercept unselected apps, or block newline/editing shortcuts.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+**Verification result 2026-07-24:** setup-required checks now run after submit-binding and selected-surface gates and use side-effect-free setup status; focused tests cover unrelated key, newline, selected submit and mismatched foreground profile; full tests passed 365/365; `--product-smoke` and `--native-submit-smoke` passed.
+
+- [x] Setup-required suppresses the original input only for the selected profile's verified submit binding.
+- [x] Non-submit keys pass through while setup is required.
+- [x] Newline binding passes through while setup is required.
+- [x] Unselected applications and mismatched profiles pass through while setup is required.
+- [x] Tests cover selected submit, selected newline, unrelated key, and unselected app cases.
+
+## 227. Wire setup verification UI to the real delayed focus flow
+
+**What to build:** Replace the remaining setup verification mock/dry-run behavior with the actual delayed desktop-session verification flow. Clicking `Verify Codex Desktop` or `Verify ChatGPT Desktop` must start the same real flow that asks the user to focus the target composer, captures focused surface evidence, verifies bindings, and persists `protected` only on success.
+
+**Blocked by:** 209. Add delayed desktop-session native profile verification; 220. Replace first-run setup placeholders with real verification.
+
+**Do not:** Use `TextSurfaceDiscoveryResult.Failure` as fake verification evidence, sleep to simulate verification, close setup as successful from UI-only state, or leave `In production...` placeholder comments in product code.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+**Verification result 2026-07-24:** first-run setup now uses `FocusedComposerFirstRunProfileVerifier`, hides the setup form while the user focuses the target composer, and persists `protected` only from successful focused discovery evidence. Tests cover success, failure and absence of synthetic protected verification; full tests passed 365/365; `--product-smoke` and `--native-submit-smoke` passed.
+
+- [x] Setup UI invokes real delayed focus verification for the chosen profile.
+- [x] A profile becomes `protected` only from successful focused composer verification.
+- [x] Verification timeout/failure keeps setup required and records raw-free status.
+- [x] No product code path calls the setup verification method with synthetic failure/mock evidence and claims success.
+- [x] Tests cover UI-triggered verification success and failure using disposable/fake surface providers.
+
+## 228. Replace setup skip with confirmed unprotected exit
+
+**What to build:** Rework the setup window's skip/close behavior so it cannot look like protected setup completion. If the user exits setup before verification, the UI must explicitly confirm that Codex/ChatGPT sends remain unprotected or blocked, must not mark setup complete, and must not replay the pending Send.
+
+**Blocked by:** 221. Remove setup skip bypass and keep onboarding fail-closed.
+
+**Do not:** Keep `Continue Without Setup` as the default accept action, close immediately without consequence confirmation, or write setup-complete markers when selected profiles remain unprotected.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+**Verification result 2026-07-24:** the setup window no longer has `Continue Without Setup`, default/accept now points to verification instead of skip, and `Exit setup` requires explicit consequence confirmation while leaving setup incomplete; full tests passed 365/365; `--product-smoke` and `--native-submit-smoke` passed.
+
+- [x] Setup close/cancel shows an explicit consequence confirmation.
+- [x] Canceling that confirmation keeps setup open.
+- [x] Confirming unprotected exit leaves setup incomplete and protected-app Send fail-closed or visibly unprotected by policy.
+- [x] The setup window's default/accept button cannot skip protection accidentally.
+- [x] Tests cover close, cancel, confirmed unprotected exit, and no pending-send replay.
+
+## 229. Add setup enforcement regression tests
+
+**What to build:** Add focused tests and product-smoke coverage for the code-review findings from commit `91bc2a64`: no broad key suppression, no mock verification success, no unconfirmed setup skip, and shared setup-readiness semantics.
+
+**Blocked by:** 226. Restrict setup-required suppression to selected submit gestures; 227. Wire setup verification UI to the real delayed focus flow; 228. Replace setup skip with confirmed unprotected exit.
+
+**Do not:** Mark tickets green by editing `tickets.md` only, rely on manual testing alone, or use live cloud submission.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+**Partial verification result 2026-07-24:** focused regression tests now cover broad setup suppression, fake setup verification success, setup skip copy/default action and shared setup-readiness status; full tests passed 365/365; `--product-smoke` and `--native-submit-smoke` passed. A separate product-smoke status line for these review regressions remains open.
+
+- [x] Tests fail if setup-required suppresses unrelated keys or unselected apps.
+- [x] Tests fail if setup verification can succeed from synthetic/mock failure evidence.
+- [x] Tests fail if setup can be skipped without explicit consequence confirmation.
+- [x] Tests fail if tray/native setup readiness diverges.
+- [ ] Product smoke reports setup enforcement regression coverage as a separate raw-free status.
