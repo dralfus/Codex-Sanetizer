@@ -246,3 +246,10 @@ All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ct
 - [ ] No test regressions (1260 tests pass)
 
 **Why:** Code review identified Mysterious Name - test names should follow convention and be descriptive without being overly long.
+
+**Status:** Completed - commit 6ad67c6
+
+**Changes:**
+- Renamed `NativeSubmitProductSmokeRunner_UsesPersistedBindingValues` to `NativeSubmitProductSmokeRunner_UsesPersistedSubmitAndNewlineBindings`
+- All other test methods already follow `MethodName_StateUnderTest_ExpectedBehavior` convention
+- All 1264 tests pass
