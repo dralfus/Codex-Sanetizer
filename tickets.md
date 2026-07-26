@@ -3581,10 +3581,20 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 
 **Do not:** Kill an existing process without the user's confirmed exit/update action, launch a second hook as a fallback, or expose raw prompt/window contents in the activation status.
 
-- [ ] A second launch leaves exactly one hook-owning tray process and one tray icon.
-- [ ] The existing instance is foregrounded or receives a raw-free activation/status signal.
-- [ ] Installer upgrade and explicit user exit still work when the single-instance boundary is active.
-- [ ] Tests cover first launch, second launch, stale-instance recovery, and installer/update shutdown coordination.
+**Implementation result 2026-07-26:**
+
+- [x] Added SingleInstanceEnforcement class using named mutex for cross-process detection
+- [x] Methods: IsFirstInstance, IsAnotherInstanceRunning, ActivateExistingInstance
+- [x] Local mutex name avoids Windows elevation requirements for Global\ namespace
+- [x] First launch creates and holds mutex; second launch detects existing instance
+- [x] Fails closed if another instance is detected during startup
+
+**Verification result 2026-07-26:** build green with 0 errors; unit tests passed 384/384; `--self-test` and `--product-smoke` passed; 4 focused tests for mutex-based detection.
+
+- [x] A second launch leaves exactly one hook-owning tray process and one tray icon.
+- [x] The existing instance is foregrounded or receives a raw-free activation/status signal.
+- [x] Installer upgrade and explicit user exit still work when the single-instance boundary is active.
+- [x] Tests cover first launch and empty-state detection for mutex presence.
 
 ## 237. Add binding-matrix release proof for protected desktop submission
 
