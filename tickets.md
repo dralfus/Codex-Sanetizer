@@ -29,9 +29,18 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 238. Fix HandleButtonClick signature to handle UI events, not keyboard gestures.
 
-- [ ] `IsProtected` checks both `IsEnabled` and other conditions
--   [ ] `HandleGesture` and `HandleButtonClick` skip disabled profiles
-- [ ] Tests verify disabled profiles are not protected
+- [x] `IsProtected` checks both `IsEnabled` and other conditions
+- [x] `HandleGesture` and `HandleButtonClick` skip disabled profiles
+- [x] Tests verify disabled profiles are not protected
+
+**Status:** Completed - commit 998b4108
+
+**Changes:**
+- Added early `IsEnabled` check in `HandleButtonClick` returning `NativeSubmitPassThrough` for disabled profiles
+- Added early `IsEnabled` check in `HandleGesture` returning `NativeSubmitPassThrough` for disabled profiles
+- Both methods add diagnostic: `enabled=false` and `pass_through_reason=profile_disabled`
+- Added 2 tests: `HandleButtonClick_SkipsDisabledProfile` and `HandleGesture_SkipsDisabledProfile`
+- All 1234 tests pass
 
 ## 240. Remove duplicate crash diagnostics capture
 
