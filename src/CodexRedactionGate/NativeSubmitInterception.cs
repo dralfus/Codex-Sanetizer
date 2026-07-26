@@ -352,10 +352,14 @@ public static class SubmitBindingProfileStore
 
 public static class SubmitBindingOnboardingVerifier
 {
+    /// <summary>
+    /// Verifies user-selected Submit and Newline bindings using a SurfaceMetadata for surface properties.
+    /// </summary>
     public static SubmitBindingProfile VerifyUserBindings(
         string profileId,
         string submitBindingText,
         string newlineBindingText,
+        SurfaceMetadata surfaceMetadata,
         TextSurfaceDiscoveryResult discovery,
         SurfaceCompatibilityEvidence? evidence = null)
     {
@@ -365,7 +369,7 @@ public static class SubmitBindingOnboardingVerifier
         var diagnostics = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["verification_mode"] = "user_verified_dry_run",
-            ["cloud_submission"] = "false"
+            ["cloud_submission"] = surfaceMetadata.CloudSubmission ?? "false"
         };
 
         var submit = SubmitKeyBinding.Parse(submitBindingText);
@@ -414,6 +418,12 @@ public static class SubmitBindingOnboardingVerifier
             diagnostics[$"surface.{item.Key}"] = item.Value;
         }
 
+        // Add surface metadata to diagnostics
+        if (surfaceMetadata.SurfaceKind is not null)
+            diagnostics["surface_kind"] = surfaceMetadata.SurfaceKind;
+        if (surfaceMetadata.ComposerStatus is not null)
+            diagnostics["composer_status"] = surfaceMetadata.ComposerStatus;
+
         return new SubmitBindingProfile(
             profileId,
             Enabled: true,
@@ -423,6 +433,20 @@ public static class SubmitBindingOnboardingVerifier
             CapabilityStatus: OsInteractionStatusIds.Protected,
             CompatibilityEvidence: evidence,
             Diagnostics: diagnostics);
+    }
+
+    /// <summary>
+    /// Verifies user-selected Submit and Newline bindings, extracting metadata from TextSurfaceDescriptor.
+    /// </summary>
+    public static SubmitBindingProfile VerifyUserBindings(
+        string profileId,
+        string submitBindingText,
+        string newlineBindingText,
+        TextSurfaceDiscoveryResult discovery,
+        SurfaceCompatibilityEvidence? evidence = null)
+    {
+        var surfaceMetadata = SurfaceMetadata.FromDictionary(discovery.Surface?.Metadata ?? new Dictionary<string, string>());
+        return VerifyUserBindings(profileId, submitBindingText, newlineBindingText, surfaceMetadata, discovery, evidence);
     }
 
     private static SubmitBindingProfile Failed(
@@ -1530,6 +1554,10 @@ public static class NativeSubmitProductSmokeRunner
 
     private static TextSurfaceDescriptor CreateSurface(string profileId, string verificationId)
     {
+        var metadata = new SurfaceMetadata(
+            SurfaceKind: "disposable_local_target",
+            ComposerStatus: OsInteractionStatusIds.SupportedComposer);
+        
         return new TextSurfaceDescriptor(
             $"native-smoke:{profileId}:{verificationId}",
             profileId,
@@ -1538,12 +1566,7 @@ public static class NativeSubmitProductSmokeRunner
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["surface_kind"] = "disposable_local_target",
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer,
-                ["verification_id"] = verificationId
-            });
+            Metadata: metadata.ToDictionary());
     }
 
     private sealed class SmokeTextSurface :

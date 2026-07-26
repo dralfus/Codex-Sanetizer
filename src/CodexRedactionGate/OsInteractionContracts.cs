@@ -40,6 +40,39 @@ public static class OsInteractionStatusIds
     public const string NativeSubmitSetupRequired = "native_submit_setup_required";
 }
 
+/// <summary>
+/// Encapsulates metadata for a text surface descriptor.
+/// Provides named fields instead of raw dictionary for better type safety.
+/// </summary>
+/// <param name="SurfaceKind">The kind of surface (e.g., "disposable_local_target").</param>
+/// <param name="CloudSubmission">Whether cloud submission is enabled.</param>
+/// <param name="ComposerStatus">The composer status (e.g., "supported_composer").</param>
+public sealed record SurfaceMetadata(
+    string? SurfaceKind = null,
+    string? CloudSubmission = null,
+    string? ComposerStatus = null)
+{
+    public IReadOnlyDictionary<string, string> ToDictionary()
+    {
+        var dict = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (SurfaceKind is not null)
+            dict["surface_kind"] = SurfaceKind;
+        if (CloudSubmission is not null)
+            dict["cloud_submission"] = CloudSubmission;
+        if (ComposerStatus is not null)
+            dict["composer_status"] = ComposerStatus;
+        return dict;
+    }
+
+    public static SurfaceMetadata FromDictionary(IReadOnlyDictionary<string, string> dict)
+    {
+        return new SurfaceMetadata(
+            SurfaceKind: dict.TryGetValue("surface_kind", out var sk) ? sk : null,
+            CloudSubmission: dict.TryGetValue("cloud_submission", out var cs) ? cs : null,
+            ComposerStatus: dict.TryGetValue("composer_status", out var cs2) ? cs2 : null);
+    }
+}
+
 public sealed record TextSurfaceDescriptor(
     string SurfaceId,
     string ProfileId,

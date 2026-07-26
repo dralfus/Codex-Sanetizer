@@ -1056,6 +1056,10 @@ public partial class SanitizerTests
 
     internal static TextSurfaceDescriptor CreateNativeSubmitSurface(string profileId)
     {
+        var metadata = new SurfaceMetadata(
+            SurfaceKind: "test",
+            ComposerStatus: OsInteractionStatusIds.SupportedComposer);
+        
         return new TextSurfaceDescriptor(
             $"native-submit-test:{profileId}",
             profileId,
@@ -1064,11 +1068,7 @@ public partial class SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer,
-                ["surface_kind"] = "test"
-            });
+            Metadata: metadata.ToDictionary());
     }
 
     private sealed class CapturingSubmitAction : ISubmitAction
@@ -1984,5 +1984,65 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         // Ctrl+Enter should pass through
         var ctrlEnter = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
         Assert.That(ctrlEnter.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+    }
+
+    [Test]
+    public void SurfaceMetadata_CreatesDictionaryWithNamedFields()
+    {
+        var metadata = new SurfaceMetadata(
+            SurfaceKind: "disposable_local_target",
+            CloudSubmission: "false",
+            ComposerStatus: OsInteractionStatusIds.SupportedComposer);
+
+        var dict = metadata.ToDictionary();
+
+        Assert.That(dict, Has.Count.EqualTo(3));
+        Assert.That(dict["surface_kind"], Is.EqualTo("disposable_local_target"));
+        Assert.That(dict["cloud_submission"], Is.EqualTo("false"));
+        Assert.That(dict["composer_status"], Is.EqualTo(OsInteractionStatusIds.SupportedComposer));
+    }
+
+    [Test]
+    public void SurfaceMetadata_HandlesNullFields()
+    {
+        var metadata = new SurfaceMetadata(CloudSubmission: "true");
+
+        var dict = metadata.ToDictionary();
+
+        Assert.That(dict, Has.Count.EqualTo(1));
+        Assert.That(dict["cloud_submission"], Is.EqualTo("true"));
+    }
+
+    [Test]
+    public void SurfaceMetadata_FromDictionary_RoundTrip()
+    {
+        var original = new SurfaceMetadata(
+            SurfaceKind: "disposable_local_target",
+            CloudSubmission: "false",
+            ComposerStatus: OsInteractionStatusIds.SupportedComposer);
+
+        var dict = original.ToDictionary();
+        var restored = SurfaceMetadata.FromDictionary(dict);
+
+        Assert.That(restored.SurfaceKind, Is.EqualTo(original.SurfaceKind));
+        Assert.That(restored.CloudSubmission, Is.EqualTo(original.CloudSubmission));
+        Assert.That(restored.ComposerStatus, Is.EqualTo(original.ComposerStatus));
+    }
+
+    [Test]
+    public void SurfaceMetadata_FromDictionary_IgnoresUnknownKeys()
+    {
+        var dict = new Dictionary<string, string>
+        {
+            ["surface_kind"] = "test",
+            ["unknown_key"] = "unknown_value",
+            ["cloud_submission"] = "true"
+        };
+
+        var metadata = SurfaceMetadata.FromDictionary(dict);
+
+        Assert.That(metadata.SurfaceKind, Is.EqualTo("test"));
+        Assert.That(metadata.CloudSubmission, Is.EqualTo("true"));
+        Assert.That(metadata.ComposerStatus, Is.Null);
     }
 }
