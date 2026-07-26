@@ -743,7 +743,7 @@ public partial class SanitizerTests
     }
 
     [Test]
-    public void NativeSubmitProductSmokeRunner_UsesPersistedBindingValues()
+    public void NativeSubmitProductSmokeRunner_UsesPersistedSubmitAndNewlineBindings()
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         try
