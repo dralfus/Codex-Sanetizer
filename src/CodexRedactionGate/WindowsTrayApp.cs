@@ -192,6 +192,31 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         {
             ShowStartupFailure();
         }
+
+        // Launch first-run setup if no protected profile exists (ticket 232)
+        LaunchFirstRunSetupIfRequired();
+    }
+
+    private void LaunchFirstRunSetupIfRequired()
+    {
+        try
+        {
+            // Check if no protected profiles exist
+            var profilesResult = SubmitBindingProfileStore.Load(_layout);
+            var hasProtectedProfile = profilesResult.Profiles.Any(p => p.IsProtected && p.Enabled);
+
+            if (!hasProtectedProfile)
+            {
+                // Launch first-run setup
+                var setupController = new FirstRunSetupController();
+                setupController.EnsureSetup(_layout);
+                RefreshStatus(); // Refresh status after setup completes
+            }
+        }
+        catch
+        {
+            // Swallow any errors to avoid crashing the tray app
+        }
     }
 
     protected override void Dispose(bool disposing)
