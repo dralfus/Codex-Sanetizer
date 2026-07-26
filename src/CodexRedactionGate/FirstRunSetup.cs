@@ -364,6 +364,9 @@ internal sealed class FirstRunSetupForm : Form
     private Button? _verifyCodexButton;
     private Button? _verifyChatGptButton;
     private Button? _skipButton;
+    private RadioButton? _enterSendRadioButton;
+    private RadioButton? _ctrlEnterSendRadioButton;
+    private Label? _bindingPairLabel;
 
     public bool SetupCompleted => _setupCompleted;
 
@@ -408,6 +411,59 @@ internal sealed class FirstRunSetupForm : Form
             Padding = new Padding(12, 0, 12, 12),
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
         };
+
+        // Binding pair selection
+        var bindingSelectionPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 60,
+            Padding = new Padding(12, 0, 12, 12),
+            BackColor = SystemColors.Control
+        };
+
+        var bindingLabel = new Label
+        {
+            Text = "Send key binding:",
+            Dock = DockStyle.Left,
+            AutoSize = true,
+            Padding = new Padding(0, 10, 10, 0)
+        };
+
+        _enterSendRadioButton = new RadioButton
+        {
+            Text = "Enter as Send / Ctrl+Enter as newline",
+            Dock = DockStyle.Left,
+            AutoSize = true,
+            Margin = new Padding(0, 8, 10, 0),
+            Checked = true
+        };
+
+        _ctrlEnterSendRadioButton = new RadioButton
+        {
+            Text = "Ctrl+Enter as Send / Enter as newline",
+            Dock = DockStyle.Left,
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+
+        _bindingPairLabel = new Label
+        {
+            Text = "Currently selected: Enter Send / Ctrl+Enter Newline",
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            Padding = new Padding(12, 5, 12, 0),
+            Font = new Font(Font.FontFamily, 9f, FontStyle.Italic),
+            ForeColor = Color.DarkBlue
+        };
+
+        // Update binding pair label when radio buttons change
+        _enterSendRadioButton.CheckedChanged += (_, _) => UpdateBindingPairLabel();
+        _ctrlEnterSendRadioButton.CheckedChanged += (_, _) => UpdateBindingPairLabel();
+
+        bindingSelectionPanel.Controls.Add(bindingLabel);
+        bindingSelectionPanel.Controls.Add(_enterSendRadioButton);
+        bindingSelectionPanel.Controls.Add(_ctrlEnterSendRadioButton);
+        bindingSelectionPanel.Controls.Add(_bindingPairLabel);
 
         var profilesPanel = new Panel
         {
@@ -473,6 +529,7 @@ internal sealed class FirstRunSetupForm : Form
         buttonsFlow.Controls.Add(_skipButton);
         buttonsPanel.Controls.Add(buttonsFlow);
 
+        Controls.Add(bindingSelectionPanel);
         Controls.Add(instructionLabel);
         Controls.Add(instructionLabel2);
         Controls.Add(profilesPanel);
@@ -480,6 +537,36 @@ internal sealed class FirstRunSetupForm : Form
 
         AcceptButton = _verifyCodexButton;
         CancelButton = _skipButton;
+    }
+
+    private void UpdateBindingPairLabel()
+    {
+        if (_enterSendRadioButton is null || _ctrlEnterSendRadioButton is null || _bindingPairLabel is null)
+        {
+            return;
+        }
+
+        if (_enterSendRadioButton.Checked)
+        {
+            _bindingPairLabel.Text = "Currently selected: Enter Send / Ctrl+Enter Newline";
+        }
+        else if (_ctrlEnterSendRadioButton.Checked)
+        {
+            _bindingPairLabel.Text = "Currently selected: Ctrl+Enter Send / Enter Newline";
+        }
+    }
+
+    private (string SubmitBinding, string NewlineBinding) GetSelectedBindingPair()
+    {
+        if (_enterSendRadioButton?.Checked == true)
+        {
+            return ("Enter", "Ctrl+Enter");
+        }
+        else if (_ctrlEnterSendRadioButton?.Checked == true)
+        {
+            return ("Ctrl+Enter", "Enter");
+        }
+        return ("Enter", "Ctrl+Enter"); // default
     }
 
     private Panel CreateProfileCard(SubmitBindingProfile profile)
@@ -541,6 +628,14 @@ internal sealed class FirstRunSetupForm : Form
 
         if (updatedProfile is not null)
         {
+            // Update profile with selected binding pair
+            var (selectedSubmit, selectedNewline) = GetSelectedBindingPair();
+            var profileWithBinding = updatedProfile with
+            {
+                SubmitBinding = SubmitKeyBinding.Parse(selectedSubmit).Binding,
+                NewlineBinding = SubmitKeyBinding.Parse(selectedNewline).Binding
+            };
+
             // Update UI to show verification in progress
             var card = FindProfileCard(profileId);
             if (card is not null)
@@ -551,12 +646,36 @@ internal sealed class FirstRunSetupForm : Form
                     statusLabel.Text = "⟳ Verifying...";
                     statusLabel.ForeColor = Color.Orange;
                 }
+
+                // Update details label to show selected bindings
+                var detailsLabel = card.Controls.OfType<Label>().FirstOrDefault(l => l.Text.Contains("Submit:") && l.Text.Contains("Newline:"));
+                if (detailsLabel is not null)
+                {
+                    detailsLabel.Text = $"Submit: {selectedSubmit} | Newline: {selectedNewline}";
+                    detailsLabel.ForeColor = Color.Black;
+                }
             }
 
             TopMost = false;
             WindowState = FormWindowState.Minimized;
             Hide();
             Application.DoEvents();
+
+            // Save updated profile to store before verification
+            var saveResult = SubmitBindingProfileStore.Upsert(_layout, profileWithBinding);
+            if (!saveResult.Succeeded)
+            {
+                MessageBox.Show(
+                    $"Failed to save binding preferences. status={saveResult.Code}",
+                    "Codex Redaction Gate - Setup required",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                Show();
+                WindowState = FormWindowState.Normal;
+                TopMost = true;
+                Activate();
+                return;
+            }
 
             var result = _setupController.VerifyProfile(profileId, _layout);
 

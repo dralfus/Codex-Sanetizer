@@ -563,6 +563,113 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void SubmitBindingOnboardingVerifier_SupportsBothEnterAndCtrlEnterPairs()
+    {
+        // Test that both supported pairs are valid:
+        // 1. Enter Send / Ctrl+Enter newline
+        // 2. Ctrl+Enter Send / Enter newline
+
+        var profileId = "codex-desktop";
+        var surface = CreateNativeSubmitSurface(profileId);
+        var discovery = TextSurfaceDiscoveryResult.Success(surface);
+
+        // Pair 1: Enter as Send, Ctrl+Enter as newline
+        var pair1 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profileId,
+            "Enter",
+            "Ctrl+Enter",
+            discovery);
+
+        Assert.That(pair1.IsProtected, Is.True);
+        Assert.That(pair1.BindingSource, Is.EqualTo("user_verified"));
+        Assert.That(pair1.SubmitBinding?.DisplayText, Is.EqualTo("Enter"));
+        Assert.That(pair1.NewlineBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
+
+        // Pair 2: Ctrl+Enter as Send, Enter as newline
+        var pair2 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profileId,
+            "Ctrl+Enter",
+            "Enter",
+            discovery);
+
+        Assert.That(pair2.IsProtected, Is.True);
+        Assert.That(pair2.BindingSource, Is.EqualTo("user_verified"));
+        Assert.That(pair2.SubmitBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
+        Assert.That(pair2.NewlineBinding?.DisplayText, Is.EqualTo("Enter"));
+    }
+
+    [Test]
+    public void SubmitBindingOnboardingVerifier_RejectsSameBindingForSubmitAndNewline()
+    {
+        var profileId = "codex-desktop";
+        var surface = CreateNativeSubmitSurface(profileId);
+        var discovery = TextSurfaceDiscoveryResult.Success(surface);
+
+        // Same binding for both should fail
+        var result = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profileId,
+            "Enter",
+            "Enter",
+            discovery);
+
+        Assert.That(result.IsProtected, Is.False);
+        Assert.That(result.CapabilityStatus, Is.EqualTo(OsInteractionStatusIds.BindingUnknown));
+        Assert.That(result.Diagnostics["binding_error"], Is.EqualTo("submit_newline_same_binding"));
+    }
+
+    [Test]
+    public void SubmitBindingOnboardingVerifier_FailsWhenDiscoveringUnsupportedSurface()
+    {
+        var profileId = "codex-desktop";
+        var surface = CreateNativeSubmitSurface(profileId);
+        var discovery = TextSurfaceDiscoveryResult.Failure(
+            OsInteractionStatusIds.UnsupportedSurface,
+            new Dictionary<string, string> { ["unsupported_scope"] = "browser" });
+
+        var result = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profileId,
+            "Enter",
+            "Ctrl+Enter",
+            discovery);
+
+        Assert.That(result.IsProtected, Is.False);
+        Assert.That(result.CapabilityStatus, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(result.Diagnostics["surface_status"], Is.EqualTo(OsInteractionStatusIds.UnsupportedSurface));
+    }
+
+    [Test]
+    public void SubmitBindingOnboardingVerifier_PersistsAndReloadsBindings()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+                "codex-desktop",
+                "Enter",
+                "Ctrl+Enter",
+                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
+
+            var save = SubmitBindingProfileStore.Upsert(layout, profile);
+            var load = SubmitBindingProfileStore.Load(layout);
+
+            Assert.That(save.Succeeded, Is.True);
+            Assert.That(load.Succeeded, Is.True);
+            Assert.That(load.Profiles, Has.Count.EqualTo(1));
+            Assert.That(load.Profiles[0].SubmitBinding?.DisplayText, Is.EqualTo("Enter"));
+            Assert.That(load.Profiles[0].NewlineBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
+            Assert.That(load.Profiles[0].CapabilityStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
     public void SurfaceCompatibilityEvaluator_WarnsWhenSelectedAppVersionOrProfileNoLongerMatches()
     {
         var profile = CreateProtectedProfile();
