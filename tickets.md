@@ -3498,3 +3498,25 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - [ ] The tray diagnostics UI can open the latest crash reports.
 - [ ] A pending protected Send is not replayed after a crash boundary failure.
 - [ ] Tests simulate overlay and setup exceptions and prove no raw prompt is submitted.
+
+## 232. Complete resident first-run setup launch and profile reload
+
+**What to build:** Make the installed tray app actively launch first-run setup when startup detects no protected selected Codex/ChatGPT profile, then reload the verified profile and restart/native-enable protected Send after successful setup without requiring the user to restart the tray app.
+
+**Blocked by:** 218. Enforce first-run setup before protected-app sends; 227. Wire setup verification UI to the real delayed focus flow; 228. Replace setup skip with confirmed unprotected exit.
+
+**Do not:** Leave setup hidden behind tray status only, require a manual tray restart after successful verification, mark the default unprotected profile as protected, or let matching Send pass through during setup.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Tray startup opens or foregrounds the first-run setup window when no protected selected profile exists.
+- [ ] Matching selected app Send remains suppressed while setup is open or incomplete.
+- [ ] Successful verification reloads the stored protected profile into the resident native submit controller.
+- [ ] Tray status changes from setup-required/unprotected to protected without restarting the tray app.
+- [ ] Tests cover startup with empty profile store, setup success reload, setup cancel, and no raw prompt submission.
