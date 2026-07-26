@@ -3520,3 +3520,25 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - [ ] Successful verification reloads the stored protected profile into the resident native submit controller.
 - [ ] Tray status changes from setup-required/unprotected to protected without restarting the tray app.
 - [ ] Tests cover startup with empty profile store, setup success reload, setup cancel, and no raw prompt submission.
+
+## 233. Block protected Send button clicks outside the keyboard hook
+
+**What to build:** Protect mouse or UI-automation activation of the Codex/ChatGPT Send button for selected protected profiles. If the focused or invoked element belongs to a selected protected AI app but is not a verified readable composer, Code Sanitizer must fail closed and prevent the raw prompt from leaving unless the action originates from the replacement overlay or the explicit emergency bypass.
+
+**Blocked by:** 214. Enforce suppress-first native Send for protected AI composers; 214A. Fix confirmed replacement write-back to the protected composer; 232. Complete resident first-run setup launch and profile reload.
+
+**Do not:** Assume keyboard-only interception is sufficient, let a focused `ControlType.Button` Send action pass through in a protected app, block unrelated buttons in unselected applications, or log raw prompt/window/button text.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Mouse click on Send in a selected protected Codex/ChatGPT app cannot submit raw sensitive text.
+- [ ] Keyboard Enter on a focused Send button fails closed instead of passing through.
+- [ ] Replacement overlay confirmed send remains allowed and does not loop back into protection.
+- [ ] Emergency bypass remains explicit, audited locally and raw-free.
+- [ ] Tests cover protected Send button focus, unselected app button focus and overlay-originated submit.
