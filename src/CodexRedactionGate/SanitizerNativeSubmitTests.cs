@@ -738,6 +738,77 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void NativeSubmitProductSmokeRunner_UsesPersistedBindingValues()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+
+            // Create and save profile with specific bindings
+            var surface = CreateNativeSubmitSurface("codex-desktop");
+            surface = new TextSurfaceDescriptor(
+                surface.SurfaceId,
+                surface.ProfileId,
+                surface.DisplayName,
+                surface.Supported,
+                surface.CanCaptureText,
+                surface.CanReplaceText,
+                surface.CanSubmit,
+                new Dictionary<string, string>
+                {
+                    ["surface_kind"] = "disposable_local_target",
+                    ["cloud_submission"] = "false"
+                });
+            var discovery = TextSurfaceDiscoveryResult.Success(surface);
+
+            // Configure: Enter as Send, Ctrl+Enter as newline
+            var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+                "codex-desktop",
+                "Enter",
+                "Ctrl+Enter",
+                discovery);
+
+            // Persist to store
+            var saveResult = SubmitBindingProfileStore.Upsert(layout, profile);
+            Assert.That(saveResult.Succeeded, Is.True);
+
+            // Load profile from store
+            var loadResult = SubmitBindingProfileStore.Load(layout);
+            Assert.That(loadResult.Succeeded, Is.True);
+            Assert.That(loadResult.Profiles, Has.Count.EqualTo(1));
+            var persistedProfile = loadResult.Profiles[0];
+
+            // Verify persisted binding values
+            Assert.That(persistedProfile.SubmitBinding?.DisplayText, Is.EqualTo("Enter"));
+            Assert.That(persistedProfile.NewlineBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
+
+            // Verify that NativeSubmitInterceptionController uses persisted values correctly
+            var controller = new NativeSubmitInterceptionController(
+                persistedProfile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
+
+            // Test: Enter (Send) should be guarded
+            var sendGesture = controller.HandleGesture(new NativeKeyGesture("Enter"));
+            Assert.That(sendGesture.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+            Assert.That(sendGesture.SuppressOriginalInput, Is.True);
+
+            // Test: Ctrl+Enter (newline) should pass through
+            var newlineGesture = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+            Assert.That(newlineGesture.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+            Assert.That(newlineGesture.SuppressOriginalInput, Is.False);
+            Assert.That(newlineGesture.Diagnostics["pass_through_reason"], Is.EqualTo("newline_binding"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
     public void FirstRunSetupController_VerifyProfileFailsClosedWhenFocusedDiscoveryFails()
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
