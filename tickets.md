@@ -3446,8 +3446,55 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 
 **Partial verification result 2026-07-24:** focused regression tests now cover broad setup suppression, fake setup verification success, setup skip copy/default action and shared setup-readiness status; full tests passed 365/365; `--product-smoke` and `--native-submit-smoke` passed. A separate product-smoke status line for these review regressions remains open.
 
+**Review hardening result 2026-07-26:** empty profile storage now stays setup-required instead of writing setup-complete, missing default Codex profile can be verified from first-run setup, and tray startup uses a default unprotected native profile before first verification so the resident hook can fail closed instead of silently disabling native submit. Full tests passed 369/369; build, `--product-smoke` and `--native-submit-smoke` passed.
+
 - [x] Tests fail if setup-required suppresses unrelated keys or unselected apps.
 - [x] Tests fail if setup verification can succeed from synthetic/mock failure evidence.
 - [x] Tests fail if setup can be skipped without explicit consequence confirmation.
 - [x] Tests fail if tray/native setup readiness diverges.
 - [ ] Product smoke reports setup enforcement regression coverage as a separate raw-free status.
+
+## 230. Add recovery-safe DPAPI secret failure handling
+
+**What to build:** Make production startup, `--self-test`, readiness doctor and sanitizer creation handle an unreadable/corrupted user-local DPAPI HMAC secret with a raw-free recovery status instead of an unhandled exception. Provide a safe repair path that does not delete mappings silently and tells the user what local restore impact exists.
+
+**Blocked by:** 64. Add local audit verification and summary command; 95. Add local restore UX for sanitized responses.
+
+**Do not:** Auto-delete or rotate the HMAC secret without explicit user confirmation, expose the secret path as a raw diagnostic in cloud-bound output, or claim restore is safe when mappings were encrypted with an unavailable key.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --self-test
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --doctor
+```
+
+- [ ] A corrupted/unreadable DPAPI HMAC secret returns a controlled raw-free status.
+- [ ] `--self-test` does not crash from the user's production DPAPI secret state.
+- [ ] Recovery guidance distinguishes safe test cleanup from local restore-impacting production repair.
+- [ ] No local mapping data or raw sensitive values are deleted without explicit confirmation.
+- [ ] Tests cover DPAPI unprotect failure, empty secret file and invalid secret length.
+
+## 231. Add resident crash diagnostics and fail-closed crash boundary
+
+**What to build:** Add a resident-app crash boundary and local diagnostic capture for `.NET` application errors such as `0xe0434352` during overlay/setup/native submit handling. A crash-prone path must either return Cancel/fail-closed or record a local raw-free crash report that can be opened from tray diagnostics.
+
+**Blocked by:** 211. Activate the replacement overlay in front of the AI app; 214A. Fix confirmed replacement write-back to the protected composer; 97. Add product audit viewer.
+
+**Do not:** Put prompt text, window titles, screenshots, dictionary values or restored secrets into crash diagnostics; swallow crashes as successful submission; or leave the pending Send replayed after an overlay/setup crash.
+
+**Verification:**
+
+```powershell
+dotnet build .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll --product-smoke
+```
+
+- [ ] Overlay/setup/native submit exceptions are caught at the resident boundary and produce Cancel/fail-closed status.
+- [ ] A local raw-free crash report records exception type, status code, build version and component.
+- [ ] The tray diagnostics UI can open the latest crash reports.
+- [ ] A pending protected Send is not replayed after a crash boundary failure.
+- [ ] Tests simulate overlay and setup exceptions and prove no raw prompt is submitted.

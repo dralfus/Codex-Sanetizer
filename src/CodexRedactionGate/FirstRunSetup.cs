@@ -95,7 +95,7 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         ArgumentNullException.ThrowIfNull(layout);
 
         var initialStatus = GetSetupStatus(layout);
-        if (!initialStatus.State.Required)
+        if (initialStatus.Succeeded && !initialStatus.State.Required)
         {
             SetSetupComplete(layout);
             return new FirstRunSetupResult(
@@ -118,11 +118,11 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         }
 
         var storeResult = SubmitBindingProfileStore.Load(layout);
-        var setupCompleted = _showSetupWindow(storeResult.Profiles, layout, this);
+        var setupCompleted = _showSetupWindow(SetupVisibleProfiles(storeResult.Profiles), layout, this);
         if (setupCompleted)
         {
             var finalStatus = GetSetupStatus(layout);
-            if (!finalStatus.State.Required)
+            if (finalStatus.Succeeded && !finalStatus.State.Required)
             {
                 SetSetupComplete(layout);
                 return new FirstRunSetupResult(
@@ -198,14 +198,18 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
 
         if (profile is null)
         {
-            return new FirstRunSetupResult(
-                Succeeded: false,
-                Code: "profile_not_found",
-                State: CreateSetupState(storeResult.Profiles),
-                Diagnostics: new Dictionary<string, string>
-                {
-                    ["profile_id"] = profileId
-                });
+            profile = CreateDefaultSetupProfile(profileId);
+            if (profile is null)
+            {
+                return new FirstRunSetupResult(
+                    Succeeded: false,
+                    Code: "profile_not_found",
+                    State: CreateSetupState(storeResult.Profiles),
+                    Diagnostics: new Dictionary<string, string>
+                    {
+                        ["profile_id"] = profileId
+                    });
+            }
         }
 
         var verifiedProfile = _profileVerifier.Verify(profile);
@@ -250,11 +254,51 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         return File.Exists(setupMarkerPath);
     }
 
+    internal static SubmitBindingProfile? CreateDefaultSetupProfile(string profileId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+
+        return profileId switch
+        {
+            "codex-desktop" or "chatgpt-desktop" => new SubmitBindingProfile(
+                profileId,
+                Enabled: false,
+                BindingSource: "not_verified",
+                SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding,
+                NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+                CapabilityStatus: OsInteractionStatusIds.BindingUnknown,
+                CompatibilityEvidence: null,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["cloud_submission"] = "false",
+                    ["setup_default_profile"] = "true"
+                }),
+            _ => null
+        };
+    }
+
+    internal static IReadOnlyList<SubmitBindingProfile> SetupVisibleProfiles(IReadOnlyList<SubmitBindingProfile> profiles)
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        return profiles.Count == 0
+            ? new[]
+            {
+                CreateDefaultSetupProfile("codex-desktop")!,
+                CreateDefaultSetupProfile("chatgpt-desktop")!
+            }
+            : profiles;
+    }
+
     private static FirstRunSetupState CreateSetupState(IReadOnlyList<SubmitBindingProfile> profiles)
     {
-        var unprotected = profiles.Where(p => !p.IsProtected).Select(p => p.ProfileId).ToArray();
-        var codexProfile = profiles.FirstOrDefault(p => string.Equals(p.ProfileId, "codex-desktop", StringComparison.Ordinal));
-        var chatGptProfile = profiles.FirstOrDefault(p => string.Equals(p.ProfileId, "chatgpt-desktop", StringComparison.Ordinal));
+        var visibleProfiles = SetupVisibleProfiles(profiles);
+        var anyProtected = visibleProfiles.Any(p => p.IsProtected);
+        var unprotected = anyProtected
+            ? Array.Empty<string>()
+            : visibleProfiles.Where(p => !p.IsProtected).Select(p => p.ProfileId).ToArray();
+        var codexProfile = visibleProfiles.FirstOrDefault(p => string.Equals(p.ProfileId, "codex-desktop", StringComparison.Ordinal));
+        var chatGptProfile = visibleProfiles.FirstOrDefault(p => string.Equals(p.ProfileId, "chatgpt-desktop", StringComparison.Ordinal));
 
         return new FirstRunSetupState(
             Required: unprotected.Length > 0,

@@ -620,6 +620,103 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void FirstRunSetupController_GetSetupStatusRequiresSetupWhenProfileStoreIsEmpty()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer)),
+                (_, _, _) => throw new InvalidOperationException("GetSetupStatus must be side-effect free."));
+
+            var result = controller.GetSetupStatus(layout);
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo("setup_required"));
+            Assert.That(result.State.Required, Is.True);
+            Assert.That(result.State.UnprotectedProfileIds, Does.Contain("codex-desktop"));
+            Assert.That(result.State.UnprotectedProfileIds, Does.Contain("chatgpt-desktop"));
+            Assert.That(controller.IsSetupComplete(layout), Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupController_VerifyProfileCanCreateMissingDefaultProfile()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop"))),
+                (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by VerifyProfile."));
+
+            var result = controller.VerifyProfile("codex-desktop", layout);
+            var stored = SubmitBindingProfileStore.Load(layout).Profiles.Single();
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(stored.ProfileId, Is.EqualTo("codex-desktop"));
+            Assert.That(stored.IsProtected, Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void NativeSubmitInterception_SetupStatusFailureSuppressesSelectedSubmit()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: FixedFirstRunSetupController.FailedFor("codex-desktop"));
+
+        var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+    }
+
+    [Test]
+    public void WindowsTrayApp_UsesDefaultUnprotectedProfileBeforeFirstVerification()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+
+            var profile = WindowsTrayApp.ResolveNativeProfileForProtection(layout);
+
+            Assert.That(profile, Is.Not.Null);
+            Assert.That(profile!.ProfileId, Is.EqualTo("codex-desktop"));
+            Assert.That(profile.IsProtected, Is.False);
+            Assert.That(profile.SubmitBinding!.DisplayText, Is.EqualTo("Enter"));
+            Assert.That(profile.NewlineBinding!.DisplayText, Is.EqualTo("Ctrl+Enter"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
     public void FirstRunSetupForm_RequiresConfirmedUnprotectedExitInsteadOfSkip()
     {
         var source = ProductSourceText("FirstRunSetup.cs");
@@ -817,6 +914,20 @@ public partial class SanitizerTests
                     Required: true,
                     UnprotectedProfileIds: profileIds,
                     Status: "pending",
+                    VerifiedCodex: false,
+                    VerifiedChatGpt: false),
+                Diagnostics: new Dictionary<string, string>()));
+        }
+
+        public static FixedFirstRunSetupController FailedFor(params string[] profileIds)
+        {
+            return new FixedFirstRunSetupController(new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "profiles_load_failed",
+                State: new FirstRunSetupState(
+                    Required: true,
+                    UnprotectedProfileIds: profileIds,
+                    Status: "error",
                     VerifiedCodex: false,
                     VerifiedChatGpt: false),
                 Diagnostics: new Dictionary<string, string>()));

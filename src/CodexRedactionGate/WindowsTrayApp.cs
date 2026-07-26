@@ -38,9 +38,7 @@ public static class WindowsTrayApp
 
         var settings = HotkeySettingsStore.Load(layout ?? DefaultStorageLayout.CreateDefault());
         var resolvedLayout = layout ?? DefaultStorageLayout.CreateDefault();
-        var nativeProfile = SubmitBindingProfileStore.Load(resolvedLayout)
-            .Profiles
-            .FirstOrDefault(profile => profile.IsProtected);
+        var nativeProfile = ResolveNativeProfileForProtection(resolvedLayout);
         var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
         var activeSurfaceDiscovery = WindowsActiveSurfaceDiscovery.CreateDefault();
         var orchestrator = new OsInteractionOrchestrator(
@@ -79,6 +77,16 @@ public static class WindowsTrayApp
                     return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
                 },
             nativeProfile);
+    }
+
+    internal static SubmitBindingProfile? ResolveNativeProfileForProtection(DefaultStorageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var profiles = SubmitBindingProfileStore.Load(layout).Profiles;
+        return profiles.FirstOrDefault(profile => profile.IsProtected)
+            ?? profiles.FirstOrDefault()
+            ?? FirstRunSetupController.CreateDefaultSetupProfile("codex-desktop");
     }
 }
 

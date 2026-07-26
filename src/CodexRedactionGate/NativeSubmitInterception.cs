@@ -574,7 +574,7 @@ public sealed class NativeSubmitInterceptionController
         }
 
         var setupResult = _firstRunSetupController.GetSetupStatus(layout);
-        return setupResult.State.Required && !setupResult.Succeeded;
+        return !setupResult.Succeeded || setupResult.State.Required;
     }
 
     public NativeSubmitInterceptionController(
@@ -817,7 +817,7 @@ public sealed class NativeSubmitInterceptionController
 
         var setupLayout = DefaultStorageLayout.CreateDefault();
         var setupResult = _firstRunSetupController.GetSetupStatus(setupLayout);
-        if (setupResult.Succeeded || !setupResult.State.Required)
+        if (setupResult.Succeeded && !setupResult.State.Required)
         {
             return null;
         }
