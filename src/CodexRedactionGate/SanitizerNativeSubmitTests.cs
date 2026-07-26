@@ -998,3 +998,194 @@ public partial class SanitizerTests
         }
     }
 }
+
+/// <summary>
+/// Regression tests for ticket 229: Setup enforcement security invariants
+/// </summary>
+public partial class SanitizerTests
+{
+    [Test]
+    public void SetupEnforcement_NoBroadKeySuppression()
+    {
+        // Setup is required for codex-desktop
+        var setup = FixedFirstRunSetupController.RequiredFor("codex-desktop");
+        var profile = CreateProtectedProfile();
+        
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: setup);
+
+        // Unrelated keys should pass through without setup-required suppression
+        var unrelatedKey = controller.HandleGesture(new NativeKeyGesture("A"));
+        Assert.That(unrelatedKey.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(unrelatedKey.SuppressOriginalInput, Is.False);
+
+        // Newline should pass through
+        var newline = controller.HandleGesture(new NativeKeyGesture("Enter", Shift: true));
+        Assert.That(newline.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(newline.SuppressOriginalInput, Is.False);
+
+        // Only selected submit binding should be suppressed
+        var selectedSubmit = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(selectedSubmit.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
+        Assert.That(selectedSubmit.SuppressOriginalInput, Is.True);
+    }
+
+    [Test]
+    public void SetupEnforcement_NoMockVerificationSuccess()
+    {
+        // Verify that profile is NOT marked protected without real verification evidence
+        var setupController = new FirstRunSetupController(
+            new FixedVerificationProfileVerifier(failure: true),
+            ShowSetupWindowStub);
+
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var result = setupController.VerifyProfile("codex-desktop", layout);
+
+            // Should NOT be protected when verification fails
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.State.Required, Is.True);
+            Assert.That(result.State.Status, Is.EqualTo("pending"));
+            Assert.That(result.State.UnprotectedProfileIds.Contains("codex-desktop"), Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void SetupEnforcement_NoUnconfirmedSetupSkip()
+    {
+        // Verify that closing setup without verification keeps it incomplete
+        var controller = new FirstRunSetupController(
+            new FocusedComposerFirstRunProfileVerifier(),
+            (profiles, layout, setupCtrl) =>
+            {
+                // Simulate user closing setup window without confirmation
+                return false;
+            });
+
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var result = controller.EnsureSetup(layout);
+
+            // Ensure setup is NOT marked complete after close
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.State.Required, Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void SetupEnforcement_SharedReadinessSemantics()
+    {
+        // Verify tray and native submit use the same setup state
+        var setupController = new FirstRunSetupController();
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            
+            // Get status from setup controller directly
+            var setupStatus = setupController.GetSetupStatus(layout);
+            
+            // Create native submit controller with same setup controller
+            var controller = new NativeSubmitInterceptionController(
+                CreateProtectedProfile(),
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                firstRunSetupController: setupController);
+
+            // Verify tray uses same setup state
+            var trayUsesSharedState = setupController.IsSetupComplete(layout) == controller.IsSetupRequired(layout);
+            
+            // If setup is required, IsSetupRequired should return true
+            Assert.That(setupStatus.State.Required, Is.EqualTo(controller.IsSetupRequired(layout)));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void SetupEnforcement_SetupRequiredBlocksMatchingSendOnly()
+    {
+        // Verify setup-required only suppresses the selected profile's verified submit binding
+        var setup = FixedFirstRunSetupController.RequiredFor("codex-desktop", "chatgpt-desktop");
+        var codexProfile = CreateProtectedProfile();
+        var chatgptProfile = CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" };
+
+        var codexController = new NativeSubmitInterceptionController(
+            codexProfile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: setup);
+
+        var chatgptController = new NativeSubmitInterceptionController(
+            chatgptProfile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")),
+            firstRunSetupController: setup);
+
+        // Codex (matching profile) should be suppressed
+        var codexSubmit = codexController.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(codexSubmit.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
+
+        // ChatGPT (matching profile with same setup) should also be suppressed
+        var chatgptSubmit = chatgptController.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+        // Debug: check active surface
+        var chatgptActiveSurface = CreateNativeSubmitSurface("chatgpt-desktop");
+        Assert.That(chatgptSubmit.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
+    }
+
+    private sealed class FixedVerificationProfileVerifier : IFirstRunProfileVerifier
+    {
+        private readonly bool _failure;
+
+        public FixedVerificationProfileVerifier(bool failure)
+        {
+            _failure = failure;
+        }
+
+        public SubmitBindingProfile Verify(SubmitBindingProfile profile)
+        {
+            if (_failure)
+            {
+                // Return unverified profile (simulating failed verification)
+                return profile with { CapabilityStatus = OsInteractionStatusIds.BindingUnknown };
+            }
+
+            // Return verified profile
+            return profile with { CapabilityStatus = OsInteractionStatusIds.Protected };
+        }
+    }
+
+    private static bool ShowSetupWindowStub(
+        IReadOnlyList<SubmitBindingProfile> profiles,
+        DefaultStorageLayout layout,
+        IFirstRunSetupController setupController)
+    {
+        return false; // Simulate user cancel/close
+    }
+}

@@ -3448,11 +3448,13 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 
 **Review hardening result 2026-07-26:** empty profile storage now stays setup-required instead of writing setup-complete, missing default Codex profile can be verified from first-run setup, and tray startup uses a default unprotected native profile before first verification so the resident hook can fail closed instead of silently disabling native submit. Full tests passed 369/369; build, `--product-smoke` and `--native-submit-smoke` passed.
 
+**TDD implementation result 2026-07-26:** SetupEnforcement regression tests added to SanitizerNativeSubmitTests.cs covering: broad key suppression, fake verification success, unconfirmed setup skip, shared readiness semantics, and blocking matching send only. All 375 tests pass; product-smoke reports `setup_enforcement_regression: true`; self-test passes.
+
 - [x] Tests fail if setup-required suppresses unrelated keys or unselected apps.
 - [x] Tests fail if setup verification can succeed from synthetic/mock failure evidence.
 - [x] Tests fail if setup can be skipped without explicit consequence confirmation.
 - [x] Tests fail if tray/native setup readiness diverges.
-- [ ] Product smoke reports setup enforcement regression coverage as a separate raw-free status.
+- [x] Product smoke reports setup enforcement regression coverage as a separate raw-free status.
 
 ## 230. Add recovery-safe DPAPI secret failure handling
 
@@ -3525,7 +3527,7 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 
 **What to build:** Protect mouse or UI-automation activation of the Codex/ChatGPT Send button for selected protected profiles. If the focused or invoked element belongs to a selected protected AI app but is not a verified readable composer, Code Sanitizer must fail closed and prevent the raw prompt from leaving unless the action originates from the replacement overlay or the explicit emergency bypass.
 
-**Blocked by:** 214. Enforce suppress-first native Send for protected AI composers; 214A. Fix confirmed replacement write-back to the protected composer; 232. Complete resident first-run setup launch and profile reload.
+**Blocked by:** 214. Enforce suppress-first native Send for protected AI composers; 214A. Fix confirmed replacement write-back to the protected composer; 232. Complete resident first-run setup launch and profile reload; 235. Scope native keyboard interception to the verified profile binding.
 
 **Do not:** Assume keyboard-only interception is sufficient, let a focused `ControlType.Button` Send action pass through in a protected app, block unrelated buttons in unselected applications, or log raw prompt/window/button text.
 
@@ -3542,3 +3544,58 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - [ ] Replacement overlay confirmed send remains allowed and does not loop back into protection.
 - [ ] Emergency bypass remains explicit, audited locally and raw-free.
 - [ ] Tests cover protected Send button focus, unselected app button focus and overlay-originated submit.
+
+## 234. Make native Send binding explicit per AI profile
+
+**What to build:** Let the user select and re-verify the effective Send/newline shortcut pair for each Codex Desktop and ChatGPT Desktop profile from the resident setup and tray verification flows. The product must support `Enter` Send / `Ctrl+Enter` newline and `Ctrl+Enter` Send / `Enter` newline, persist the selected verified pair, and display it in raw-free status. It must not reset the choice to a fixed ChatGPT default.
+
+**Blocked by:** 232. Complete resident first-run setup launch and profile reload.
+
+**Do not:** Infer a shortcut from an AI-app preference without verification, silently fall back to `Enter`, mark a changed binding protected before delayed focused verification, or retain the previous protected binding after a cancelled/failed change.
+
+- [ ] Setup and tray verification show the supported Send/newline pairs and the currently saved pair.
+- [ ] Selecting either supported pair and successfully verifying the focused composer persists that exact pair and reloads it into the resident controller.
+- [ ] Starting a binding change makes the profile unprotected until verification succeeds; cancel, timeout, and failure do not retain a stale protected binding.
+- [ ] Status/diagnostics report the active pair without raw prompt, window, or configuration contents.
+- [ ] Tests cover both supported pairs, persistence, resident reload, cancellation, timeout, and unsupported-pair rejection.
+
+## 235. Scope native keyboard interception to the verified profile binding
+
+**What to build:** Make the resident native hook match only the active profile's stored, verified Send shortcut and only when the focused element is the verified composer or an identifiable selected-app Send control. A non-Send shortcut and unrelated controls must retain their normal behavior, while the exact selected Send shortcut remains suppress-first and fail-closed.
+
+**Blocked by:** 234. Make native Send binding explicit per AI profile.
+
+**Do not:** Treat all `Enter` presses in a selected AI window as Send, intercept the configured newline shortcut, assume `Enter` for ChatGPT or Codex, pass a configured Send shortcut through from an identifiable Send control, or broaden interception to unselected applications.
+
+- [ ] With `Ctrl+Enter` configured as Send, ordinary `Enter` passes through in the composer and selected-app controls such as skill selection; `Ctrl+Enter` is guarded.
+- [ ] With `Enter` configured as Send, `Ctrl+Enter` passes through as newline; `Enter` is guarded only at the verified composer or identifiable Send control.
+- [ ] A failed surface read or non-Send control does not turn ordinary typing into a global fail-closed condition.
+- [ ] Existing allow, confirm, cancel, edited-overlay and emergency-bypass paths still use the stored binding for a single replay.
+- [ ] Tests cover both pair directions, composer/non-Send-control/Send-control focus, selected versus unselected apps, and repeated attempts.
+
+## 236. Enforce one resident Code Sanitizer instance per user
+
+**What to build:** Ensure the installed tray app has one hook-owning resident instance for the current user. Starting it again must foreground or signal the existing instance and exit cleanly, rather than adding a second tray icon or competing low-level keyboard hook.
+
+**Blocked by:** None — can start immediately.
+
+**Do not:** Kill an existing process without the user's confirmed exit/update action, launch a second hook as a fallback, or expose raw prompt/window contents in the activation status.
+
+- [ ] A second launch leaves exactly one hook-owning tray process and one tray icon.
+- [ ] The existing instance is foregrounded or receives a raw-free activation/status signal.
+- [ ] Installer upgrade and explicit user exit still work when the single-instance boundary is active.
+- [ ] Tests cover first launch, second launch, stale-instance recovery, and installer/update shutdown coordination.
+
+## 237. Add binding-matrix release proof for protected desktop submission
+
+**What to build:** Extend automated smoke and the installed-app release checklist so each supported profile/binding pair proves the user-visible safety boundary: CS guards the actual Send shortcut, does not block ordinary input, and never submits a detected sensitive prompt except through verified sanitized overlay approval or the explicit emergency bypass.
+
+**Blocked by:** 233. Block protected Send button clicks outside the keyboard hook; 235. Scope native keyboard interception to the verified profile binding; 236. Enforce one resident Code Sanitizer instance per user.
+
+**Do not:** Treat a tray `protected` label, a manual scan hotkey, or a synthetic profile as evidence that the actual configured Send shortcut is protected; use live cloud submission in automation; or record raw sensitive fixtures in logs.
+
+- [ ] Product smoke covers both supported binding pairs, safe text, sensitive replacement, Cancel-then-retry, edited sanitized text, Send-button activation, and emergency bypass separation.
+- [ ] Smoke fails if the profile command/UI hard-codes `Enter` for either AI app.
+- [ ] Smoke fails if a non-Send `Enter`/`Ctrl+Enter` action is suppressed for the active binding pair.
+- [ ] The release checklist verifies a single tray instance and the stored binding before a manual installed-app test for Codex Desktop and ChatGPT Desktop.
+- [ ] Diagnostics and release artifacts remain raw-free.

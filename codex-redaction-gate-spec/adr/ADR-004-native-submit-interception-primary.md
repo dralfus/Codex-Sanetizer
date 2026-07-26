@@ -35,7 +35,7 @@ The user must explicitly choose which AI surfaces are protected. A protected sur
 - submit binding source and value;
 - capability status: `protected`, `not_configured`, `binding_unknown`, `surface_unverified`, or `degraded_hotkey_only`.
 
-The submit binding must be discovered from the target AI configuration when a stable, local, documented or empirically verified config source exists. If the config source is unavailable, onboarding must ask the user to choose or record the submit shortcut and then verify it against the selected app surface. The product must not silently assume `Enter`.
+The submit binding must be discovered from the target AI configuration when a stable, local, documented or empirically verified config source exists. If the config source is unavailable, onboarding must ask the user to choose or record the effective submit shortcut and its newline counterpart, then verify the pair against the selected app surface. The product must not silently assume `Enter`, hard-code the ChatGPT pair in a tray command, or retain a stale protected binding after the user changes it. For v1, `Enter` Send / `Ctrl+Enter` newline and `Ctrl+Enter` Send / `Enter` newline are supported profile pairs.
 
 Submit interception is allowed only when all of these are true:
 
@@ -46,6 +46,8 @@ Submit interception is allowed only when all of these are true:
 - the sanitizer, vault, policy and confirmation UI are available.
 
 If any condition fails, Code Sanitizer must not claim protection. If the pressed shortcut belongs to a selected protected surface but sanitizer processing cannot complete, it must suppress the original submit and fail closed.
+
+Non-submit input must pass through. In particular, the profile newline binding and ordinary `Enter` when `Ctrl+Enter` is the configured Send shortcut must not be intercepted in the composer or unrelated selected-app controls. The only exception is an identifiable selected-app Send control: activation using the configured Send shortcut must fail closed until it is handled by the protected flow. The resident tray app must have a per-user single-instance boundary so two instances cannot compete for the same input hook.
 
 Onboarding and re-verification must run against the user's real desktop session, not an agent or build sandbox's foreground window. The product must provide a delayed verification path from the installed tray app and CLI: the user starts verification, focuses the Codex/ChatGPT composer before the countdown ends, and the profile is saved as `protected` only when that focused composer verifies. The release test surface must keep exercising this readiness path so regressions do not silently downgrade native submit protection to manual hotkey mode.
 

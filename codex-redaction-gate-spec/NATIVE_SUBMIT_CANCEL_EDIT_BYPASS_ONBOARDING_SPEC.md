@@ -8,6 +8,8 @@ This makes Cancel unsafe. Cancel must mean "do not submit now and return me to e
 
 After installation, an unconfigured user can also press Send before the Codex/ChatGPT profile is protected. That first-run gap is unsafe because the product is installed but not yet enforcing the selected AI app's submit path.
 
+The actual Send shortcut can differ from the application's visible preference. For example, a user may configure or observe `Ctrl+Enter` as Send while ordinary `Enter` remains needed for normal interaction. The current product hard-codes `Enter` as Send for ChatGPT verification, which can both miss a real `Ctrl+Enter` submission and block unrelated `Enter` actions in the selected AI window.
+
 ## Solution
 
 Every press of the verified Send binding in a selected Codex/ChatGPT composer must run the Code Sanitizer native submit handler while protection is enabled, regardless of any previous Cancel, close, failed confirmation, or edit. If sensitive terms are still present, the replacement window must appear again. Cancel only returns to the AI app composer; it does not create an allow token, remembered pass-through, or one-shot bypass for the next Send.
@@ -24,6 +26,10 @@ Sending raw text with detected sensitive terms is allowed only through a separat
 
 After installation, the app must force profile setup before claiming protection. If no selected Codex/ChatGPT profile is protected, the resident app must show an active setup window and block or fail closed matching AI submit attempts until onboarding succeeds. The setup window should run the delayed focus workflow: show `waiting_for_focus`, give the user time to focus the target composer, and mark the profile `protected` only after successful verification.
 
+The setup and re-verification workflow must explicitly record the user's effective Send shortcut and newline shortcut for each selected AI profile. It must support at least the inverse pairs `Enter` Send / `Ctrl+Enter` newline and `Ctrl+Enter` Send / `Enter` newline. The workflow must never silently assume `Enter`, overwrite a user-verified binding with a fixed default, or leave an old binding active after the user changes it. While a binding change is incomplete or cannot be verified, the profile is not protected.
+
+At runtime, Code Sanitizer must intercept only the exact configured Send shortcut in the verified composer. The configured shortcut may be suppressed fail-closed on the identifiable AI Send control, but ordinary typing, the configured newline shortcut, unrelated controls such as skill selection, and keyboard input in unselected applications must pass through unchanged. A second resident instance must not install a competing hook; it must activate the existing resident UI or exit with a raw-free status.
+
 ## User Stories
 
 1. As a Codex/ChatGPT Desktop user, I want every press of Send to run Code Sanitizer, so that a previous Cancel cannot make later prompts bypass protection.
@@ -38,6 +44,11 @@ After installation, the app must force profile setup before claiming protection.
 10. As a first-time user, I want Code Sanitizer to block selected AI app Send attempts until setup is complete, so that installation does not create a false sense of protection.
 11. As a maintainer, I want tests to prove Cancel does not arm a pass-through state, so that this failure cannot regress.
 12. As an enterprise admin, I want policy to disable emergency raw bypass, so that managed environments can require redaction with no user override.
+13. As a Codex/ChatGPT Desktop user, I want to choose and verify my application's actual Send shortcut, so that CS protects the shortcut I really use instead of assuming `Enter`.
+14. As a Codex/ChatGPT Desktop user, I want to change my Send shortcut without restarting or silently weakening protection, so that my profile remains accurate after I change an AI-app preference.
+15. As a Codex/ChatGPT Desktop user, I want ordinary `Enter`, newline input, and skill-selection controls to keep working when they are not my configured Send action, so that protection does not make the AI app unusable.
+16. As a security reviewer, I want CS to intercept the exact verified Send action and identifiable Send button only, so that raw sensitive prompts cannot leave while unrelated application input is not blocked.
+17. As a user, I want only one resident CS instance to own input protection, so that duplicate tray processes cannot produce conflicting keyboard behavior.
 
 ## Implementation Decisions
 
@@ -54,6 +65,12 @@ After installation, the app must force profile setup before claiming protection.
 - If no selected profile is protected, the app must show an active setup window and expose the delayed focus verification flow from UI.
 - Until setup succeeds, matching selected AI app submit attempts must be suppressed and reported as `setup_required` or an equivalent raw-free fail-closed status.
 - Setup status must distinguish `waiting_for_focus`, `protected`, `surface_unverified`, `binding_unknown`, and `not_configured`.
+- Send binding is profile data, not a tray-menu constant. The setup UI must expose the supported Send/newline shortcut pairs and show the currently saved pair before verification.
+- Selecting a new pair invalidates the previous protected binding until delayed focus verification succeeds and the resident controller reloads the profile. A failed, cancelled, or timed-out change leaves the profile unprotected rather than retaining a stale protected binding.
+- For v1, the supported shortcut pairs are `Enter` Send with `Ctrl+Enter` newline, and `Ctrl+Enter` Send with `Enter` newline. Unsupported combinations must be shown as unsupported rather than coerced to a default.
+- The native hook must use the stored, verified profile binding for matching. It must not contain a ChatGPT- or Codex-specific hard-coded `Enter` assumption.
+- The hook may fail closed for the stored Send shortcut on an identifiable Send control in the selected protected AI app. It must pass through that shortcut on non-Send controls and pass through every non-Send shortcut, including the stored newline shortcut.
+- The resident tray process must enforce a per-user single-instance boundary. A second launch must not register another input hook; it should foreground the existing tray UI or exit with a raw-free status.
 
 ## Testing Decisions
 
@@ -63,6 +80,11 @@ After installation, the app must force profile setup before claiming protection.
 - Emergency bypass tests should prove the normal Send key cannot bypass, while the explicit emergency bypass action is one-shot, audited raw-free, and policy-blockable.
 - First-run setup tests should cover installed resident startup with no protected profile, active setup prompt, delayed focus verification, and fail-closed submit attempts before setup completion.
 - Product smoke should include Cancel-then-retry behavior and setup-required status without live cloud submission or raw sensitive values.
+- Binding tests must cover both supported shortcut pairs, persistence/reload of each pair, invalidation after a requested change, and rejection of an unsupported pair without a fallback to `Enter`.
+- Native-hook tests must prove that with `Ctrl+Enter` as Send, `Enter` passes through in the verified composer and unrelated selected-app controls, while `Ctrl+Enter` is suppressed and guarded. The inverse pair must have symmetric coverage.
+- Tests must prove that keyboard interaction with non-Send controls, including skill selection, remains available; an identifiable selected-app Send button remains fail-closed for keyboard and mouse activation.
+- Resident-process tests must prove that a second launch does not create a second hook-owning tray instance.
+- The installed-app release checklist must include a manual verification for each supported binding pair and must report the saved profile binding before sensitive test input is entered.
 
 ## Out of Scope
 

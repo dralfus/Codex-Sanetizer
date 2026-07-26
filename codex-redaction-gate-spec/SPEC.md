@@ -69,6 +69,9 @@ The mapping table must be user-global across projects. The same real URL, domain
 51. As a Codex/ChatGPT Desktop user, I want to edit the sanitized prompt inside the replacement window before sending, so that I can fix the prompt without returning sensitive text to the cloud-bound composer.
 52. As a Codex/ChatGPT Desktop user, I want raw submission with detected sensitive terms to require a separate emergency bypass action, so that normal Send and Cancel can never accidentally approve raw data.
 53. As a first-time Windows user, I want setup/profile verification to appear after installation and block unsafe sends until protected, so that installing Code Sanitizer does not leave an unconfigured gap.
+54. As a Codex/ChatGPT Desktop user, I want to select and verify my effective Send/newline shortcut pair, so that Code Sanitizer protects the shortcut that really submits my prompt rather than assuming `Enter`.
+55. As a Codex/ChatGPT Desktop user, I want normal editing and non-Send controls to retain their keyboard behavior, so that protection does not block `Enter`, multiline input, or skill selection when those are not my configured Send action.
+56. As a Windows user, I want only one resident Code Sanitizer instance to own the input hook, so that duplicate tray processes cannot produce conflicting interception behavior.
 
 ## Implementation Decisions
 
@@ -92,13 +95,16 @@ The mapping table must be user-global across projects. The same real URL, domain
 - The product must ship as a Windows installer that installs the resident tray app, can launch it at the end of setup, and can configure user-scope autostart. Normal protected operation must not require a console or `dotnet run`.
 - Stopping protection, exiting the tray app, or unloading the resident process must require an explicit confirmation dialog that names the consequence: selected AI apps will no longer be protected. Enterprise policy may block unload or require administrator approval.
 - Hotkey-triggered scan/apply is a secondary diagnostic/manual feature. It must not be presented as the main protection path.
-- In native protected mode, Code Sanitizer's effective trigger is the selected AI app's verified `submit_binding`. The tray/status text must show this as the protected Send binding, not as a separate CS hotkey. For example, if Codex sends with `Enter` and inserts a newline with `Ctrl+Enter`, Code Sanitizer must intercept `Enter` only in the verified Codex composer and must let `Ctrl+Enter` pass through.
+- In native protected mode, Code Sanitizer's effective trigger is the selected AI app's verified `submit_binding`. The tray/status text must show this as the protected Send binding, not as a separate CS hotkey. For v1, supported pairs are `Enter` Send / `Ctrl+Enter` newline and `Ctrl+Enter` Send / `Enter` newline. CS must intercept only the configured Send binding in the verified composer, and must pass the configured newline binding through.
 - Any separate manual CS hotkey must be clearly labeled as `manual scan/apply`, must not be used as evidence that native submit protection is active, and should avoid conflicting with the selected AI app's newline binding.
 - The adapter must maintain enabled AI surface profiles and must protect only explicitly selected AI apps.
-- The adapter must discover the selected AI app's submit binding from local app configuration when available. If not available, onboarding must ask the user to choose or record the binding and verify it.
-- The adapter must not silently assume that `Enter` is the active Send shortcut.
+- The adapter must discover the selected AI app's submit binding from local app configuration when available. If not available, onboarding must ask the user to choose or record a supported Send/newline pair and verify it. The current saved pair must be visible in resident UI before verification.
+- The adapter must not silently assume that `Enter` is the active Send shortcut, hard-code a shortcut pair in a tray command, or replace a user-verified pair with a fixed default.
 - The current Windows release path treats submit binding configuration as `user_verified` by default. A binding can be marked `documented_config` only when the target app vendor documents a stable local setting, or `empirical_config` only after repeated compatibility evidence across app updates.
 - Each AI surface profile must store both `submit_binding` and `newline_binding`. The adapter may claim `protected` only when it can distinguish them for the active focused composer.
+- Selecting a different binding pair invalidates the old protected binding until delayed focused verification succeeds. A cancelled, failed, or timed-out change must leave the profile unprotected rather than retaining a stale protected binding.
+- The native hook must pass through non-Send keys and keyboard use of non-Send controls, including ordinary `Enter` when `Ctrl+Enter` is the configured Send binding. It may suppress the configured binding fail-closed only for the verified composer or an identifiable selected-app Send control.
+- The resident tray app must enforce one hook-owning instance per user. A second launch must foreground or signal the existing instance and exit without registering another keyboard hook.
 - The tray/menu status must distinguish `protected` from `not_configured`, `binding_unknown`, `surface_unverified` and `degraded_hotkey_only`.
 - Native submit interception must include a visible, raw-free emergency disable path and hook-health watchdog. An emergency action disables protection temporarily; it must not silently send the raw prompt.
 - Enterprise mode may lock required protected profiles, prevent user removal, and disallow silent `degraded_hotkey_only` fallback for selected AI apps.
@@ -133,6 +139,9 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Project-file workflow tests should simulate file read -> sanitized virtual file -> sanitized model edit -> restore-aware local write, and prove that raw protected values do not appear in cloud-visible payload records.
 - Submit interception tests should simulate selected and unselected AI surfaces, matching and non-matching submit bindings, input suppression, sanitizer allow/confirm/block and fail-closed behavior.
 - Binding verifier tests should cover submit vs newline separation, unknown binding status, IME/dead-key pass-through, and user-verified binding persistence without cloud submission.
+- Binding tests must cover both supported Send/newline pairs, profile persistence and resident reload, invalidation after a requested binding change, and unsupported-pair rejection without fallback to `Enter`.
+- Native-hook tests must prove that a non-Send `Enter` or `Ctrl+Enter` action passes through in the selected AI app while the configured Send binding is guarded; identifiable Send-button keyboard and mouse activation must fail closed.
+- Resident tests must prove a second process launch cannot create another hook-owning tray instance.
 - Installer/tray tests should cover install, launch-after-install, user-scope autostart, resident startup status, explicit unload confirmation and local data retention.
 - Trigger wording tests should prove the product reports the protected AI app Send binding separately from any secondary manual scan/apply hotkey.
 - Emergency escape tests should cover temporary disable, tray status changes, hook watchdog downgrade, and raw-free audit events.

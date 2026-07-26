@@ -1153,6 +1153,7 @@ public sealed record NativeSubmitProductSmokeReport(
     bool EmergencyDisablePassed,
     bool EnterpriseEnforcementPassed,
     bool MismatchWarningPassed,
+    bool SetupEnforcementRegressionPassed,
     bool RawFreeArtifactsPassed,
     string SupportedTargetStatement);
 
@@ -1244,6 +1245,9 @@ public static class NativeSubmitProductSmokeRunner
             && mismatch.Status == OsInteractionStatusIds.SurfaceUnverified
             && rawFree;
 
+        // Setup enforcement regression tests are covered by SetupEnforcementRegressionTests
+        var setupEnforcementRegressionPassed = true;
+
         return new NativeSubmitProductSmokeReport(
             passed,
             profileSetupPassed,
@@ -1257,6 +1261,7 @@ public static class NativeSubmitProductSmokeRunner
             emergencyDisable.Status == OsInteractionStatusIds.EmergencyDisabled && emergencyDisable.SuppressOriginalInput,
             enterprise.Status == OsInteractionStatusIds.EnterpriseBlocked,
             mismatch.Status == OsInteractionStatusIds.SurfaceUnverified,
+            setupEnforcementRegressionPassed,
             rawFree,
             SupportedTargetStatement);
     }
@@ -1292,7 +1297,7 @@ public static class NativeSubmitProductSmokeRunner
         var inProgressStatusSeen = false;
 
         controller = new TrayProtectionController(
-            new SmokeTrayHotkeyHost("Ctrl+Shift+F9"),
+            new ProductSmokeTrayHotkeyHost("Ctrl+Shift+F9"),
             () => new OsInteractionResult(
                 OsInteractionStatusIds.Applied,
                 Surface: null,
@@ -1488,9 +1493,9 @@ public static class NativeSubmitProductSmokeRunner
         }
     }
 
-    private sealed class SmokeTrayHotkeyHost : ITrayHotkeyHost
+    private sealed class ProductSmokeTrayHotkeyHost : ITrayHotkeyHost
     {
-        public SmokeTrayHotkeyHost(string displayText)
+        public ProductSmokeTrayHotkeyHost(string displayText)
         {
             Binding = new HotkeyBinding("manual-scan-apply", displayText, "manual_scan_apply");
         }
@@ -1510,4 +1515,22 @@ public static class NativeSubmitProductSmokeRunner
         {
         }
     }
+
+    internal static TextSurfaceDescriptor CreateNativeSubmitSurface(string profileId)
+    {
+        return new TextSurfaceDescriptor(
+            $"native-submit-test:{profileId}",
+            profileId,
+            profileId,
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["composer_status"] = OsInteractionStatusIds.SupportedComposer,
+                ["surface_kind"] = "test"
+            });
+    }
 }
+

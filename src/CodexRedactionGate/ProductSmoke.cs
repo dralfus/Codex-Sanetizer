@@ -30,6 +30,7 @@ public sealed record ProductSmokeReport(
     bool NativeSubmitOverlayForegroundRequestPassed,
     bool NativeSubmitOverlayForegroundRefusalStatusPassed,
     bool NativeProfileVerificationEntrypointsPassed,
+    bool SetupEnforcementRegressionPassed,
     bool RawFreeArtifactsPassed,
     int AuditRowCount,
     int SanitizedPlaceholderCount,
@@ -273,6 +274,7 @@ public static class ProductSmokeRunner
                 NativeSubmitOverlayForegroundRequestPassed: nativeSubmit.OverlayForegroundRequestPassed,
                 NativeSubmitOverlayForegroundRefusalStatusPassed: nativeSubmit.OverlayForegroundRefusalStatusPassed,
                 NativeProfileVerificationEntrypointsPassed: nativeProfileVerificationEntrypointsPassed,
+                SetupEnforcementRegressionPassed: nativeSubmit.SetupEnforcementRegressionPassed,
                 RawFreeArtifactsPassed: false,
                 AuditRowCount: auditView.Rows.Count,
                 SanitizedPlaceholderCount: sample.Replacements.Count,
@@ -303,6 +305,7 @@ public static class ProductSmokeRunner
             && nativeSubmit.DuplicateSendGuardPassed
             && nativeSubmit.OverlayForegroundRequestPassed
             && nativeSubmit.OverlayForegroundRefusalStatusPassed
+            && nativeSubmit.SetupEnforcementRegressionPassed
             && nativeProfileVerificationEntrypointsPassed
             && rawFreePassed;
 
@@ -331,6 +334,7 @@ public static class ProductSmokeRunner
             NativeSubmitOverlayForegroundRequestPassed: nativeSubmit.OverlayForegroundRequestPassed,
             NativeSubmitOverlayForegroundRefusalStatusPassed: nativeSubmit.OverlayForegroundRefusalStatusPassed,
             NativeProfileVerificationEntrypointsPassed: nativeProfileVerificationEntrypointsPassed,
+            SetupEnforcementRegressionPassed: nativeSubmit.SetupEnforcementRegressionPassed,
             RawFreeArtifactsPassed: rawFreePassed,
             AuditRowCount: auditView.Rows.Count,
             SanitizedPlaceholderCount: sample.Replacements.Count,
@@ -389,6 +393,7 @@ public static class ProductSmokeRunner
             $"native_submit_overlay_foreground_request: {report.NativeSubmitOverlayForegroundRequestPassed.ToString().ToLowerInvariant()}",
             $"native_submit_overlay_foreground_refusal_status: {report.NativeSubmitOverlayForegroundRefusalStatusPassed.ToString().ToLowerInvariant()}",
             $"native_profile_verification_entrypoints: {report.NativeProfileVerificationEntrypointsPassed.ToString().ToLowerInvariant()}",
+            $"setup_enforcement_regression: {report.SetupEnforcementRegressionPassed.ToString().ToLowerInvariant()}",
             $"raw_free_artifacts: {report.RawFreeArtifactsPassed.ToString().ToLowerInvariant()}",
             $"audit_rows: {report.AuditRowCount}",
             $"sanitized_placeholder_count: {report.SanitizedPlaceholderCount}"
