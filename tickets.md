@@ -166,25 +166,25 @@ All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ct
 **Blocked by:** None — can start immediately.
 
 - [x] `SurfaceMetadata` record created with named fields for surface properties
-- [ ] All usages of `Dictionary<string, string>` for surface metadata replaced with `SurfaceMetadata`
-- [ ] `SubmitBindingOnboardingVerifier` updated to accept `SurfaceMetadata`
-- [ ] `TextSurfaceDescriptor` updated to use `SurfaceMetadata` instead of `Dictionary<string, string>`
-- [ ] All tests updated to use new type
-- [ ] No test regressions (1260 tests pass)
+- [x] All usages of `Dictionary<string, string>` for surface metadata replaced with `SurfaceMetadata`
+- [x] `SubmitBindingOnboardingVerifier` updated to accept `SurfaceMetadata`
+- [x] `TextSurfaceDescriptor` updated to use `SurfaceMetadata` instead of `Dictionary<string, string>`
+- [x] All tests updated to use new type
+- [x] No test regressions (1264 tests pass)
 
-**Status:** Partially completed - commit ea28ab6
+**Status:** Completed - integrated into commit 72e76ce (ticket 249)
 
 **Changes:**
 - Added `SurfaceMetadata` record with `ToDictionary()` and `FromDictionary()` methods
+- Added `ArbitraryMetadata` parameter to support dynamic metadata
 - Added overload to `SubmitBindingOnboardingVerifier.VerifyUserBindings`
-- Updated `CreateSurface` and `CreateNativeSubmitSurface` to use `SurfaceMetadata`
-- **Incomplete:** `TextSurfaceDescriptor.Metadata` still uses `IReadOnlyDictionary<string, string>`
-- **Incomplete:** All call sites not yet migrated to new API
+- Updated `CreateSurface`, `CreateNativeSubmitSurface` to use `SurfaceMetadata`
+- Updated `WindowsFocusedComposerDiscovery` to include `read_strategy`, `write_strategy`, `classification_reason`
+- Updated `VerifiedSubmitBindingAction` to add `submit_binding`, `submit_binding_sendkeys`
+- `TextSurfaceDescriptor.Metadata` changed from `IReadOnlyDictionary<string, string>` to `SurfaceMetadata`
+- All 1264 tests pass
 
-**Note:** The task requires a full refactor of `TextSurfaceDescriptor` to replace `Metadata` with `SurfaceMetadata`, which affects the entire codebase. A complete implementation should:
-1. Change `TextSurfaceDescriptor.Metadata` from `IReadOnlyDictionary<string, string>` to `SurfaceMetadata`
-2. Update all call sites to use the new type
-3. Remove dictionary-based overload from `VerifyUserBindings`
+**Note:** The full implementation was completed in ticket 249, which integrated `SurfaceMetadata` into all call sites throughout the codebase.
 
 ## 249. Integrate SurfaceMetadata into TextSurfaceDescriptor
 
