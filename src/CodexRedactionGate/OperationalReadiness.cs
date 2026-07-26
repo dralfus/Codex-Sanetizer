@@ -96,6 +96,10 @@ public static class ReadinessDoctor
                 ? new ReadinessItem("vault_secret", "ready", "vault_secret_ready")
                 : new ReadinessItem("vault_secret", "failed", "vault_secret_empty");
         }
+        catch (DpapiSecretLoadFailureException ex)
+        {
+            return new ReadinessItem("vault_secret", "failed", "vault_secret_dpapi_failed");
+        }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or InvalidOperationException)
         {
             return new ReadinessItem("vault_secret", "failed", "vault_secret_unavailable");

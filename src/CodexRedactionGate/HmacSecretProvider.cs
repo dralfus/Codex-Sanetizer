@@ -86,20 +86,37 @@ public sealed class DpapiProtectedHmacSecretProvider
 
     private byte[] LoadExistingSecret()
     {
+        if (!File.Exists(SecretFilePath))
+        {
+            throw new InvalidOperationException("Protected HMAC secret file not found.");
+        }
+
         var protectedSecret = File.ReadAllBytes(SecretFilePath);
         if (protectedSecret.Length == 0)
         {
             throw new InvalidOperationException("Protected HMAC secret file is empty.");
         }
 
-        var secret = _dataProtector.Unprotect(protectedSecret);
-        if (secret.Length != SecretSizeBytes)
+        try
         {
-            throw new InvalidOperationException("HMAC secret has an invalid length.");
+            var secret = _dataProtector.Unprotect(protectedSecret);
+            if (secret.Length != SecretSizeBytes)
+            {
+                throw new InvalidOperationException("HMAC secret has an invalid length.");
+            }
+            return secret;
         }
-
-        return secret;
+        catch (Exception ex) when (ex is Win32Exception || ex is CryptographicException || ex is InvalidOperationException)
+        {
+            throw new DpapiSecretLoadFailureException($"Failed to load HMAC secret: {ex.Message}", ex);
+        }
     }
+}
+
+public sealed class DpapiSecretLoadFailureException : InvalidOperationException
+{
+    public DpapiSecretLoadFailureException(string message) : base(message) { }
+    public DpapiSecretLoadFailureException(string message, Exception inner) : base(message, inner) { }
 }
 
 public sealed class WindowsDpapiDataProtector : IDataProtector

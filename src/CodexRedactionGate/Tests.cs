@@ -986,6 +986,81 @@ public class HmacSecretProviderTests
         Assert.That(provider.SecretFilePath, Does.EndWith(DpapiProtectedHmacSecretProvider.DefaultSecretFileName));
     }
 
+    [Test]
+    public void DpapiSecretLoadFailureException_CatchesUnprotectErrors()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var secretFilePath = Path.Combine(tempDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName);
+            
+            // Create empty file
+            File.WriteAllText(secretFilePath, "");
+            
+            var protector = new DeterministicDataProtector();
+            var provider = new DpapiProtectedHmacSecretProvider(secretFilePath, protector);
+            
+            // Empty file should throw
+            Assert.Throws<InvalidOperationException>(() => provider.GetOrCreateSecret());
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void DpapiSecretLoadFailureException_CatchesInvalidLength()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var secretFilePath = Path.Combine(tempDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName);
+            
+            // Create file with wrong length
+            var protector = new DeterministicDataProtector();
+            var wrongLengthSecret = new byte[16]; // Should be 32
+            var protectedBytes = protector.Protect(wrongLengthSecret);
+            File.WriteAllBytes(secretFilePath, protectedBytes);
+            
+            var provider = new DpapiProtectedHmacSecretProvider(secretFilePath, protector);
+            
+            // Invalid length should throw DpapiSecretLoadFailureException
+            var ex = Assert.Throws<DpapiSecretLoadFailureException>(() => provider.GetOrCreateSecret());
+            Assert.That(ex.Message, Does.Contain("invalid length"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void TryCreateProductionVault_FailsClosedOnDpapiFailure()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            
+            // Force empty secret file
+            var secretPath = Path.Combine(tempDirectory, "hmac-secret.dpapi");
+            Directory.CreateDirectory(Path.GetDirectoryName(secretPath)!);
+            File.WriteAllText(secretPath, "");
+            
+            // Override the default path
+            var vault = Sanitizer.TryCreateProductionVault(layout, out var failureReason);
+            
+            Assert.That(vault, Is.Null);
+            Assert.That(failureReason, Is.Not.Null);
+            Assert.That(failureReason, Does.Not.Contain("192.168.10.25"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
     private static string CreateTempDirectory()
     {
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-tests", Guid.NewGuid().ToString("N"));

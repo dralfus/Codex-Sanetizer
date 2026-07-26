@@ -304,6 +304,32 @@ public sealed class Sanitizer : ISanitizer
             new WindowsDpapiDataProtector());
     }
 
+    internal static IMappingVault? TryCreateProductionVault(DefaultStorageLayout layout, out string? failureReason)
+    {
+        failureReason = null;
+        try
+        {
+            var secretProvider = new DpapiProtectedHmacSecretProvider(
+                Path.Combine(layout.RootDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName),
+                new WindowsDpapiDataProtector());
+            var secret = secretProvider.GetOrCreateSecret();
+            return FileMappingVault.CreateProtected(
+                Path.Combine(layout.VaultDirectory, FileMappingVault.DefaultVaultFileName),
+                secret,
+                new WindowsDpapiDataProtector());
+        }
+        catch (DpapiSecretLoadFailureException ex)
+        {
+            failureReason = ex.Message;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            failureReason = $"Failed to create production vault: {ex.Message}";
+            return null;
+        }
+    }
+
     private static ISecretScanner? CreateProductionSecretScanner()
     {
         var scannerPackage = ScannerPackageManifestResolver.ResolveDefault(AppContext.BaseDirectory);
