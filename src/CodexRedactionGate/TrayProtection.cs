@@ -56,7 +56,6 @@ internal sealed class TrayProtectionController
     private readonly SubmitBindingProfile? _nativeProfile;
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
     private int _nativeSubmitFlowInProgress;
-    private readonly LocalCrashDiagnostics _crashDiagnostics;
 
     public TrayProtectionController(ITrayHotkeyHost hotkeyHost, Func<OsInteractionResult> applyOnlyRunner)
         : this(hotkeyHost, applyOnlyRunner, null, null, null)
@@ -79,10 +78,6 @@ internal sealed class TrayProtectionController
         _nativeSubmitRunner = nativeSubmitRunner;
         _nativeProfile = nativeProfile;
         _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
-        _crashDiagnostics = new LocalCrashDiagnostics(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CodexRedactionGate",
-            "crashes"));
         State = CreateState(enabled: false, lastStatus: "disabled");
     }
 
@@ -230,40 +225,24 @@ internal sealed class TrayProtectionController
             return;
         }
 
-        NativeSubmitInterceptionResult result;
         try
         {
-            result = _nativeSubmitController.HandleGesture(gesture, _nativeSubmitRunner);
-        }
-        catch (Exception ex)
-        {
-            // Capture crash without exposing sensitive data
-            _crashDiagnostics.Capture(ex, "native_submit");
-            result = new NativeSubmitInterceptionResult(
-                OsInteractionStatusIds.NativeSubmitCrashed,
-                SuppressOriginalInput: true,
-                Applied: false,
-                Submitted: false,
-                Diagnostics: new Dictionary<string, string>
-                {
-                    ["crash_caught"] = "true",
-                    ["crash_component"] = "native_submit"
-                });
+            NativeSubmitInterceptionResult result = _nativeSubmitController.HandleGesture(gesture, _nativeSubmitRunner);
+
+            var readinessStatus = NativeSubmitReadinessStatusAfterFlow(result.Status);
+            var setupRequired = readinessStatus == OsInteractionStatusIds.NativeSubmitSetupRequired;
+            PublishNativeSubmitState(
+                result.Status,
+                readinessStatus,
+                result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
+                result.Applied,
+                result.Submitted,
+                setupRequired);
         }
         finally
         {
             Volatile.Write(ref _nativeSubmitFlowInProgress, 0);
         }
-
-        var readinessStatus = NativeSubmitReadinessStatusAfterFlow(result.Status);
-        var setupRequired = readinessStatus == OsInteractionStatusIds.NativeSubmitSetupRequired;
-        PublishNativeSubmitState(
-            result.Status,
-            readinessStatus,
-            result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
-            result.Applied,
-            result.Submitted,
-            setupRequired);
     }
 
     private void PublishNativeSubmitState(

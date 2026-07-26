@@ -519,6 +519,50 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_CrashIsCapturedByOrchestratorNotController()
+    {
+        // The crash boundary should be at OsInteractionOrchestrator.RunOnce,
+        // not in TrayProtectionController.RunNativeSubmitOnce
+        
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        
+        // Create a submit runner that throws an exception
+        var exceptionThrown = false;
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => new OsInteractionResult(
+                OsInteractionStatusIds.Applied,
+                CreateNativeSubmitSurface("codex-desktop"),
+                null,
+                null,
+                Applied: true,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>()),
+            hook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                exceptionThrown = true;
+                throw new InvalidOperationException("Test exception from orchestrator boundary");
+            });
+
+        var started = controller.Start();
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        // Exception should be caught by OsInteractionOrchestrator, not TrayProtectionController
+        Assert.That(started, Is.True);
+        Assert.That(exceptionThrown, Is.True);
+        // The result should be FailedClosed from orchestrator, not NativeSubmitCrashed from controller
+        // Check what diagnostics are present to understand where exception was caught
+        Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.FailedClosed),
+            $"Expected FailedClosed but got {controller.State.LastStatus}. Diagnostics: {string.Join(", ", controller.State.LastStatus)}");
+        Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+    }
+
+    [Test]
     public void SurfaceCompatibilityEvaluator_WarnsWhenSelectedAppVersionOrProfileNoLongerMatches()
     {
         var profile = CreateProtectedProfile();

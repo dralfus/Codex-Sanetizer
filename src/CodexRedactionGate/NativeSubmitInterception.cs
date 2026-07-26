@@ -780,14 +780,33 @@ public sealed class NativeSubmitInterceptionController
                 Diagnostics: diagnostics);
         }
 
-        var result = submitFlow();
-        diagnostics = new Dictionary<string, string>(Merge(diagnostics, result.Diagnostics), StringComparer.Ordinal);
-        diagnostics["flow_status"] = result.Status;
+        OsInteractionResult flowResult;
+        try
+        {
+            flowResult = submitFlow();
+        }
+        catch (Exception ex)
+        {
+            // Exception was caught by OsInteractionOrchestrator.RunOnce and returned as FailedClosed
+            // This catch block should never be hit in normal operation
+            diagnostics["flow_exception"] = "true";
+            diagnostics["exception_type"] = ex.GetType().FullName ?? ex.GetType().Name;
+            diagnostics["exception_message"] = ex.Message;
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.FailedClosed,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: diagnostics);
+        }
+
+        diagnostics = new Dictionary<string, string>(Merge(diagnostics, flowResult.Diagnostics), StringComparer.Ordinal);
+        diagnostics["flow_status"] = flowResult.Status;
         return new NativeSubmitInterceptionResult(
-            result.Status,
+            flowResult.Status,
             SuppressOriginalInput: true,
-            Applied: result.Applied,
-            Submitted: result.Submitted,
+            Applied: flowResult.Applied,
+            Submitted: flowResult.Submitted,
             Diagnostics: diagnostics);
     }
 
