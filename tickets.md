@@ -192,12 +192,25 @@ All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ct
 
 **Blocked by:** 246. Extract SurfaceMetadata type to replace Dictionary<string, string>.
 
-- [ ] `TextSurfaceDescriptor` updated to use `SurfaceMetadata` instead of `IReadOnlyDictionary<string, string>`
-- [ ] All code using `TextSurfaceDescriptor.Metadata` updated to use `SurfaceMetadata`
-- [ ] All tests updated to use new type
-- [ ] No test regressions (1260 tests pass)
+- [x] `TextSurfaceDescriptor` updated to use `SurfaceMetadata` instead of `IReadOnlyDictionary<string, string>`
+- [x] All code using `TextSurfaceDescriptor.Metadata` updated to use `SurfaceMetadata`
+- [x] `SurfaceMetadata` extended with `ArbitraryMetadata` to support arbitrary key-value pairs (e.g., `read_strategy`, `write_strategy`, `classification_reason`)
+- [x] All tests updated to use new type
+- [x] No test regressions (1264 tests pass)
 
-**Why:** Code review identified that `SurfaceMetadata` was introduced but not integrated into `TextSurfaceDescriptor`, creating parallel representations of the same concept and maintaining Primitive Obsession.
+**Status:** Completed
+
+**Changes:**
+- `SurfaceMetadata` extended with `ArbitraryMetadata` parameter to support dynamic metadata
+- Added `using System.Linq` for LINQ queries
+- Updated `ToDictionary()` and `FromDictionary()` to handle arbitrary metadata
+- Updated `TryGetValue()` to search both typed fields and arbitrary metadata
+- Updated `WindowsFocusedComposerDiscovery` to include `read_strategy`, `write_strategy`, `classification_reason`, `focused_element_hash` in arbitrary metadata
+- Updated `VerifiedSubmitBindingAction` to add `submit_binding`, `submit_binding_sendkeys`, etc.
+- All tests updated to use `SurfaceMetadata` constructor or `FromDictionary()`
+- All 1264 tests pass
+
+**Why:** Code review identified that `SurfaceMetadata` was introduced but not fully integrated into `TextSurfaceDescriptor`, creating parallel representations of the same concept and maintaining Primitive Obsession. The `ArbitraryMetadata` field was added to maintain backward compatibility with existing diagnostic keys.
 
 ## 247. Extract factory methods for test surface creation
 
