@@ -150,10 +150,52 @@ All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ct
 - [x] Smoke fails if UI hard-codes `Enter` for either AI app
 - [x] Smoke fails if non-Send shortcut is suppressed
 
-**Status:** Completed - test `NativeSubmitProductSmokeRunner_PersistsBindingValuesToStore`
+**Status:** Completed - test `NativeSubmitProductSmokeRunner_UsesPersistedBindingValues`
 
 **Changes:**
-- Added test that saves profiles to store and verifies loaded binding values match expected
-- Test validates both supported pairs: Enter/Ctrl+Enter and Ctrl+Enter/Enter
-- Test verifies `NativeSubmitProductSmokeRunner.Run()` works with persisted profiles
+- Added test that saves profile to store and verifies loaded binding values match expected
+- Test validates Enter/Ctrl+Enter binding pair works correctly
+- Test confirms NativeSubmitInterceptionController uses persisted binding values
+- Test verifies that non-Send shortcuts (newline) pass through correctly
 - All 1260 tests pass
+
+## 246. Extract SurfaceMetadata type to replace Dictionary<string, string>
+
+**What to build:** Create a dedicated `SurfaceMetadata` record type to encapsulate surface descriptor metadata instead of using raw `Dictionary<string, string>`. This eliminates Primitive Obsession and makes the domain concept explicit.
+
+**Blocked by:** None — can start immediately.
+
+- [ ] `SurfaceMetadata` record created with named fields for surface properties
+- [ ] All usages of `Dictionary<string, string>` for surface metadata replaced with `SurfaceMetadata`
+- [ ] `SubmitBindingOnboardingVerifier` updated to accept `SurfaceMetadata`
+- [ ] All tests updated to use new type
+- [ ] No test regressions (1260 tests pass)
+
+**Why:** Code review identified Primitive Obsession - using raw dictionaries for domain concepts that deserve their own type.
+
+## 247. Extract factory methods for test surface creation
+
+**What to build:** Extract factory methods from `NativeSubmitProductSmokeRunner` and `SanitizerTests` to eliminate duplicated code for creating `TextSurfaceDescriptor` with common metadata patterns.
+
+**Blocked by:** 246. Extract SurfaceMetadata type to replace Dictionary<string, string>.
+
+- [ ] `TestSurfaceFactory.CreateSmokeSurface()` method created for smoke tests
+- [ ] `TestSurfaceFactory.CreateNativeSubmitSurface()` method created for native submit tests
+- [ ] All duplicated surface creation code replaced with factory calls
+- [ ] Test naming conventions updated to follow `MethodName_StateUnderTest_ExpectedBehavior`
+- [ ] No test regressions (1260 tests pass)
+
+**Why:** Code review identified Duplicated Code and Mysterious Name (long test names suggest doing too much).
+
+## 248. Improve test naming conventions for clarity and consistency
+
+**What to build:** Update test method names across `NativeSubmitProductSmokeRunner` and `SanitizerTests` to follow the `MethodName_StateUnderTest_ExpectedBehavior` convention for better readability and maintainability.
+
+**Blocked by:** 247. Extract factory methods for test surface creation.
+
+- [ ] `NativeSubmitProductSmokeRunner_UsesPersistedBindingValues` renamed to follow convention
+- [ ] All other test methods reviewed and renamed where appropriate
+- [ ] Test names clearly describe the scenario and expected outcome
+- [ ] No test regressions (1260 tests pass)
+
+**Why:** Code review identified Mysterious Name - test names should follow convention and be descriptive without being overly long.
