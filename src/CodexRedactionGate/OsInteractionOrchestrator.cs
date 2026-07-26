@@ -51,6 +51,31 @@ public sealed class OsInteractionOrchestrator
     {
         ArgumentNullException.ThrowIfNull(options);
 
+        try
+        {
+            return RunOnceInternal(options);
+        }
+        catch (Exception ex)
+        {
+            // Return fail-closed status without exposing sensitive data
+            return new OsInteractionResult(
+                OsInteractionStatusIds.FailedClosed,
+                Surface: null,
+                SanitizationResult: null,
+                ConfirmationModel: null,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["exception_type"] = ex.GetType().FullName ?? ex.GetType().Name,
+                    ["exception_message"] = ex.Message,
+                    ["failed_closed"] = "true"
+                });
+        }
+    }
+
+    private OsInteractionResult RunOnceInternal(OsInteractionRunOptions options)
+    {
         var discovery = _surfaceDiscovery.DiscoverActiveSurface();
         if (!discovery.Succeeded || discovery.Surface is null || !discovery.Surface.Supported)
         {

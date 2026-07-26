@@ -34,6 +34,7 @@ public static class OsInteractionStatusIds
     public const string NativeSubmitGuarded = "native_submit_guarded";
     public const string NativeSubmitInProgress = "native_submit_in_progress";
     public const string NativeSubmitPassThrough = "native_submit_pass_through";
+    public const string NativeSubmitCrashed = "native_submit_crashed";
     public const string EmergencyDisabled = "emergency_disabled";
     public const string EnterpriseBlocked = "enterprise_blocked";
     public const string NativeSubmitSetupRequired = "native_submit_setup_required";

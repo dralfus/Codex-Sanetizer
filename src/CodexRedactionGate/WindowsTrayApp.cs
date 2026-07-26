@@ -122,6 +122,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly ITrayProtectionDisableConfirmation _disableConfirmation;
     private readonly DefaultStorageLayout _layout;
     private readonly string _buildVersion;
+    private readonly LocalCrashDiagnostics _crashDiagnostics;
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _toggleItem;
@@ -158,6 +159,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _commandLauncher = commandLauncher ?? throw new ArgumentNullException(nameof(commandLauncher));
         _disableConfirmation = disableConfirmation ?? throw new ArgumentNullException(nameof(disableConfirmation));
         _buildVersion = BuildVersion.Current;
+        _crashDiagnostics = new LocalCrashDiagnostics(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CodexRedactionGate",
+            "crashes"));
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };

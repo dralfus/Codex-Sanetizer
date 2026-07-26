@@ -6458,6 +6458,102 @@ public class CrashDiagnosticsTests
             Directory.Delete(tempDirectory, recursive: true);
         }
     }
+
+    [Test]
+    public void OsInteractionOrchestrator_CrashBoundaryReturnsFailClosed()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var crashDirectory = Path.Combine(tempDirectory, "crashes");
+            var crashDiag = new LocalCrashDiagnostics(crashDirectory);
+
+            // Create a mock sanitizer that throws
+            var sanitizer = new ThrowingSanitizer(new InvalidOperationException("Simulated crash"));
+
+            var orchestrator = new OsInteractionOrchestrator(
+                sanitizer,
+                new FixedSurfaceDiscovery(),
+                new FixedTextReader(),
+                new FixedTextWriter(),
+                new FixedSubmitAction(),
+                new FixedConfirmationOverlay());
+
+            var result = orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly);
+
+            Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+            Assert.That(result.Applied, Is.False);
+            Assert.That(result.Submitted, Is.False);
+            Assert.That(result.Diagnostics["failed_closed"], Is.EqualTo("true"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+}
+
+internal sealed class ThrowingSanitizer : ISanitizer
+{
+    private readonly Exception _exception;
+
+    public ThrowingSanitizer(Exception exception)
+    {
+        _exception = exception;
+    }
+
+    public SanitizationResult Sanitize(SanitizeRequest request)
+    {
+        throw _exception;
+    }
+}
+
+internal sealed class FixedSurfaceDiscovery : IActiveTextSurfaceDiscovery
+{
+    public TextSurfaceDiscoveryResult DiscoverActiveSurface()
+    {
+        return TextSurfaceDiscoveryResult.Success(new TextSurfaceDescriptor(
+            "fixed-surface",
+            "test-profile",
+            "Test Profile",
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>()));
+    }
+}
+
+internal sealed class FixedTextReader : ITextSurfaceReader
+{
+    public TextCaptureResult CaptureText(TextSurfaceDescriptor surface)
+    {
+        return new TextCaptureResult(true, "captured", "test prompt", new Dictionary<string, string>());
+    }
+}
+
+internal sealed class FixedTextWriter : ITextSurfaceWriter
+{
+    public TextReplacementResult ReplaceText(TextSurfaceDescriptor surface, string text)
+    {
+        return new TextReplacementResult(true, "replaced", new Dictionary<string, string>());
+    }
+}
+
+internal sealed class FixedSubmitAction : ISubmitAction
+{
+    public SubmitActionResult Submit(TextSurfaceDescriptor surface)
+    {
+        return new SubmitActionResult(true, "submitted", new Dictionary<string, string>());
+    }
+}
+
+internal sealed class FixedConfirmationOverlay : IConfirmationOverlay
+{
+    public ConfirmationDecision RequestConfirmation(ConfirmationUiModel model)
+    {
+        return new ConfirmationDecision(false, null);
+    }
 }
 
 [TestFixture]

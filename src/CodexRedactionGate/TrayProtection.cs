@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
@@ -55,6 +56,7 @@ internal sealed class TrayProtectionController
     private readonly SubmitBindingProfile? _nativeProfile;
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
     private int _nativeSubmitFlowInProgress;
+    private readonly LocalCrashDiagnostics _crashDiagnostics;
 
     public TrayProtectionController(ITrayHotkeyHost hotkeyHost, Func<OsInteractionResult> applyOnlyRunner)
         : this(hotkeyHost, applyOnlyRunner, null, null, null)
@@ -77,6 +79,10 @@ internal sealed class TrayProtectionController
         _nativeSubmitRunner = nativeSubmitRunner;
         _nativeProfile = nativeProfile;
         _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
+        _crashDiagnostics = new LocalCrashDiagnostics(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CodexRedactionGate",
+            "crashes"));
         State = CreateState(enabled: false, lastStatus: "disabled");
     }
 
@@ -228,6 +234,21 @@ internal sealed class TrayProtectionController
         try
         {
             result = _nativeSubmitController.HandleGesture(gesture, _nativeSubmitRunner);
+        }
+        catch (Exception ex)
+        {
+            // Capture crash without exposing sensitive data
+            _crashDiagnostics.Capture(ex, "native_submit");
+            result = new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.NativeSubmitCrashed,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["crash_caught"] = "true",
+                    ["crash_component"] = "native_submit"
+                });
         }
         finally
         {
