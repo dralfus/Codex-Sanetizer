@@ -1055,6 +1055,32 @@ public class HmacSecretProviderTests
             Assert.That(vault, Is.Null);
             Assert.That(failureReason, Is.Not.Null);
             Assert.That(failureReason, Does.Not.Contain("192.168.10.25"));
+            Assert.That(failureReason, Does.Not.Contain("BLOCK_THIS"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void DpapiSecretLoadFailureException_CatchesCorruptedData()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var secretFilePath = Path.Combine(tempDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName);
+
+            // Create file with corrupted data (not valid DPAPI protected data)
+            File.WriteAllBytes(secretFilePath, new byte[] { 1, 2, 3, 4, 5 });
+
+            var protector = new WindowsDpapiDataProtector();
+            var provider = new DpapiProtectedHmacSecretProvider(secretFilePath, protector);
+
+            // Corrupted data should throw DpapiSecretLoadFailureException
+            var ex = Assert.Throws<DpapiSecretLoadFailureException>(() => provider.GetOrCreateSecret());
+            Assert.That(ex.Message, Does.Not.Contain("192.168.10.25"));
+            Assert.That(ex.Message, Does.Not.Contain("BLOCK_THIS"));
         }
         finally
         {
