@@ -68,9 +68,19 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 240. Remove duplicate crash diagnostics capture.
 
-- [ ] Setup/tray UI displays the currently saved binding pair
-- [ ] User can select either supported pair and verify it
-- [ ] Selected pair is persisted and reloaded into the resident controller
+- [x] Setup/tray UI displays the currently saved binding pair
+- [x] User can select either supported pair and verify it
+- [x] Selected pair is persisted and reloaded into the resident controller
+
+**Status:** Completed - commit 65052d0f
+
+**Changes:**
+- Added radio buttons in FirstRunSetupForm for selecting binding pair
+- Users can choose: "Enter as Send / Ctrl+Enter as newline" or "Ctrl+Enter as Send / Enter as newline"
+- Added binding pair display label showing current selection
+- Binding pair is persisted to profile store before verification
+- UI updates to show selected bindings during verification
+- Added 4 tests covering both supported pairs and persistence
 
 ## 242. Fix native keyboard interception to pass through non-Send shortcuts
 
