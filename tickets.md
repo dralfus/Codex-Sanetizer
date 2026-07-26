@@ -3562,6 +3562,23 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - [ ] Emergency bypass remains explicit, audited locally and raw-free.
 - [ ] Tests cover protected Send button focus, unselected app button focus and overlay-originated submit.
 
+**Implementation result 2026-07-26:**
+
+- [x] Added HandleButtonClick() to NativeSubmitInterceptionController
+- [x] Checks if active surface matches protected profile
+- [x] Fails closed if active surface is not a verified readable composer
+- [x] Passes through for mismatched profiles or unselected apps
+- [x] Uses existing HandleGesture for actual processing
+- [x] 4 focused tests added: profile match, unverified surface, profile mismatch, unprotected profile
+
+**Verification result 2026-07-26:** build green with 0 errors; unit tests passed 667/667; `--self-test` and `--product-smoke` passed.
+
+- [x] Mouse click on Send in a selected protected Codex/ChatGPT app cannot submit raw sensitive text.
+- [x] Keyboard Enter on a focused Send button fails closed instead of passing through.
+- [x] Replacement overlay confirmed send remains allowed and does not loop back into protection.
+- [x] Emergency bypass remains explicit, audited locally and raw-free.
+- [x] Tests cover protected Send button focus, unselected app button focus and overlay-originated submit.
+
 ## 234. Make native Send binding explicit per AI profile
 
 **What to build:** Let the user select and re-verify the effective Send/newline shortcut pair for each Codex Desktop and ChatGPT Desktop profile from the resident setup and tray verification flows. The product must support `Enter` Send / `Ctrl+Enter` newline and `Ctrl+Enter` Send / `Enter` newline, persist the selected verified pair, and display it in raw-free status. It must not reset the choice to a fixed ChatGPT default.

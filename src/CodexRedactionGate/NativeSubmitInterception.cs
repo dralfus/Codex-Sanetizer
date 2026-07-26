@@ -593,6 +593,59 @@ public sealed class NativeSubmitInterceptionController
         _firstRunSetupController = firstRunSetupController;
     }
 
+    public NativeSubmitInterceptionResult HandleButtonClick(
+        TextSurfaceDescriptor activeSurface,
+        Func<OsInteractionResult>? submitFlow = null,
+        bool hookHealthy = true)
+    {
+        ArgumentNullException.ThrowIfNull(activeSurface);
+
+        // Check if active surface matches our profile
+        var isMatchingProfile = string.Equals(
+            activeSurface.ProfileId,
+            _profile.ProfileId,
+            StringComparison.Ordinal);
+
+        if (!isMatchingProfile)
+        {
+            // Mismatched profile - pass through
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.NativeSubmitPassThrough,
+                SuppressOriginalInput: false,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = _profile.ProfileId,
+                    ["active_profile"] = activeSurface.ProfileId,
+                    ["pass_through_reason"] = "profile_mismatch"
+                });
+        }
+
+        // If active surface is not a readable composer, fail closed
+        if (activeSurface.Metadata.TryGetValue("composer_status", out var composerStatus) &&
+            composerStatus != OsInteractionStatusIds.SupportedComposer)
+        {
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.SurfaceUnverified,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = _profile.ProfileId,
+                    ["active_composer_status"] = composerStatus,
+                    ["fail_closed_reason"] = "unverified_surface"
+                });
+        }
+
+        // Use existing HandleGesture for actual processing
+        return HandleGesture(
+            new NativeKeyGesture("Enter", Ctrl: true),
+            submitFlow,
+            hookHealthy);
+    }
+
     public NativeSubmitInterceptionResult HandleGesture(
         NativeKeyGesture gesture,
         Func<OsInteractionResult>? submitFlow = null,

@@ -800,7 +800,7 @@ public partial class SanitizerTests
         }
     }
 
-    private static SubmitBindingProfile CreateProtectedProfile()
+    internal static SubmitBindingProfile CreateProtectedProfile()
     {
         return new SubmitBindingProfile(
             "codex-desktop",
@@ -832,7 +832,7 @@ public partial class SanitizerTests
             Diagnostics: new Dictionary<string, string>());
     }
 
-    private static TextSurfaceDescriptor CreateNativeSubmitSurface(string profileId)
+    internal static TextSurfaceDescriptor CreateNativeSubmitSurface(string profileId)
     {
         return new TextSurfaceDescriptor(
             $"native-submit-test:{profileId}",
@@ -1187,5 +1187,147 @@ public partial class SanitizerTests
         IFirstRunSetupController setupController)
     {
         return false; // Simulate user cancel/close
+    }
+}
+
+[TestFixture]
+public class HandleButtonClickTests : SanitizerTests
+{
+    [Test]
+    public void HandleButtonClick_MatchesProfileAndAllowsSubmit()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: null);
+
+        var activeSurface = new TextSurfaceDescriptor(
+            "native-submit-test:codex-desktop",
+            "codex-desktop",
+            "codex-desktop",
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
+            });
+
+        var result = controller.HandleButtonClick(activeSurface, () => new OsInteractionResult(
+            OsInteractionStatusIds.Submitted,
+            Surface: activeSurface,
+            SanitizationResult: null,
+            ConfirmationModel: null,
+            Applied: true,
+            Submitted: true,
+            Diagnostics: new Dictionary<string, string>()));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Submitted));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+        Assert.That(result.Applied, Is.True);
+        Assert.That(result.Submitted, Is.True);
+    }
+
+    [Test]
+    public void HandleButtonClick_FailsClosedWhenUnverifiedSurface()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: null);
+
+        var activeSurface = new TextSurfaceDescriptor(
+            "native-submit-test:codex-desktop",
+            "codex-desktop",
+            "codex-desktop",
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["composer_status"] = "unsupported_composer"
+            });
+
+        var result = controller.HandleButtonClick(activeSurface);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+        Assert.That(result.Applied, Is.False);
+        Assert.That(result.Submitted, Is.False);
+    }
+
+    [Test]
+    public void HandleButtonClick_PassThroughWhenProfileMismatch()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: null);
+
+        var activeSurface = new TextSurfaceDescriptor(
+            "native-submit-test:other-app",
+            "other-app",
+            "other-app",
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
+            });
+
+        var result = controller.HandleButtonClick(activeSurface);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(result.Applied, Is.False);
+        Assert.That(result.Submitted, Is.False);
+    }
+
+    [Test]
+    public void HandleButtonClick_PassThroughWhenUnprotectedProfile()
+    {
+        var unprotectedProfile = new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: true,
+            BindingSource: "manual",
+            SubmitBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Shift+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.NativeSubmitPassThrough,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var controller = new NativeSubmitInterceptionController(
+            unprotectedProfile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: null);
+
+        var activeSurface = new TextSurfaceDescriptor(
+            "native-submit-test:codex-desktop",
+            "codex-desktop",
+            "codex-desktop",
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
+            });
+
+        var result = controller.HandleButtonClick(activeSurface);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(result.SuppressOriginalInput, Is.False);
     }
 }
