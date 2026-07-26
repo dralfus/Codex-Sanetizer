@@ -165,13 +165,39 @@ All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ct
 
 **Blocked by:** None — can start immediately.
 
-- [ ] `SurfaceMetadata` record created with named fields for surface properties
+- [x] `SurfaceMetadata` record created with named fields for surface properties
 - [ ] All usages of `Dictionary<string, string>` for surface metadata replaced with `SurfaceMetadata`
 - [ ] `SubmitBindingOnboardingVerifier` updated to accept `SurfaceMetadata`
+- [ ] `TextSurfaceDescriptor` updated to use `SurfaceMetadata` instead of `Dictionary<string, string>`
 - [ ] All tests updated to use new type
 - [ ] No test regressions (1260 tests pass)
 
-**Why:** Code review identified Primitive Obsession - using raw dictionaries for domain concepts that deserve their own type.
+**Status:** Partially completed - commit ea28ab6
+
+**Changes:**
+- Added `SurfaceMetadata` record with `ToDictionary()` and `FromDictionary()` methods
+- Added overload to `SubmitBindingOnboardingVerifier.VerifyUserBindings`
+- Updated `CreateSurface` and `CreateNativeSubmitSurface` to use `SurfaceMetadata`
+- **Incomplete:** `TextSurfaceDescriptor.Metadata` still uses `IReadOnlyDictionary<string, string>`
+- **Incomplete:** All call sites not yet migrated to new API
+
+**Note:** The task requires a full refactor of `TextSurfaceDescriptor` to replace `Metadata` with `SurfaceMetadata`, which affects the entire codebase. A complete implementation should:
+1. Change `TextSurfaceDescriptor.Metadata` from `IReadOnlyDictionary<string, string>` to `SurfaceMetadata`
+2. Update all call sites to use the new type
+3. Remove dictionary-based overload from `VerifyUserBindings`
+
+## 249. Integrate SurfaceMetadata into TextSurfaceDescriptor
+
+**What to build:** Replace `TextSurfaceDescriptor.Metadata` from `IReadOnlyDictionary<string, string>` to `SurfaceMetadata` and update all call sites throughout the codebase.
+
+**Blocked by:** 246. Extract SurfaceMetadata type to replace Dictionary<string, string>.
+
+- [ ] `TextSurfaceDescriptor` updated to use `SurfaceMetadata` instead of `IReadOnlyDictionary<string, string>`
+- [ ] All code using `TextSurfaceDescriptor.Metadata` updated to use `SurfaceMetadata`
+- [ ] All tests updated to use new type
+- [ ] No test regressions (1260 tests pass)
+
+**Why:** Code review identified that `SurfaceMetadata` was introduced but not integrated into `TextSurfaceDescriptor`, creating parallel representations of the same concept and maintaining Primitive Obsession.
 
 ## 247. Extract factory methods for test surface creation
 
