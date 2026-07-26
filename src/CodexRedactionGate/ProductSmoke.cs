@@ -5,6 +5,14 @@ using System.Linq;
 
 namespace CodexRedactionGate;
 
+public static class SmokeSurfaceFactory
+{
+    public static TextSurfaceDescriptor CreateSmokeNativeSubmitSurface(string profileId)
+    {
+        return TestSurfaceFactory.CreateSmokeNativeSubmitSurface(profileId);
+    }
+}
+
 public sealed record ProductSmokeReport(
     bool Passed,
     bool InstallArtifactPresent,
@@ -104,17 +112,7 @@ public static class ProductSmokeRunner
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(new TextSurfaceDescriptor(
-                "product-smoke-native-profile",
-                "codex-desktop",
-                "Codex desktop smoke composer",
-                Supported: true,
-                CanCaptureText: true,
-                CanReplaceText: true,
-                CanSubmit: true,
-                Metadata: new SurfaceMetadata(
-                    SurfaceKind: "disposable_local_target",
-                    CloudSubmission: "false"))));
+            TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("codex-desktop")));
         var profileSave = SubmitBindingProfileStore.Upsert(layout, smokeProfile);
         var protectedTriggerStatus = TrayStatusFormatter.FormatMenuStatus(new TrayProtectionState(
             Enabled: true,
@@ -217,17 +215,17 @@ public static class ProductSmokeRunner
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(CreateSmokeNativeSubmitSurface("codex-desktop")));
+            TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("codex-desktop")));
         var chatGptVerification = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "chatgpt-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(CreateSmokeNativeSubmitSurface("chatgpt-desktop")));
+            TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("chatgpt-desktop")));
         var mismatchVerification = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(CreateSmokeNativeSubmitSurface("chatgpt-desktop")));
+            TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("chatgpt-desktop")));
         var nativeProfileVerificationEntrypointsPassed = nativeSubmit.Passed
             && codexVerification.IsProtected
             && chatGptVerification.IsProtected
@@ -417,21 +415,6 @@ public static class ProductSmokeRunner
             && manifestText.Contains("CodexRedactionGate.Tray.exe", StringComparison.Ordinal)
             && manifestText.Contains("Software\\Microsoft\\Windows\\CurrentVersion\\Run", StringComparison.Ordinal)
             && buildText.Contains("CodexRedactionGate.Tray.csproj", StringComparison.Ordinal);
-    }
-
-    private static TextSurfaceDescriptor CreateSmokeNativeSubmitSurface(string profileId)
-    {
-        return new TextSurfaceDescriptor(
-            $"product-smoke-native-profile:{profileId}",
-            profileId,
-            profileId,
-            Supported: true,
-            CanCaptureText: true,
-            CanReplaceText: true,
-            CanSubmit: true,
-            Metadata: new SurfaceMetadata(
-                SurfaceKind: "disposable_local_target",
-                CloudSubmission: "false"));
     }
 
     private static string FindRepositoryRoot(string startDirectory)

@@ -7,6 +7,11 @@ using CodexRedactionGate;
 
 public partial class SanitizerTests
 {
+    internal static TextSurfaceDescriptor CreateNativeSubmitSurface(string profileId)
+    {
+        return TestSurfaceFactory.CreateNativeSubmitSurface(profileId);
+    }
+
     [Test]
     public void SubmitBindingProfileStore_PersistsBindingsAndRawFreeStatus()
     {
@@ -746,19 +751,11 @@ public partial class SanitizerTests
             var layout = DefaultStorageLayout.Create(tempDirectory);
 
             // Create and save profile with specific bindings
-            var surface = CreateNativeSubmitSurface("codex-desktop");
-            surface = new TextSurfaceDescriptor(
-                surface.SurfaceId,
-                surface.ProfileId,
-                surface.DisplayName,
-                surface.Supported,
-                surface.CanCaptureText,
-                surface.CanReplaceText,
-                surface.CanSubmit,
-                new SurfaceMetadata(
-                    SurfaceKind: "disposable_local_target",
-                    CloudSubmission: "false",
-                    ComposerStatus: null));
+            var surface = TestSurfaceFactory.UpdateSurface(
+                CreateNativeSubmitSurface("codex-desktop"),
+                surfaceKind: "disposable_local_target",
+                cloudSubmission: "false",
+                composerStatus: null);
             var discovery = TextSurfaceDiscoveryResult.Success(surface);
 
             // Configure: Enter as Send, Ctrl+Enter as newline
@@ -1051,23 +1048,6 @@ public partial class SanitizerTests
             CapabilityStatus: OsInteractionStatusIds.BindingUnknown,
             CompatibilityEvidence: null,
             Diagnostics: new Dictionary<string, string>());
-    }
-
-    internal static TextSurfaceDescriptor CreateNativeSubmitSurface(string profileId)
-    {
-        var metadata = new SurfaceMetadata(
-            SurfaceKind: "test",
-            ComposerStatus: OsInteractionStatusIds.SupportedComposer);
-
-        return new TextSurfaceDescriptor(
-            $"native-submit-test:{profileId}",
-            profileId,
-            profileId,
-            Supported: true,
-            CanCaptureText: true,
-            CanReplaceText: true,
-            CanSubmit: true,
-            Metadata: metadata);
     }
 
     private sealed class CapturingSubmitAction : ISubmitAction
@@ -1422,15 +1402,9 @@ public class HandleButtonClickTests : SanitizerTests
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
             firstRunSetupController: null);
 
-        var activeSurface = new TextSurfaceDescriptor(
-            "native-submit-test:codex-desktop",
+        var activeSurface = TestSurfaceFactory.CreateTestSurface(
             "codex-desktop",
-            "codex-desktop",
-            Supported: true,
-            CanCaptureText: true,
-            CanReplaceText: true,
-            CanSubmit: true,
-            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
+            composerStatus: OsInteractionStatusIds.SupportedComposer);
 
         var result = controller.HandleButtonClick(activeSurface, () => new OsInteractionResult(
             OsInteractionStatusIds.Submitted,
@@ -1457,15 +1431,9 @@ public class HandleButtonClickTests : SanitizerTests
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
             firstRunSetupController: null);
 
-        var activeSurface = new TextSurfaceDescriptor(
-            "native-submit-test:codex-desktop",
+        var activeSurface = TestSurfaceFactory.CreateTestSurface(
             "codex-desktop",
-            "codex-desktop",
-            Supported: true,
-            CanCaptureText: true,
-            CanReplaceText: true,
-            CanSubmit: true,
-            Metadata: new SurfaceMetadata(ComposerStatus: "unsupported_composer"));
+            composerStatus: "unsupported_composer");
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -1522,15 +1490,7 @@ public class HandleButtonClickTests : SanitizerTests
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
             firstRunSetupController: null);
 
-        var activeSurface = new TextSurfaceDescriptor(
-            "native-submit-test:codex-desktop",
-            "codex-desktop",
-            "codex-desktop",
-            Supported: true,
-            CanCaptureText: true,
-            CanReplaceText: true,
-            CanSubmit: true,
-            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
+        var activeSurface = TestSurfaceFactory.CreateTestSurface("codex-desktop");
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -1558,15 +1518,7 @@ public class HandleButtonClickTests : SanitizerTests
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
             firstRunSetupController: null);
 
-        var activeSurface = new TextSurfaceDescriptor(
-            "native-submit-test:codex-desktop",
-            "codex-desktop",
-            "codex-desktop",
-            Supported: true,
-            CanCaptureText: true,
-            CanReplaceText: true,
-            CanSubmit: true,
-            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
+        var activeSurface = TestSurfaceFactory.CreateTestSurface("codex-desktop");
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -1595,15 +1547,7 @@ public class HandleButtonClickTests : SanitizerTests
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")),
             firstRunSetupController: null);
 
-        var activeSurface = new TextSurfaceDescriptor(
-            "native-submit-test:chatgpt-desktop",
-            "chatgpt-desktop",
-            "chatgpt-desktop",
-            Supported: true,
-            CanCaptureText: true,
-            CanReplaceText: true,
-            CanSubmit: true,
-            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
+        var activeSurface = TestSurfaceFactory.CreateTestSurface("chatgpt-desktop");
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -1632,15 +1576,7 @@ public class HandleButtonClickTests : SanitizerTests
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
             firstRunSetupController: null);
 
-        var activeSurface = new TextSurfaceDescriptor(
-            "native-submit-test:codex-desktop",
-            "codex-desktop",
-            "codex-desktop",
-            Supported: true,
-            CanCaptureText: true,
-            CanReplaceText: true,
-            CanSubmit: true,
-            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
+        var activeSurface = TestSurfaceFactory.CreateTestSurface("codex-desktop");
 
         var result = controller.HandleButtonClick(activeSurface);
 
