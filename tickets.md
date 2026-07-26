@@ -240,10 +240,10 @@ All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ct
 
 **Blocked by:** 247. Extract factory methods for test surface creation.
 
-- [ ] `NativeSubmitProductSmokeRunner_UsesPersistedBindingValues` renamed to follow convention
-- [ ] All other test methods reviewed and renamed where appropriate
-- [ ] Test names clearly describe the scenario and expected outcome
-- [ ] No test regressions (1260 tests pass)
+- [x] `NativeSubmitProductSmokeRunner_UsesPersistedBindingValues` renamed to follow convention
+- [x] All other test methods reviewed and renamed where appropriate
+- [x] Test names clearly describe the scenario and expected outcome
+- [x] No test regressions (1264 tests pass)
 
 **Why:** Code review identified Mysterious Name - test names should follow convention and be descriptive without being overly long.
 
