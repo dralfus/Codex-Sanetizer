@@ -1331,3 +1331,117 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(result.SuppressOriginalInput, Is.False);
     }
 }
+
+[TestFixture]
+public class NativeSendBindingSelectionTests : SanitizerTests
+{
+    [Test]
+    public void SubmitBindingSelection_SupportsBothEnterAndCtrlEnterPairs()
+    {
+        // Test that both supported pairs are valid:
+        // 1. Enter Send / Ctrl+Enter newline
+        // 2. Ctrl+Enter Send / Enter newline
+        
+        var profileId = "codex-desktop";
+        var surface = CreateNativeSubmitSurface(profileId);
+        var discovery = TextSurfaceDiscoveryResult.Success(surface);
+
+        // Pair 1: Enter as Send, Ctrl+Enter as newline
+        var pair1 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profileId, "Enter", "Ctrl+Enter", discovery);
+        
+        Assert.That(pair1.BindingSource, Is.EqualTo("user_verified"));
+        Assert.That(pair1.SubmitBinding?.DisplayText, Is.EqualTo("Enter"));
+        Assert.That(pair1.NewlineBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
+
+        // Pair 2: Ctrl+Enter as Send, Enter as newline
+        var pair2 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profileId, "Ctrl+Enter", "Enter", discovery);
+        
+        Assert.That(pair2.BindingSource, Is.EqualTo("user_verified"));
+        Assert.That(pair2.SubmitBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
+        Assert.That(pair2.NewlineBinding?.DisplayText, Is.EqualTo("Enter"));
+    }
+
+    [Test]
+    public void SubmitBindingSelection_RejectsSameBindingForSubmitAndNewline()
+    {
+        var profileId = "codex-desktop";
+        var surface = CreateNativeSubmitSurface(profileId);
+        var discovery = TextSurfaceDiscoveryResult.Success(surface);
+
+        // Same binding for both should fail
+        var result = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            profileId, "Enter", "Enter", discovery);
+
+        // Verify fails when bindings are the same - should not be protected
+        Assert.That(result.CapabilityStatus, Is.Not.EqualTo(OsInteractionStatusIds.Protected));
+        Assert.That(result.IsEnabled, Is.False);
+    }
+
+    [Test]
+    public void SubmitBindingSelection_PersistsSelectedPair()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            
+            // Create profile with specific binding pair
+            var profile = new SubmitBindingProfile(
+                "codex-desktop",
+                Enabled: true,
+                BindingSource: "user_verified",
+                SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+                NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+                CapabilityStatus: OsInteractionStatusIds.Protected,
+                CompatibilityEvidence: null,
+                Diagnostics: new Dictionary<string, string>());
+
+            SubmitBindingProfileStore.Save(layout, new[] { profile });
+
+            // Load and verify pair is preserved
+            var loaded = SubmitBindingProfileStore.Load(layout);
+            Assert.That(loaded.Profiles, Has.Count.EqualTo(1));
+            Assert.That(loaded.Profiles[0].SubmitBinding?.DisplayText, Is.EqualTo("Enter"));
+            Assert.That(loaded.Profiles[0].NewlineBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void SubmitBindingSelection_PersistsCtrlEnterSendPair()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            
+            // Create profile with Ctrl+Enter as Send, Enter as newline
+            var profile = new SubmitBindingProfile(
+                "chatgpt-desktop",
+                Enabled: true,
+                BindingSource: "user_verified",
+                SubmitBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+                NewlineBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+                CapabilityStatus: OsInteractionStatusIds.Protected,
+                CompatibilityEvidence: null,
+                Diagnostics: new Dictionary<string, string>());
+
+            SubmitBindingProfileStore.Save(layout, new[] { profile });
+
+            // Load and verify pair is preserved
+            var loaded = SubmitBindingProfileStore.Load(layout);
+            Assert.That(loaded.Profiles, Has.Count.EqualTo(1));
+            Assert.That(loaded.Profiles[0].SubmitBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
+            Assert.That(loaded.Profiles[0].NewlineBinding?.DisplayText, Is.EqualTo("Enter"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+}

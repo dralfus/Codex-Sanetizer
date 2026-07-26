@@ -209,6 +209,8 @@ public sealed record SubmitBindingProfile(
     SurfaceCompatibilityEvidence? CompatibilityEvidence,
     IReadOnlyDictionary<string, string> Diagnostics)
 {
+    public bool IsEnabled => Enabled;
+
     public bool IsProtected => Enabled
         && CapabilityStatus == OsInteractionStatusIds.Protected
         && SubmitBinding is not null
