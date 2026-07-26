@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using NUnit.Framework;
 using CodexRedactionGate;
 using SanitizerWarning = CodexRedactionGate.Warning;
@@ -6430,5 +6431,25 @@ public class CrashDiagnosticsTests
         {
             Directory.Delete(tempDirectory, recursive: true);
         }
+    }
+}
+
+[TestFixture]
+public class SingleInstanceEnforcementTests
+{
+    [Test]
+    public void SingleInstanceEnforcement_IsFirstInstance()
+    {
+        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        using var enforcement = new SingleInstanceEnforcement(instanceId);
+        Assert.That(enforcement.IsFirstInstance, Is.True);
+    }
+
+    [Test]
+    public void SingleInstanceEnforcement_NoInstanceWhenEmpty()
+    {
+        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        
+        Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId), Is.False);
     }
 }
