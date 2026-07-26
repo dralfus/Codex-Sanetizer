@@ -112,6 +112,29 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void NativeSubmitInterception_SuppressesSubmitWhenProtectedProfileFocusIsNotComposer()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string>
+                {
+                    ["profile_id"] = "codex-desktop",
+                    ["profile_match_count"] = "1",
+                    ["composer_status"] = OsInteractionStatusIds.NotComposer
+                }));
+
+        var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NotComposer));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+        Assert.That(result.Diagnostics["fail_closed_reason"], Is.EqualTo("selected_profile_not_composer"));
+    }
+
+    [Test]
     public void NativeSubmitInterception_PassesThroughSubmitBindingWhenForegroundProfileDiffers()
     {
         var profile = CreateProtectedProfile();

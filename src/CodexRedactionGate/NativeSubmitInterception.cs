@@ -786,6 +786,22 @@ public sealed class NativeSubmitInterceptionController
 
         if (!discovery.Succeeded || discovery.Surface is null || !discovery.Surface.Supported)
         {
+            if (DiscoveryMatchesSelectedProfile(discovery))
+            {
+                foreach (var item in discovery.Diagnostics)
+                {
+                    diagnostics[$"active_surface.{item.Key}"] = item.Value;
+                }
+
+                diagnostics["fail_closed_reason"] = "selected_profile_not_composer";
+                return new NativeSubmitInterceptionResult(
+                    discovery.Status,
+                    SuppressOriginalInput: true,
+                    Applied: false,
+                    Submitted: false,
+                    Diagnostics: diagnostics);
+            }
+
             diagnostics["pass_through_reason"] = "active_surface_not_supported";
             return PassThrough(diagnostics);
         }
@@ -805,6 +821,17 @@ public sealed class NativeSubmitInterceptionController
 
         diagnostics["active_surface_gate"] = "selected_profile";
         return null;
+    }
+
+    private bool DiscoveryMatchesSelectedProfile(TextSurfaceDiscoveryResult discovery)
+    {
+        if (discovery.Surface is not null)
+        {
+            return string.Equals(discovery.Surface.ProfileId, _profile.ProfileId, StringComparison.Ordinal);
+        }
+
+        return discovery.Diagnostics.TryGetValue("profile_id", out var profileId)
+            && string.Equals(profileId, _profile.ProfileId, StringComparison.Ordinal);
     }
 
     private NativeSubmitInterceptionResult? SuppressSelectedSubmitIfSetupRequired(
