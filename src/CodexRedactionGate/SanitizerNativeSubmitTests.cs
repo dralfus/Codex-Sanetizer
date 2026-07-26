@@ -1410,6 +1410,76 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
         Assert.That(result.SuppressOriginalInput, Is.True);
     }
+
+    [Test]
+    public void HandleButtonClick_SkipsDisabledProfile()
+    {
+        // Test with disabled profile (Enabled: false)
+        var profile = new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: false,  // Disabled
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: null);
+
+        var activeSurface = new TextSurfaceDescriptor(
+            "native-submit-test:codex-desktop",
+            "codex-desktop",
+            "codex-desktop",
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
+            });
+
+        var result = controller.HandleButtonClick(activeSurface);
+
+        // Disabled profile should pass through (not guarded)
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(result.Diagnostics["enabled"], Is.EqualTo("false"));
+    }
+
+    [Test]
+    public void HandleGesture_SkipsDisabledProfile()
+    {
+        // Test with disabled profile (Enabled: false)
+        var profile = new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: false,  // Disabled
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: null);
+
+        // Try to trigger the submit gesture (Enter matching SubmitBinding)
+        var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: false));
+
+        // Disabled profile should pass through (not guarded)
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(result.Diagnostics["enabled"], Is.EqualTo("false"));
+    }
 }
 
 [TestFixture]

@@ -641,6 +641,22 @@ public sealed class NativeSubmitInterceptionController
                 });
         }
 
+        // Skip disabled profiles
+        if (!_profile.IsEnabled)
+        {
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.NativeSubmitPassThrough,
+                SuppressOriginalInput: false,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = _profile.ProfileId,
+                    ["enabled"] = "false",
+                    ["pass_through_reason"] = "profile_disabled"
+                });
+        }
+
         // Use SubmitBinding from profile (not a hardcoded Ctrl+Enter)
         if (_profile.SubmitBinding is null)
         {
@@ -675,6 +691,14 @@ public sealed class NativeSubmitInterceptionController
         if (IsEmergencyGesture(gesture))
         {
             return _emergencyState.DisableTemporarily(_profile.ProfileId, _clock());
+        }
+
+        // Skip disabled profiles
+        if (!_profile.IsEnabled)
+        {
+            diagnostics["enabled"] = "false";
+            diagnostics["pass_through_reason"] = "profile_disabled";
+            return PassThrough(diagnostics);
         }
 
         if (_emergencyState.IsDisabled(_profile.ProfileId, _clock()))
