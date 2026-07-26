@@ -1199,6 +1199,7 @@ public sealed record NativeSubmitProductSmokeReport(
     bool Passed,
     bool ProfileSetupPassed,
     bool BindingVerificationPassed,
+    bool BindingVerificationCtrlEnterPassed,
     bool GuardPassed,
     bool ConfirmAndSendPassed,
     bool RepeatedSubmitPassed,
@@ -1220,32 +1221,59 @@ public static class NativeSubmitProductSmokeRunner
     {
         ArgumentNullException.ThrowIfNull(hmacSecret);
 
-        var surface = CreateSurface("codex-desktop", "profile-smoke");
-        var discovery = TextSurfaceDiscoveryResult.Success(surface, new Dictionary<string, string>
+        // Test pair 1: Enter as Send / Ctrl+Enter as newline
+        var surface1 = CreateSurface("codex-desktop", "profile-smoke");
+        var discovery1 = TextSurfaceDiscoveryResult.Success(surface1, new Dictionary<string, string>
         {
             ["surface_kind"] = "disposable_local_target",
             ["cloud_submission"] = "false"
         });
-        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+        var profile1 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            discovery);
-        var profileSetupPassed = profile.IsProtected
-            && profile.BindingSource == "user_verified";
-        var bindingVerificationPassed = profile.SubmitBinding?.DisplayText == "Enter"
-            && profile.NewlineBinding?.DisplayText == "Ctrl+Enter";
+            discovery1);
+        var profileSetupPassed = profile1.IsProtected
+            && profile1.BindingSource == "user_verified";
+        var bindingVerificationPassed = profile1.SubmitBinding?.DisplayText == "Enter"
+            && profile1.NewlineBinding?.DisplayText == "Ctrl+Enter";
 
+        // Test pair 2: Ctrl+Enter as Send / Enter as newline
+        var surface2 = CreateSurface("chatgpt-desktop", "profile-smoke");
+        var discovery2 = TextSurfaceDiscoveryResult.Success(surface2, new Dictionary<string, string>
+        {
+            ["surface_kind"] = "disposable_local_target",
+            ["cloud_submission"] = "false"
+        });
+        var profile2 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Ctrl+Enter",
+            "Enter",
+            discovery2);
+        var bindingVerificationCtrlEnterPassed = profile2.SubmitBinding?.DisplayText == "Ctrl+Enter"
+            && profile2.NewlineBinding?.DisplayText == "Enter";
+
+        // Test both profiles' guard paths
         var emergency = new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5));
-        var controller = new NativeSubmitInterceptionController(
-            profile,
+        var controller1 = new NativeSubmitInterceptionController(
+            profile1,
             emergency,
             clock: () => DateTimeOffset.Parse("2026-07-20T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
-        var guard = controller.HandleGesture(new NativeKeyGesture("Enter"));
-        var confirmAndSend = controller.HandleGesture(
+        var guard1 = controller1.HandleGesture(new NativeKeyGesture("Enter"));
+        var confirmAndSend1 = controller1.HandleGesture(
             new NativeKeyGesture("Enter"),
             () => RunConfirmAndSend(hmacSecret));
-        var residentSession = RunResidentSessionSmoke(profile, hmacSecret);
+
+        var controller2 = new NativeSubmitInterceptionController(
+            profile2,
+            emergency,
+            clock: () => DateTimeOffset.Parse("2026-07-20T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        var guard2 = controller2.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+        var confirmAndSend2 = controller2.HandleGesture(
+            new NativeKeyGesture("Enter", Ctrl: true),
+            () => RunConfirmAndSend(hmacSecret));
+
+        var residentSession = RunResidentSessionSmoke(profile1, hmacSecret);
         var foregroundActivatedSmoke = WindowsConfirmationOverlay.RunForegroundActivationSmoke(foregroundActivated: true);
         var foregroundDeniedSmoke = WindowsConfirmationOverlay.RunForegroundActivationSmoke(foregroundActivated: false);
         var overlayForegroundRequestPassed = foregroundActivatedSmoke.ForegroundActivated
@@ -1257,22 +1285,25 @@ public static class NativeSubmitProductSmokeRunner
             && foregroundActivatedSmoke.RequestedCapabilities.Contains("set_foreground_window", StringComparer.Ordinal);
         var overlayForegroundRefusalStatusPassed = !foregroundDeniedSmoke.ForegroundActivated
             && foregroundDeniedSmoke.ActionRequiredStatusVisible;
-        var emergencyDisable = controller.HandleGesture(NativeKeyGesture.CtrlAltShiftPause);
+        var emergencyDisable = controller1.HandleGesture(NativeKeyGesture.CtrlAltShiftPause);
         var enterprise = new NativeSubmitInterceptionController(
-            profile with { CapabilityStatus = OsInteractionStatusIds.DegradedHotkeyOnly },
+            profile1 with { CapabilityStatus = OsInteractionStatusIds.DegradedHotkeyOnly },
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             new NativeSubmitEnterprisePolicy(true, new[] { "codex-desktop" }, true, "block_submit"))
             .HandleGesture(new NativeKeyGesture("Enter"), hookHealthy: false);
         var mismatch = SurfaceCompatibilityEvaluator.Evaluate(
-            profile,
+            profile1,
             CreateSurface("chatgpt-desktop", "profile-smoke"),
             null);
 
         var serialized = JsonSerializer.Serialize(new
         {
-            profile = profile.ToRawFreeDiagnostics(),
-            guard,
-            confirmAndSend,
+            profile1 = profile1.ToRawFreeDiagnostics(),
+            profile2 = profile2.ToRawFreeDiagnostics(),
+            guard1,
+            guard2,
+            confirmAndSend1,
+            confirmAndSend2,
             residentSession,
             overlayForegroundRequestPassed,
             overlayForegroundRefusalStatusPassed,
@@ -1285,11 +1316,17 @@ public static class NativeSubmitProductSmokeRunner
 
         var passed = profileSetupPassed
             && bindingVerificationPassed
-            && guard.Status == OsInteractionStatusIds.NativeSubmitGuarded
-            && guard.SuppressOriginalInput
-            && confirmAndSend.Status == OsInteractionStatusIds.Submitted
-            && confirmAndSend.SuppressOriginalInput
-            && confirmAndSend.Submitted
+            && bindingVerificationCtrlEnterPassed
+            && guard1.Status == OsInteractionStatusIds.NativeSubmitGuarded
+            && guard1.SuppressOriginalInput
+            && confirmAndSend1.Status == OsInteractionStatusIds.Submitted
+            && confirmAndSend1.SuppressOriginalInput
+            && confirmAndSend1.Submitted
+            && guard2.Status == OsInteractionStatusIds.NativeSubmitGuarded
+            && guard2.SuppressOriginalInput
+            && confirmAndSend2.Status == OsInteractionStatusIds.Submitted
+            && confirmAndSend2.SuppressOriginalInput
+            && confirmAndSend2.Submitted
             && residentSession.RepeatedSubmitPassed
             && residentSession.DuplicateSendGuardPassed
             && overlayForegroundRequestPassed
@@ -1307,8 +1344,9 @@ public static class NativeSubmitProductSmokeRunner
             passed,
             profileSetupPassed,
             bindingVerificationPassed,
-            guard.Status == OsInteractionStatusIds.NativeSubmitGuarded && guard.SuppressOriginalInput,
-            confirmAndSend.Status == OsInteractionStatusIds.Submitted && confirmAndSend.Submitted,
+            bindingVerificationCtrlEnterPassed,
+            guard1.Status == OsInteractionStatusIds.NativeSubmitGuarded && guard1.SuppressOriginalInput,
+            confirmAndSend1.Status == OsInteractionStatusIds.Submitted && confirmAndSend1.Submitted,
             residentSession.RepeatedSubmitPassed,
             residentSession.DuplicateSendGuardPassed,
             overlayForegroundRequestPassed,
@@ -1331,6 +1369,7 @@ public static class NativeSubmitProductSmokeRunner
             "live_compatibility_note: disposable_local_target_first_then_throwaway_codex_or_chatgpt_desktop_task",
             $"profile_setup: {report.ProfileSetupPassed.ToString().ToLowerInvariant()}",
             $"binding_verification: {report.BindingVerificationPassed.ToString().ToLowerInvariant()}",
+            $"binding_verification_ctrl_enter: {report.BindingVerificationCtrlEnterPassed.ToString().ToLowerInvariant()}",
             $"guard_interception: {report.GuardPassed.ToString().ToLowerInvariant()}",
             $"confirm_and_send: {report.ConfirmAndSendPassed.ToString().ToLowerInvariant()}",
             $"repeated_submit_confirmation: {report.RepeatedSubmitPassed.ToString().ToLowerInvariant()}",
