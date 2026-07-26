@@ -214,8 +214,19 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             {
                 // Launch first-run setup
                 var setupController = new FirstRunSetupController();
-                setupController.EnsureSetup(_layout);
-                RefreshStatus(); // Refresh status after setup completes
+                var setupResult = setupController.EnsureSetup(_layout);
+
+                // Only refresh status if setup succeeded and profile is protected
+                if (setupResult.Succeeded)
+                {
+                    // Wait for setup completion and verify profile is protected
+                    var finalStatus = setupController.GetSetupStatus(_layout);
+                    if (!finalStatus.State.Required)
+                    {
+                        // Profile is protected, safe to refresh status
+                        RefreshStatus();
+                    }
+                }
             }
         }
         catch

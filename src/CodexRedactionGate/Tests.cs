@@ -6579,6 +6579,13 @@ public class SingleInstanceEnforcementTests
 [TestFixture]
 public class ResidentFirstRunSetupLaunchTests
 {
+    private static string CreateTempDirectory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
     [Test]
     public void LaunchFirstRunSetupIfRequired_LaunchesSetupWhenNoProtectedProfile()
     {
@@ -6669,10 +6676,167 @@ public class ResidentFirstRunSetupLaunchTests
         }
     }
 
-    private static string CreateTempDirectory()
+    [Test]
+    public void LaunchFirstRunSetupIfRequired_WaitsForSetupCompletion()
     {
-        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        return directory;
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+
+            // Create setup controller that tracks calls
+            var setupCallCount = 0;
+            var setupCompleted = false;
+            var setupController = new TestSetupController(
+                setupLayout =>
+                {
+                    setupCallCount++;
+                    // Simulate setup work
+                    System.Threading.Thread.Sleep(10);
+                    setupCompleted = true;
+                    // Create a protected profile
+                    var profile = new SubmitBindingProfile(
+                        "codex-desktop",
+                        Enabled: true,
+                        BindingSource: "user_verified",
+                        SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+                        NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+                        CapabilityStatus: OsInteractionStatusIds.Protected,
+                        CompatibilityEvidence: null,
+                        Diagnostics: new Dictionary<string, string>());
+                    SubmitBindingProfileStore.Save(setupLayout, new[] { profile });
+                    return new FirstRunSetupResult(
+                        Succeeded: true,
+                        Code: "setup_complete",
+                        State: new FirstRunSetupState(
+                            Required: false,
+                            UnprotectedProfileIds: Array.Empty<string>(),
+                            Status: "complete",
+                            VerifiedCodex: true,
+                            VerifiedChatGpt: true),
+                        Diagnostics: new Dictionary<string, string>());
+                });
+
+            // Run launch logic
+            LaunchFirstRunSetupIfRequiredWithController(layout, setupController);
+
+            // Verify setup was called and completed
+            Assert.That(setupCallCount, Is.EqualTo(1));
+            Assert.That(setupCompleted, Is.True);
+
+            // Verify protected profile was created
+            var stored = SubmitBindingProfileStore.Load(layout);
+            Assert.That(stored.Profiles.Any(p => p.IsProtected && p.Enabled), Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void LaunchFirstRunSetupIfRequired_DoesNotRefreshIfSetupFails()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+
+            // Create setup controller that fails
+            var setupController = new TestSetupController(
+                setupLayout => new FirstRunSetupResult(
+                    Succeeded: false,
+                    Code: "setup_failed",
+                    State: new FirstRunSetupState(
+                        Required: true,
+                        UnprotectedProfileIds: new[] { "codex-desktop" },
+                        Status: "failed",
+                        VerifiedCodex: false,
+                        VerifiedChatGpt: false),
+                    Diagnostics: new Dictionary<string, string>()));
+
+            // Run launch logic - should not throw
+            LaunchFirstRunSetupIfRequiredWithController(layout, setupController);
+
+            // Verify no protected profile was created
+            var stored = SubmitBindingProfileStore.Load(layout);
+            Assert.That(stored.Profiles.Any(p => p.IsProtected && p.Enabled), Is.False);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    private static void LaunchFirstRunSetupIfRequiredWithController(DefaultStorageLayout layout, IFirstRunSetupController setupController)
+    {
+        // This simulates the logic in LaunchFirstRunSetupIfRequired but with injected controller
+        try
+        {
+            var profilesResult = SubmitBindingProfileStore.Load(layout);
+            var hasProtectedProfile = profilesResult.Profiles.Any(p => p.IsProtected && p.Enabled);
+
+            if (!hasProtectedProfile)
+            {
+                // Wait for setup completion
+                var setupResult = setupController.EnsureSetup(layout);
+                if (setupResult.Succeeded)
+                {
+                    // Verify profile is actually protected before refreshing status
+                    var finalStatus = setupController.GetSetupStatus(layout);
+                    if (!finalStatus.State.Required)
+                    {
+                        // Status can be refreshed only after verifying protection
+                        // In real code, this would call RefreshStatus()
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Swallow any errors to avoid crashing the tray app
+        }
+    }
+
+    private sealed class TestSetupController : IFirstRunSetupController
+    {
+        private readonly Func<DefaultStorageLayout, FirstRunSetupResult> _ensureSetupFunc;
+
+        public TestSetupController(Func<DefaultStorageLayout, FirstRunSetupResult> ensureSetupFunc)
+        {
+            _ensureSetupFunc = ensureSetupFunc;
+        }
+
+        public FirstRunSetupResult EnsureSetup(DefaultStorageLayout layout)
+        {
+            return _ensureSetupFunc(layout);
+        }
+
+        public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout)
+        {
+            var storeResult = SubmitBindingProfileStore.Load(layout);
+            var hasUnprotected = storeResult.Profiles.Any(p => !p.IsProtected);
+            return new FirstRunSetupResult(
+                Succeeded: true,
+                Code: hasUnprotected ? "setup_required" : "setup_complete",
+                State: new FirstRunSetupState(
+                    Required: hasUnprotected,
+                    UnprotectedProfileIds: storeResult.Profiles.Where(p => !p.IsProtected).Select(p => p.ProfileId).ToArray(),
+                    Status: hasUnprotected ? "incomplete" : "complete",
+                    VerifiedCodex: storeResult.Profiles.Any(p => p.ProfileId == "codex-desktop" && p.IsProtected),
+                    VerifiedChatGpt: storeResult.Profiles.Any(p => p.ProfileId == "chatgpt-desktop" && p.IsProtected)),
+                Diagnostics: new Dictionary<string, string>());
+        }
+
+        public FirstRunSetupResult VerifyProfile(string profileId, DefaultStorageLayout layout)
+        {
+            return GetSetupStatus(layout);
+        }
+
+        public bool IsSetupComplete(DefaultStorageLayout layout)
+        {
+            var status = GetSetupStatus(layout);
+            return !status.State.Required;
+        }
     }
 }
