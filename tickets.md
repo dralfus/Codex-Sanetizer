@@ -108,9 +108,19 @@ All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ct
 
 **Blocked by:** 242. Fix native keyboard interception to pass through non-Send shortcuts.
 
-- [ ] `DpapiSecretLoadFailureException` is caught at the provider level
-- [ ] Crash report records DPAPI-specific failure details
-- [ ] Tests simulate corrupted secret file and verify raw-free crash capture
+- [x] `DpapiSecretLoadFailureException` is caught at the provider level
+- [x] Crash report records DPAPI-specific failure details
+- [x] Tests simulate corrupted secret file and verify raw-free crash capture
+
+**Status:** Completed - commit eec7f1ee
+
+**Changes:**
+- Added try-catch in `DpapiProtectedHmacSecretProvider.GetOrCreateSecret` for `DpapiSecretLoadFailureException`
+- `DpapiSecretLoadFailureException` now propagates to caller for proper handling
+- Added `CaptureLocalCrash` in `Sanitizer.TryCreateProductionVault` for DPAPI-specific crash capture
+- Added `CaptureLocalCrash` in `OperationalReadiness.CheckVaultSecret` for DPAPI-specific crash capture
+- Crash report includes DPAPI-specific component label ("dpapi_secret_load")
+- All 1254 tests pass
 
 ## 244. Fix LaunchFirstRunSetupIfRequired to verify success
 
