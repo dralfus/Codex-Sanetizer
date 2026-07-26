@@ -130,7 +130,7 @@ public static class OsAdapterDemoRunner
                 CanCaptureText: true,
                 CanReplaceText: true,
                 CanSubmit: true,
-                Metadata: new Dictionary<string, string> { ["surface_kind"] = "demo" });
+                Metadata: new SurfaceMetadata(SurfaceKind: "demo"));
         }
 
         public string CurrentText { get; private set; }

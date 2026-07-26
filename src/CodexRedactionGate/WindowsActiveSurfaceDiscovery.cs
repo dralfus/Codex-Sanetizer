@@ -69,16 +69,7 @@ public sealed class WindowsActiveSurfaceDiscovery : IActiveTextSurfaceDiscovery
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["read_strategy"] = match.Profile.ReadStrategy,
-                ["write_strategy"] = match.Profile.WriteStrategy,
-                ["submit_strategy"] = match.Profile.SubmitStrategy,
-                ["window_handle"] = snapshot.WindowHandle.ToInt64().ToString("X", System.Globalization.CultureInfo.InvariantCulture),
-                ["window_title_length"] = snapshot.WindowTitle.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["process_name_length"] = snapshot.ProcessName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["class_name_length"] = snapshot.ClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            });
+            Metadata: new SurfaceMetadata());
 
         return TextSurfaceDiscoveryResult.Success(surface, match.Diagnostics);
     }

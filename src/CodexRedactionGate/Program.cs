@@ -663,7 +663,7 @@ public static class Program
             Console.WriteLine($"can_capture: {result.Surface.CanCaptureText.ToString().ToLowerInvariant()}");
             Console.WriteLine($"can_replace: {result.Surface.CanReplaceText.ToString().ToLowerInvariant()}");
             Console.WriteLine($"can_submit: {result.Surface.CanSubmit.ToString().ToLowerInvariant()}");
-            foreach (var item in result.Surface.Metadata.OrderBy(item => item.Key, StringComparer.Ordinal))
+            foreach (var item in result.Surface.Metadata.ToDictionary().OrderBy(item => item.Key, StringComparer.Ordinal))
             {
                 Console.WriteLine($"{item.Key}: {item.Value}");
             }
@@ -1039,7 +1039,7 @@ public static class Program
             Console.WriteLine($"can_capture: {result.Surface.CanCaptureText.ToString().ToLowerInvariant()}");
             Console.WriteLine($"can_replace: {result.Surface.CanReplaceText.ToString().ToLowerInvariant()}");
             Console.WriteLine($"can_submit: {result.Surface.CanSubmit.ToString().ToLowerInvariant()}");
-            foreach (var item in result.Surface.Metadata.OrderBy(item => item.Key, StringComparer.Ordinal))
+            foreach (var item in result.Surface.Metadata.ToDictionary().OrderBy(item => item.Key, StringComparer.Ordinal))
             {
                 Console.WriteLine($"{item.Key}: {item.Value}");
             }

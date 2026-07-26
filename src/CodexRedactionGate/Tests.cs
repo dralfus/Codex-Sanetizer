@@ -1398,7 +1398,7 @@ public partial class SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: false,
-            Metadata: new Dictionary<string, string>());
+            Metadata: new SurfaceMetadata());
         var host = new RecordingTrayHotkeyHost();
         var controller = new TrayProtectionController(
             host,
@@ -1499,7 +1499,7 @@ public partial class SanitizerTests
                 CanCaptureText: true,
                 CanReplaceText: true,
                 CanSubmit: true,
-                Metadata: new Dictionary<string, string>())));
+                Metadata: new SurfaceMetadata())));
         var controller = new TrayProtectionController(
             new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
             () => throw new InvalidOperationException("Manual scan should not run."),
@@ -1540,7 +1540,7 @@ public partial class SanitizerTests
                 CanCaptureText: true,
                 CanReplaceText: true,
                 CanSubmit: true,
-                Metadata: new Dictionary<string, string>())));
+                Metadata: new SurfaceMetadata())));
         var controller = new TrayProtectionController(
             new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
             () => throw new InvalidOperationException("Manual scan should not run."),
@@ -4783,7 +4783,7 @@ public partial class SanitizerTests
                 CanCaptureText: true,
                 CanReplaceText: true,
                 CanSubmit: true,
-                Metadata: new Dictionary<string, string> { ["surface_kind"] = "focused-composer" });
+                Metadata: new SurfaceMetadata(SurfaceKind: "focused-composer"));
             _staleSurface = _surface with { SurfaceId = "other-composer" };
         }
 
@@ -6291,12 +6291,10 @@ public class CliTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer,
-                ["surface_kind"] = "test",
-                ["cloud_submission"] = "false"
-            });
+            Metadata: new SurfaceMetadata(
+                SurfaceKind: "test",
+                CloudSubmission: "false",
+                ComposerStatus: OsInteractionStatusIds.SupportedComposer));
     }
 
     private static SanitizeRequest CreateCliPromptRequest(string text)
@@ -6520,7 +6518,7 @@ internal sealed class FixedSurfaceDiscovery : IActiveTextSurfaceDiscovery
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>()));
+            Metadata: new SurfaceMetadata()));
     }
 }
 
@@ -6840,3 +6838,6 @@ public class ResidentFirstRunSetupLaunchTests
         }
     }
 }
+
+
+

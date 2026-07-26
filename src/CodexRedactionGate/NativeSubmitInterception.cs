@@ -445,7 +445,7 @@ public static class SubmitBindingOnboardingVerifier
         TextSurfaceDiscoveryResult discovery,
         SurfaceCompatibilityEvidence? evidence = null)
     {
-        var surfaceMetadata = SurfaceMetadata.FromDictionary(discovery.Surface?.Metadata ?? new Dictionary<string, string>());
+        var surfaceMetadata = discovery.Surface?.Metadata ?? new SurfaceMetadata();
         return VerifyUserBindings(profileId, submitBindingText, newlineBindingText, surfaceMetadata, discovery, evidence);
     }
 
@@ -649,8 +649,8 @@ public sealed class NativeSubmitInterceptionController
         }
 
         // If active surface is not a readable composer, fail closed
-        if (activeSurface.Metadata.TryGetValue("composer_status", out var composerStatus) &&
-            composerStatus != OsInteractionStatusIds.SupportedComposer)
+        var composerStatus = activeSurface.Metadata.ComposerStatus;
+        if (composerStatus != OsInteractionStatusIds.SupportedComposer)
         {
             return new NativeSubmitInterceptionResult(
                 OsInteractionStatusIds.SurfaceUnverified,
@@ -1050,14 +1050,15 @@ public sealed class VerifiedSubmitBindingAction : ISubmitAction
                 });
         }
 
-        var metadata = new Dictionary<string, string>(surface.Metadata, StringComparer.Ordinal)
+        // Create a mutable dictionary from SurfaceMetadata and add custom fields
+        var metadata = new Dictionary<string, string>(surface.Metadata.ToDictionary(), StringComparer.Ordinal)
         {
             ["submit_binding"] = _profile.SubmitBinding.DisplayText,
             ["submit_binding_sendkeys"] = _profile.SubmitBinding.SendKeysText,
             ["binding_source"] = _profile.BindingSource,
             ["capability_status"] = _profile.CapabilityStatus
         };
-        var boundSurface = surface with { Metadata = metadata };
+        var boundSurface = surface with { Metadata = SurfaceMetadata.FromDictionary(metadata) };
         return _inner.Submit(boundSurface);
     }
 }
@@ -1557,7 +1558,7 @@ public static class NativeSubmitProductSmokeRunner
         var metadata = new SurfaceMetadata(
             SurfaceKind: "disposable_local_target",
             ComposerStatus: OsInteractionStatusIds.SupportedComposer);
-        
+
         return new TextSurfaceDescriptor(
             $"native-smoke:{profileId}:{verificationId}",
             profileId,
@@ -1566,7 +1567,7 @@ public static class NativeSubmitProductSmokeRunner
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: metadata.ToDictionary());
+            Metadata: metadata);
     }
 
     private sealed class SmokeTextSurface :
@@ -1697,11 +1698,9 @@ public static class NativeSubmitProductSmokeRunner
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer,
-                ["surface_kind"] = "test"
-            });
+            Metadata: new SurfaceMetadata(
+                SurfaceKind: "test",
+                ComposerStatus: OsInteractionStatusIds.SupportedComposer));
     }
 }
 

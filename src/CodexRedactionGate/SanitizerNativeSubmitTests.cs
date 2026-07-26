@@ -259,8 +259,8 @@ public partial class SanitizerTests
             .Submit(CreateNativeSubmitSurface("codex-desktop"));
 
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Submitted));
-        Assert.That(inner.LastSurface!.Metadata["submit_binding"], Is.EqualTo("Ctrl+Enter"));
-        Assert.That(inner.LastSurface.Metadata["submit_binding_sendkeys"], Is.EqualTo("^{ENTER}"));
+        Assert.That(inner.LastSurface!.Metadata.TryGetValue("submit_binding"), Is.EqualTo("Ctrl+Enter"));
+        Assert.That(inner.LastSurface.Metadata.TryGetValue("submit_binding_sendkeys"), Is.EqualTo("^{ENTER}"));
         Assert.That(mismatch.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
         Assert.That(unknown.Status, Is.EqualTo(OsInteractionStatusIds.BindingUnknown));
     }
@@ -755,11 +755,10 @@ public partial class SanitizerTests
                 surface.CanCaptureText,
                 surface.CanReplaceText,
                 surface.CanSubmit,
-                new Dictionary<string, string>
-                {
-                    ["surface_kind"] = "disposable_local_target",
-                    ["cloud_submission"] = "false"
-                });
+                new SurfaceMetadata(
+                    SurfaceKind: "disposable_local_target",
+                    CloudSubmission: "false",
+                    ComposerStatus: null));
             var discovery = TextSurfaceDiscoveryResult.Success(surface);
 
             // Configure: Enter as Send, Ctrl+Enter as newline
@@ -1059,7 +1058,7 @@ public partial class SanitizerTests
         var metadata = new SurfaceMetadata(
             SurfaceKind: "test",
             ComposerStatus: OsInteractionStatusIds.SupportedComposer);
-        
+
         return new TextSurfaceDescriptor(
             $"native-submit-test:{profileId}",
             profileId,
@@ -1068,7 +1067,7 @@ public partial class SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: metadata.ToDictionary());
+            Metadata: metadata);
     }
 
     private sealed class CapturingSubmitAction : ISubmitAction
@@ -1080,9 +1079,7 @@ public partial class SanitizerTests
             LastSurface = surface;
             return new SubmitActionResult(true, OsInteractionStatusIds.Submitted, new Dictionary<string, string>
             {
-                ["submit_binding"] = surface.Metadata.TryGetValue("submit_binding", out var binding)
-                    ? binding
-                    : "unknown"
+                ["submit_binding"] = surface.Metadata.TryGetValue("submit_binding") ?? "unknown"
             });
         }
     }
@@ -1433,10 +1430,7 @@ public class HandleButtonClickTests : SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
-            });
+            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
 
         var result = controller.HandleButtonClick(activeSurface, () => new OsInteractionResult(
             OsInteractionStatusIds.Submitted,
@@ -1471,10 +1465,7 @@ public class HandleButtonClickTests : SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = "unsupported_composer"
-            });
+            Metadata: new SurfaceMetadata(ComposerStatus: "unsupported_composer"));
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -1502,10 +1493,7 @@ public class HandleButtonClickTests : SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
-            });
+            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -1542,10 +1530,7 @@ public class HandleButtonClickTests : SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
-            });
+            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -1581,10 +1566,7 @@ public class HandleButtonClickTests : SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
-            });
+            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -1621,10 +1603,7 @@ public class HandleButtonClickTests : SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
-            });
+            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -1661,10 +1640,7 @@ public class HandleButtonClickTests : SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
-            });
+            Metadata: new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
 
         var result = controller.HandleButtonClick(activeSurface);
 
@@ -2046,3 +2022,5 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(metadata.ComposerStatus, Is.Null);
     }
 }
+
+

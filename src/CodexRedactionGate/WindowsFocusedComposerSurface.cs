@@ -100,6 +100,17 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
 
         var canCaptureText = snapshot.CanReadValue || snapshot.CanReadTextPattern;
         var canReplaceText = snapshot.CanWriteValue || composer.UseKeyboardWriteFallback;
+        var arbitraryMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["read_strategy"] = snapshot.CanReadValue ? "windows-ui-automation-value-pattern" : "windows-ui-automation-text-pattern",
+            ["write_strategy"] = composer.UseKeyboardWriteFallback ? "verified-composer-keyboard-paste" : (snapshot.CanWriteValue ? "windows-ui-automation-value-pattern" : "windows-ui-automation-text-pattern"),
+            ["focused_element_hash"] = snapshot.ElementRuntimeIdHash,
+            ["classification_reason"] = composer.Reason
+        };
+        if (composer.UseKeyboardWriteFallback)
+        {
+            arbitraryMetadata["keyboard_write_fallback"] = "true";
+        }
         var surface = new TextSurfaceDescriptor(
             SurfaceId: $"focused-composer:{match.Profile.ProfileId}:{snapshot.WindowHandle.ToInt64():X}:{snapshot.ElementRuntimeIdHash}",
             ProfileId: match.Profile.ProfileId,
@@ -108,20 +119,9 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
             CanCaptureText: canCaptureText,
             CanReplaceText: canReplaceText,
             CanSubmit: match.Profile.ProfileId is "codex-desktop" or "chatgpt-desktop",
-            Metadata: Merge(
-                new Dictionary<string, string>
-                {
-                    ["read_strategy"] = snapshot.CanReadValue ? "windows-ui-automation-value-pattern" : "windows-ui-automation-text-pattern",
-                    ["write_strategy"] = snapshot.CanWriteValue ? "windows-ui-automation-value-pattern" : "verified-composer-keyboard-paste",
-                    ["submit_strategy"] = match.Profile.SubmitStrategy,
-                    ["window_handle"] = snapshot.WindowHandle.ToInt64().ToString("X", System.Globalization.CultureInfo.InvariantCulture),
-                    ["element_automation_id"] = snapshot.ElementAutomationId,
-                    ["focused_element_hash"] = snapshot.ElementRuntimeIdHash,
-                    ["composer_status"] = OsInteractionStatusIds.SupportedComposer,
-                    ["classification_reason"] = composer.Reason,
-                    ["keyboard_write_fallback"] = composer.UseKeyboardWriteFallback.ToString().ToLowerInvariant()
-                },
-                Diagnostics(snapshot)));
+            Metadata: new SurfaceMetadata(
+                ComposerStatus: OsInteractionStatusIds.SupportedComposer,
+                ArbitraryMetadata: arbitraryMetadata));
 
         return new TextSurfaceDiscoveryResult(
             true,
@@ -282,9 +282,8 @@ public sealed class WindowsVerifiedComposerSurfaceAdapter :
     private static bool IsVerifiedComposer(TextSurfaceDescriptor surface)
     {
         ArgumentNullException.ThrowIfNull(surface);
-        return surface.Metadata.TryGetValue("composer_status", out var status)
-            && status == OsInteractionStatusIds.SupportedComposer
-            && surface.Metadata.ContainsKey("focused_element_hash");
+        return surface.Metadata.ComposerStatus == OsInteractionStatusIds.SupportedComposer
+            && surface.Metadata.TryGetValue("focused_element_hash") is not null;
     }
 }
 
@@ -613,8 +612,8 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                     return new SubmitActionResult(false, OsInteractionStatusIds.NotComposer, new Dictionary<string, string>());
                 }
 
-                if (!surface.Metadata.TryGetValue("submit_binding_sendkeys", out var sendKeysText)
-                    || string.IsNullOrWhiteSpace(sendKeysText))
+                var sendKeysText = surface.Metadata.TryGetValue("submit_binding_sendkeys");
+                if (string.IsNullOrWhiteSpace(sendKeysText))
                 {
                     return new SubmitActionResult(
                         false,
@@ -630,9 +629,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                     new Dictionary<string, string>
                     {
                         ["submit_strategy"] = "verified-composer-binding",
-                        ["submit_binding"] = surface.Metadata.TryGetValue("submit_binding", out var binding)
-                            ? binding
-                            : "configured"
+                        ["submit_binding"] = surface.Metadata.TryGetValue("submit_binding") ?? "configured"
                     });
             });
         }
@@ -663,8 +660,9 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         }
 
         // Extract window handle from surface metadata and verify it matches
-        if (!surface.Metadata.TryGetValue("window_handle", out var expectedWindowHandle)
-            || !discovery.Surface.Metadata.TryGetValue("window_handle", out var actualWindowHandle)
+        var expectedWindowHandle = surface.Metadata.TryGetValue("window_handle");
+        var actualWindowHandle = discovery.Surface.Metadata.TryGetValue("window_handle");
+        if (expectedWindowHandle == null || actualWindowHandle == null
             || !string.Equals(expectedWindowHandle, actualWindowHandle, StringComparison.Ordinal))
         {
             return null;
@@ -675,8 +673,8 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         var windowHandle = IntPtr.Zero;
         if (IntPtr.TryParse(expectedWindowHandle, System.Globalization.NumberStyles.HexNumber, null, out windowHandle))
         {
-            if (surface.Metadata.TryGetValue("element_automation_id", out var automationId)
-                && !string.IsNullOrEmpty(automationId))
+            var automationId = surface.Metadata.TryGetValue("element_automation_id");
+            if (!string.IsNullOrEmpty(automationId))
             {
                 var element = FindElementByAutomationId(windowHandle, automationId);
                 if (element is not null)
@@ -714,8 +712,8 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
 
     private static bool CanUseKeyboardWriteFallback(TextSurfaceDescriptor surface, AutomationElement element)
     {
-        return surface.Metadata.TryGetValue("keyboard_write_fallback", out var fallback)
-            && fallback == "true"
+        var fallback = surface.Metadata.TryGetValue("keyboard_write_fallback");
+        return fallback == "true"
             && element.Current.HasKeyboardFocus
             && element.Current.IsKeyboardFocusable
             && element.Current.IsEnabled;

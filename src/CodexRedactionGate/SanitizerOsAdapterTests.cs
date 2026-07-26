@@ -256,9 +256,9 @@ public partial class SanitizerTests
         Assert.That(result.Succeeded, Is.True);
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.SupportedComposer));
         Assert.That(result.Surface!.ProfileId, Is.EqualTo("codex-desktop"));
-        Assert.That(result.Surface.Metadata["composer_status"], Is.EqualTo(OsInteractionStatusIds.SupportedComposer));
-        Assert.That(result.Surface.Metadata["read_strategy"], Is.EqualTo("windows-ui-automation-value-pattern"));
-        Assert.That(result.Surface.Metadata["write_strategy"], Is.EqualTo("windows-ui-automation-value-pattern"));
+        Assert.That(result.Surface.Metadata.TryGetValue("composer_status"), Is.EqualTo(OsInteractionStatusIds.SupportedComposer));
+        Assert.That(result.Surface.Metadata.TryGetValue("read_strategy"), Is.EqualTo("windows-ui-automation-value-pattern"));
+        Assert.That(result.Surface.Metadata.TryGetValue("write_strategy"), Is.EqualTo("windows-ui-automation-value-pattern"));
         Assert.That(serialized, Does.Not.Contain("Connect to 192.168.10.25"));
     }
 
@@ -301,9 +301,9 @@ public partial class SanitizerTests
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.SupportedComposer));
         Assert.That(result.Surface!.CanCaptureText, Is.True);
         Assert.That(result.Surface.CanReplaceText, Is.True);
-        Assert.That(result.Surface.Metadata["read_strategy"], Is.EqualTo("windows-ui-automation-text-pattern"));
-        Assert.That(result.Surface.Metadata["write_strategy"], Is.EqualTo("verified-composer-keyboard-paste"));
-        Assert.That(result.Surface.Metadata["classification_reason"], Is.EqualTo("text_pattern_read_keyboard_write"));
+        Assert.That(result.Surface.Metadata.TryGetValue("read_strategy"), Is.EqualTo("windows-ui-automation-text-pattern"));
+        Assert.That(result.Surface.Metadata.TryGetValue("write_strategy"), Is.EqualTo("verified-composer-keyboard-paste"));
+        Assert.That(result.Surface.Metadata.TryGetValue("classification_reason"), Is.EqualTo("text_pattern_read_keyboard_write"));
     }
 
     [Test]
@@ -329,7 +329,7 @@ public partial class SanitizerTests
         Assert.That(result.Surface!.ProfileId, Is.EqualTo("chatgpt-desktop"));
         Assert.That(result.Surface.CanCaptureText, Is.True);
         Assert.That(result.Surface.CanReplaceText, Is.True);
-        Assert.That(result.Surface.Metadata["classification_reason"], Is.EqualTo("known_framework_group_text_pattern_keyboard_write"));
+        Assert.That(result.Surface.Metadata.TryGetValue("classification_reason"), Is.EqualTo("known_framework_group_text_pattern_keyboard_write"));
     }
 
     [Test]
@@ -364,7 +364,7 @@ public partial class SanitizerTests
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string> { ["surface_kind"] = "window-only" });
+            Metadata: new SurfaceMetadata(SurfaceKind: "window-only"));
 
         var capture = adapter.CaptureText(surface);
         var replace = adapter.ReplaceText(surface, "sanitized");
@@ -629,11 +629,7 @@ public partial class SanitizerTests
                 CanCaptureText: true,
                 CanReplaceText: true,
                 CanSubmit: true,
-                Metadata: new Dictionary<string, string>
-                {
-                    ["window_title_hash"] = "test-window",
-                    ["surface_kind"] = "fake"
-                });
+                Metadata: new SurfaceMetadata(SurfaceKind: "fake"));
         }
 
         public string CurrentText { get; private set; }

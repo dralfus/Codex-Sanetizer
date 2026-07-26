@@ -112,11 +112,9 @@ public static class ProductSmokeRunner
                 CanCaptureText: true,
                 CanReplaceText: true,
                 CanSubmit: true,
-                Metadata: new Dictionary<string, string>
-                {
-                    ["surface_kind"] = "disposable_local_target",
-                    ["cloud_submission"] = "false"
-                })));
+                Metadata: new SurfaceMetadata(
+                    SurfaceKind: "disposable_local_target",
+                    CloudSubmission: "false"))));
         var profileSave = SubmitBindingProfileStore.Upsert(layout, smokeProfile);
         var protectedTriggerStatus = TrayStatusFormatter.FormatMenuStatus(new TrayProtectionState(
             Enabled: true,
@@ -431,11 +429,9 @@ public static class ProductSmokeRunner
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new Dictionary<string, string>
-            {
-                ["surface_kind"] = "disposable_local_target",
-                ["cloud_submission"] = "false"
-            });
+            Metadata: new SurfaceMetadata(
+                SurfaceKind: "disposable_local_target",
+                CloudSubmission: "false"));
     }
 
     private static string FindRepositoryRoot(string startDirectory)

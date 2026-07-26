@@ -156,7 +156,8 @@ public sealed class WindowsLiveTextSurfaceAdapter :
 
     private static void RestoreForegroundWindow(TextSurfaceDescriptor surface)
     {
-        if (surface.Metadata.TryGetValue("window_handle", out var rawHandle)
+        var rawHandle = surface.Metadata.TryGetValue("window_handle");
+        if (rawHandle != null
             && long.TryParse(rawHandle, System.Globalization.NumberStyles.HexNumber, null, out var handleValue)
             && handleValue != 0)
         {

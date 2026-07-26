@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace CodexRedactionGate;
 
@@ -43,14 +44,17 @@ public static class OsInteractionStatusIds
 /// <summary>
 /// Encapsulates metadata for a text surface descriptor.
 /// Provides named fields instead of raw dictionary for better type safety.
+/// Supports both typed fields and arbitrary key-value pairs.
 /// </summary>
 /// <param name="SurfaceKind">The kind of surface (e.g., "disposable_local_target").</param>
 /// <param name="CloudSubmission">Whether cloud submission is enabled.</param>
 /// <param name="ComposerStatus">The composer status (e.g., "supported_composer").</param>
+/// <param name="ArbitraryMetadata">Additional arbitrary key-value pairs.</param>
 public sealed record SurfaceMetadata(
     string? SurfaceKind = null,
     string? CloudSubmission = null,
-    string? ComposerStatus = null)
+    string? ComposerStatus = null,
+    IReadOnlyDictionary<string, string>? ArbitraryMetadata = null)
 {
     public IReadOnlyDictionary<string, string> ToDictionary()
     {
@@ -61,6 +65,13 @@ public sealed record SurfaceMetadata(
             dict["cloud_submission"] = CloudSubmission;
         if (ComposerStatus is not null)
             dict["composer_status"] = ComposerStatus;
+        if (ArbitraryMetadata is not null)
+        {
+            foreach (var kvp in ArbitraryMetadata)
+            {
+                dict[kvp.Key] = kvp.Value;
+            }
+        }
         return dict;
     }
 
@@ -69,7 +80,32 @@ public sealed record SurfaceMetadata(
         return new SurfaceMetadata(
             SurfaceKind: dict.TryGetValue("surface_kind", out var sk) ? sk : null,
             CloudSubmission: dict.TryGetValue("cloud_submission", out var cs) ? cs : null,
-            ComposerStatus: dict.TryGetValue("composer_status", out var cs2) ? cs2 : null);
+            ComposerStatus: dict.TryGetValue("composer_status", out var cs2) ? cs2 : null,
+            ArbitraryMetadata: dict.Where(kvp => kvp.Key is not ("surface_kind" or "cloud_submission" or "composer_status"))
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.Ordinal));
+    }
+
+    public bool TryGetValue(string key, out string? value)
+    {
+        value = key switch
+        {
+            "surface_kind" => SurfaceKind,
+            "cloud_submission" => CloudSubmission,
+            "composer_status" => ComposerStatus,
+            _ => ArbitraryMetadata?.TryGetValue(key, out value) == true ? value : null
+        };
+        return value != null || SurfaceKind != null || CloudSubmission != null || ComposerStatus != null || (ArbitraryMetadata?.Count > 0);
+    }
+
+    public string? TryGetValue(string key)
+    {
+        return key switch
+        {
+            "surface_kind" => SurfaceKind,
+            "cloud_submission" => CloudSubmission,
+            "composer_status" => ComposerStatus,
+            _ => ArbitraryMetadata?.TryGetValue(key, out var value) == true ? value : null
+        };
     }
 }
 
@@ -81,7 +117,7 @@ public sealed record TextSurfaceDescriptor(
     bool CanCaptureText,
     bool CanReplaceText,
     bool CanSubmit,
-    IReadOnlyDictionary<string, string> Metadata);
+    SurfaceMetadata Metadata);
 
 public sealed record TextSurfaceDiscoveryResult(
     bool Succeeded,
