@@ -48,9 +48,19 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 239. Use IsEnabled property to gate protected profile logic.
 
-- [ ] `TrayProtectionController` no longer catches exceptions in `RunNativeSubmitOnce`
-- [ ] `OsInteractionOrchestrator` remains the sole crash capture point
-- [ ] Tests verify crash capture still works correctly
+- [x] `TrayProtectionController` no longer catches exceptions in `RunNativeSubmitOnce`
+- [x] `OsInteractionOrchestrator` remains the sole crash capture point
+- [x] Tests verify crash capture still works correctly
+
+**Status:** Completed - commit 77e1b1ed
+
+**Changes:**
+- Removed try-catch from `TrayProtectionController.RunNativeSubmitOnce`
+- `OsInteractionOrchestrator.RunOnce` is now the sole crash capture point
+- Removed unused `_crashDiagnostics` field from `TrayProtectionController`
+- Added try-finally to ensure `_nativeSubmitFlowInProgress` is reset
+- Added test: `TrayProtectionController_CrashIsCapturedByOrchestratorNotController`
+- All 1238 tests pass
 
 ## 241. Add user-facing Send binding selection UI
 
