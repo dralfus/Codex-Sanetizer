@@ -1445,3 +1445,172 @@ public class NativeSendBindingSelectionTests : SanitizerTests
         }
     }
 }
+
+[TestFixture]
+public class NativeSubmitBindingScopeTests : SanitizerTests
+{
+    [Test]
+    public void NativeSubmitBindingScope_EnterAsSend_CtrlEnterAsNewline()
+    {
+        // With Enter configured as Send, Ctrl+Enter passes through as newline
+        var profile = new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
+
+        // Ctrl+Enter should pass through as newline
+        var ctrlEnter = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(ctrlEnter.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(ctrlEnter.SuppressOriginalInput, Is.False);
+        Assert.That(ctrlEnter.Diagnostics["pass_through_reason"], Is.EqualTo("newline_binding"));
+
+        // Enter should be guarded at verified composer
+        var enter = controller.HandleGesture(new NativeKeyGesture("Enter"));
+        Assert.That(enter.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(enter.SuppressOriginalInput, Is.True);
+    }
+
+    [Test]
+    public void NativeSubmitBindingScope_CtrlEnterAsSend_EnterAsNewline()
+    {
+        // With Ctrl+Enter configured as Send, ordinary Enter passes through as newline
+        var profile = new SubmitBindingProfile(
+            "chatgpt-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
+
+        // Ordinary Enter should pass through as newline (matches NewlineBinding)
+        var enter = controller.HandleGesture(new NativeKeyGesture("Enter"));
+        Assert.That(enter.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(enter.SuppressOriginalInput, Is.False);
+        Assert.That(enter.Diagnostics["pass_through_reason"], Is.EqualTo("newline_binding"));
+
+        // Ctrl+Enter should be guarded at verified composer (matches SubmitBinding)
+        var ctrlEnter = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(ctrlEnter.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(ctrlEnter.SuppressOriginalInput, Is.True);
+    }
+
+    [Test]
+    public void NativeSubmitBindingScope_UnrelatedKeysPassThrough()
+    {
+        // A failed surface read or non-Send control does not turn ordinary typing into a global fail-closed condition
+        var profile = new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string>
+                {
+                    ["profile_id"] = "codex-desktop",
+                    ["composer_status"] = OsInteractionStatusIds.NotComposer
+                }));
+
+        // Unrelated key (A) should pass through
+        var aKey = controller.HandleGesture(new NativeKeyGesture("A"));
+        Assert.That(aKey.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(aKey.SuppressOriginalInput, Is.False);
+
+        // Enter should fail closed for non-composer
+        var enter = controller.HandleGesture(new NativeKeyGesture("Enter"));
+        Assert.That(enter.Status, Is.EqualTo(OsInteractionStatusIds.NotComposer));
+        Assert.That(enter.SuppressOriginalInput, Is.True);
+        Assert.That(enter.Diagnostics["fail_closed_reason"], Is.EqualTo("selected_profile_not_composer"));
+    }
+
+    [Test]
+    public void NativeSubmitBindingScope_SelectedVsUnselectedApps()
+    {
+        // Selected app: Enter is guarded, Ctrl+Enter passes through as newline
+        var profile = new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var selectedController = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
+
+        var unselectedController = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("other-app")));
+
+        // In selected app, Enter is guarded
+        var selectedEnter = selectedController.HandleGesture(new NativeKeyGesture("Enter"));
+        Assert.That(selectedEnter.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+
+        // In unselected app, Enter passes through (profile mismatch)
+        var unselectedEnter = unselectedController.HandleGesture(new NativeKeyGesture("Enter"));
+        Assert.That(unselectedEnter.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(unselectedEnter.Diagnostics["pass_through_reason"], Is.EqualTo("active_profile_mismatch"));
+    }
+
+    [Test]
+    public void NativeSubmitBindingScope_RepeatedAttempts()
+    {
+        // Same behavior for repeated attempts with same profile
+        var profile = new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
+
+        // First attempt
+        var enter1 = controller.HandleGesture(new NativeKeyGesture("Enter"));
+        Assert.That(enter1.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+
+        // Second attempt should have same behavior
+        var enter2 = controller.HandleGesture(new NativeKeyGesture("Enter"));
+        Assert.That(enter2.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+
+        // Ctrl+Enter should pass through
+        var ctrlEnter = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(ctrlEnter.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+    }
+}
