@@ -13,6 +13,44 @@ public static class Program
     internal static Func<TextSurfaceDiscoveryResult> NativeProfileDiscoveryFactory { get; set; } =
         () => WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface();
 
+    // Static constructor to register crash handlers
+    static Program()
+    {
+        AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+        {
+            try
+            {
+                var crashDiag = new LocalCrashDiagnostics(
+                    Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "CodexRedactionGate",
+                        "crashes"));
+                crashDiag.Capture((Exception)args.ExceptionObject, "appdomain_unhandled");
+            }
+            catch
+            {
+                // Swallow any logging errors to avoid cascading failures
+            }
+        };
+
+        Application.ThreadException += (sender, args) =>
+        {
+            try
+            {
+                var crashDiag = new LocalCrashDiagnostics(
+                    Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "CodexRedactionGate",
+                        "crashes"));
+                crashDiag.Capture(args.Exception, "ui_thread");
+            }
+            catch
+            {
+                // Swallow any logging errors to avoid cascading failures
+            }
+        };
+    }
+
     [STAThread]
     public static int Main(string[] args)
     {
@@ -328,6 +366,11 @@ public static class Program
             return int.TryParse(args[2], out var keepEvents) && keepEvents >= 0
                 ? RunAuditCleanup(keepEvents, runtime.LayoutFactory)
                 : Fail("Expected --audit-cleanup --keep non-negative-event-count.");
+        }
+
+        if (args.Length == 1 && args[0] == "--crash-reports")
+        {
+            return RunCrashReports();
         }
 
         if (args.Length == 1 && args[0] == "--tray-app")
@@ -935,6 +978,34 @@ public static class Program
         Console.WriteLine($"events_kept: {cleanup.EventsKept}");
         Console.WriteLine($"chain: {cleanup.Chain.Code}");
         return cleanup.Chain.Valid ? 0 : 1;
+    }
+
+    private static int RunCrashReports()
+    {
+        var crashDiag = new LocalCrashDiagnostics(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CodexRedactionGate",
+            "crashes"));
+        var reports = crashDiag.LoadReports();
+
+        if (reports.Count == 0)
+        {
+            Console.WriteLine("status: no_crash_reports");
+            return 0;
+        }
+
+        Console.WriteLine($"total_reports: {reports.Count}");
+        foreach (var report in reports)
+        {
+            Console.WriteLine($"timestamp: {report.Timestamp:O}");
+            Console.WriteLine($"component: {report.Component}");
+            Console.WriteLine($"exception_type: {report.ExceptionType}");
+            Console.WriteLine($"exception_message: {report.ExceptionMessage}");
+            Console.WriteLine($"build_version: {report.BuildVersion}");
+            Console.WriteLine("---");
+        }
+
+        return 0;
     }
 
     private static int RunOsProfilesList()
@@ -1725,6 +1796,7 @@ public static class Program
         Console.WriteLine("  --audit-view");
         Console.WriteLine("  --audit-verify");
         Console.WriteLine("  --audit-cleanup --keep count");
+        Console.WriteLine("  --crash-reports");
         Console.WriteLine("  --project-workspace-protect workspace");
         Console.WriteLine("  --project-workspace-status workspace");
         Console.WriteLine("  --project-file-sanitize file [--protected-workspace workspace]");
