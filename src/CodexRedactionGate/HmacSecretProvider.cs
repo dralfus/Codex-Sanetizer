@@ -55,7 +55,15 @@ public sealed class DpapiProtectedHmacSecretProvider
     {
         if (File.Exists(SecretFilePath))
         {
-            return LoadExistingSecret();
+            try
+            {
+                return LoadExistingSecret();
+            }
+            catch (DpapiSecretLoadFailureException)
+            {
+                // Re-throw DpapiSecretLoadFailureException to allow caller to handle it
+                throw;
+            }
         }
 
         var secret = RandomNumberGenerator.GetBytes(SecretSizeBytes);
@@ -78,7 +86,15 @@ public sealed class DpapiProtectedHmacSecretProvider
         }
         catch (IOException) when (File.Exists(SecretFilePath))
         {
-            return LoadExistingSecret();
+            try
+            {
+                return LoadExistingSecret();
+            }
+            catch (DpapiSecretLoadFailureException)
+            {
+                // Re-throw DpapiSecretLoadFailureException to allow caller to handle it
+                throw;
+            }
         }
 
         return (byte[])secret.Clone();

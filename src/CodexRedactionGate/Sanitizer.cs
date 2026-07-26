@@ -320,13 +320,44 @@ public sealed class Sanitizer : ISanitizer
         }
         catch (DpapiSecretLoadFailureException ex)
         {
-            failureReason = ex.Message;
+            failureReason = $"DPAPI secret load failed: {ex.Message}";
+            // Capture crash without exposing sensitive data
+            CaptureLocalCrash("dpapi_secret_load", ex);
             return null;
         }
         catch (Exception ex)
         {
             failureReason = $"Failed to create production vault: {ex.Message}";
             return null;
+        }
+    }
+
+    private static void CaptureLocalCrash(string component, Exception ex)
+    {
+        try
+        {
+            var crashDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CodexRedactionGate",
+                "crashes");
+            Directory.CreateDirectory(crashDirectory);
+
+            var reportPath = Path.Combine(crashDirectory, $"crash-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmssfff}.json");
+            var tempPath = reportPath + ".tmp";
+            var report = new
+            {
+                exception_type = ex.GetType().FullName ?? ex.GetType().Name,
+                exception_message = ex.Message,
+                component = component,
+                timestamp = DateTimeOffset.UtcNow.ToString("O")
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(report, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(tempPath, json);
+            File.Move(tempPath, reportPath, overwrite: true);
+        }
+        catch
+        {
+            // Swallow any logging errors to avoid cascading failures
         }
     }
 
