@@ -88,9 +88,19 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 241. Add user-facing Send binding selection UI.
 
-- [ ] Non-Send Enter (e.g., Enter as newline) passes through when Ctrl+Enter is Send
-- [ ] Unrelated keys (A, B, etc.) pass through regardless of configuration
-- [ ] Tests verify both pair directions and unrelated key behavior
+- [x] Non-Send Enter (e.g., Enter as newline) passes through when Ctrl+Enter is Send
+- [x] Unrelated keys (A, B, etc.) pass through regardless of configuration
+- [x] Tests verify both pair directions and unrelated key behavior
+
+**Status:** Completed - all existing tests pass
+
+**Verification:**
+- `NativeSubmitInterception_GuardsOnlyVerifiedSubmitBinding` - verifies newline and unrelated keys pass through
+- `NativeSubmitBindingScope_EnterAsSend_CtrlEnterAsNewline` - verifies Enter as Send, Ctrl+Enter as newline
+- `NativeSubmitBindingScope_CtrlEnterAsSend_EnterAsNewline` - verifies Ctrl+Enter as Send, Enter as newline
+- `NativeSubmitBindingScope_UnrelatedKeysPassThrough` - verifies unrelated keys pass through
+
+All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ctrl+Enter combinations.
 
 ## 243. Fix crash boundary to capture at DPAPI load point
 
