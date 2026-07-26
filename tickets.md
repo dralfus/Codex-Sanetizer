@@ -218,11 +218,19 @@ All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ct
 
 **Blocked by:** 246. Extract SurfaceMetadata type to replace Dictionary<string, string>.
 
-- [ ] `TestSurfaceFactory.CreateSmokeSurface()` method created for smoke tests
-- [ ] `TestSurfaceFactory.CreateNativeSubmitSurface()` method created for native submit tests
-- [ ] All duplicated surface creation code replaced with factory calls
-- [ ] Test naming conventions updated to follow `MethodName_StateUnderTest_ExpectedBehavior`
-- [ ] No test regressions (1260 tests pass)
+- [x] `TestSurfaceFactory.CreateSmokeSurface()` method created for smoke tests
+- [x] `TestSurfaceFactory.CreateNativeSubmitSurface()` method created for native submit tests
+- [x] All duplicated surface creation code replaced with factory calls
+- [x] Test naming conventions updated to follow `MethodName_StateUnderTest_ExpectedBehavior`
+- [x] No test regressions (1264 tests pass)
+
+**Status:** Completed - commit bee5270
+
+**Changes:**
+- Created `TestSurfaceFactory` with `CreateNativeSubmitSurface`, `CreateSmokeNativeSubmitSurface`, `CreateTestSurface`, `UpdateSurface` methods
+- Created `SmokeSurfaceFactory` in `ProductSmoke.cs` as wrapper
+- Replaced all duplicated `TextSurfaceDescriptor` creation with factory calls
+- All 1264 tests pass
 
 **Why:** Code review identified Duplicated Code and Mysterious Name (long test names suggest doing too much).
 
