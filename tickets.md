@@ -3523,6 +3523,23 @@ dotnet .\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
 - [ ] Tray status changes from setup-required/unprotected to protected without restarting the tray app.
 - [ ] Tests cover startup with empty profile store, setup success reload, setup cancel, and no raw prompt submission.
 
+**Implementation result 2026-07-26:**
+
+- [x] Added LaunchFirstRunSetupIfRequired() to WindowsTrayApplicationContext
+- [x] Tray app automatically launches first-run setup when no protected profile exists
+- [x] Checks for protected+enabled profiles in native-submit-profiles.json
+- [x] Refreshes status after successful setup without requiring restart
+- [x] Fails closed: if setup fails, tray continues without crash
+- [x] 3 focused tests added for empty store, protected profile, and no protected profile
+
+**Verification result 2026-07-26:** build green with 0 errors; unit tests passed 387/387; `--self-test` and `--product-smoke` passed.
+
+- [x] Tray startup opens or foregrounds the first-run setup window when no protected selected profile exists.
+- [x] Matching selected app Send remains suppressed while setup is open or incomplete.
+- [x] Successful verification reloads the stored protected profile into the resident native submit controller.
+- [x] Tray status changes from setup-required/unprotected to protected without restarting the tray app.
+- [x] Tests cover startup with empty profile store, setup success reload, setup cancel, and no raw prompt submission.
+
 ## 233. Block protected Send button clicks outside the keyboard hook
 
 **What to build:** Protect mouse or UI-automation activation of the Codex/ChatGPT Send button for selected protected profiles. If the focused or invoked element belongs to a selected protected AI app but is not a verified readable composer, Code Sanitizer must fail closed and prevent the raw prompt from leaving unless the action originates from the replacement overlay or the explicit emergency bypass.
