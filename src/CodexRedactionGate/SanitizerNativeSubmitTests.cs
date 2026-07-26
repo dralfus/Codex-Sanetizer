@@ -1330,6 +1330,86 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
         Assert.That(result.SuppressOriginalInput, Is.False);
     }
+
+    [Test]
+    public void HandleButtonClick_UsesSubmitBindingFromProfile()
+    {
+        // Test with Enter as Send / Ctrl+Enter as newline
+        var profile = new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: null);
+
+        var activeSurface = new TextSurfaceDescriptor(
+            "native-submit-test:codex-desktop",
+            "codex-desktop",
+            "codex-desktop",
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
+            });
+
+        var result = controller.HandleButtonClick(activeSurface);
+
+        // Enter should be guarded (matches SubmitBinding)
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+    }
+
+    [Test]
+    public void HandleButtonClick_UsesSubmitBindingCtrlEnterFromProfile()
+    {
+        // Test with Ctrl+Enter as Send / Enter as newline
+        var profile = new SubmitBindingProfile(
+            "chatgpt-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")),
+            firstRunSetupController: null);
+
+        var activeSurface = new TextSurfaceDescriptor(
+            "native-submit-test:chatgpt-desktop",
+            "chatgpt-desktop",
+            "chatgpt-desktop",
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new Dictionary<string, string>
+            {
+                ["composer_status"] = OsInteractionStatusIds.SupportedComposer
+            });
+
+        var result = controller.HandleButtonClick(activeSurface);
+
+        // Ctrl+Enter should be guarded (matches SubmitBinding)
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+    }
 }
 
 [TestFixture]

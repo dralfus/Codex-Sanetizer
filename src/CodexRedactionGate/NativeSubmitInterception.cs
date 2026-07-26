@@ -641,11 +641,22 @@ public sealed class NativeSubmitInterceptionController
                 });
         }
 
-        // Use existing HandleGesture for actual processing
-        return HandleGesture(
-            new NativeKeyGesture("Enter", Ctrl: true),
-            submitFlow,
-            hookHealthy);
+        // Use SubmitBinding from profile (not a hardcoded Ctrl+Enter)
+        if (_profile.SubmitBinding is null)
+        {
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.BindingUnknown,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = _profile.ProfileId,
+                    ["binding_error"] = "submit_binding_not_set"
+                });
+        }
+
+        return HandleGesture(_profile.SubmitBinding.ToNativeKeyGesture(), submitFlow, hookHealthy);
     }
 
     public NativeSubmitInterceptionResult HandleGesture(
@@ -1625,6 +1636,14 @@ public static class NativeSubmitProductSmokeRunner
                 ["composer_status"] = OsInteractionStatusIds.SupportedComposer,
                 ["surface_kind"] = "test"
             });
+    }
+}
+
+internal static class SubmitKeyBindingExtensions
+{
+    public static NativeKeyGesture ToNativeKeyGesture(this SubmitKeyBinding binding)
+    {
+        return new NativeKeyGesture(binding.Key, Ctrl: binding.Ctrl, Alt: binding.Alt, Shift: binding.Shift);
     }
 }
 
