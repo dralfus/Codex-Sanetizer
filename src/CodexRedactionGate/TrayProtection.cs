@@ -3,59 +3,21 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace CodexRedactionGate;
 
 /// <summary>
-/// Immutable protection snapshot for a single generation
-/// Contains all data needed to classify and guard a selected-profile submit
+/// Immutable resident protection state for one interception generation.
 /// </summary>
-/// <param name="Generation">Atomic snapshot generation number</param>
-/// <param name="Mode">Protection mode</param>
-/// <param name="Hotkey">Hotkey binding</param>
-/// <param name="NativeSubmitEnabled">Whether native submit is enabled</param>
-/// <param name="NativeSubmitStatus">Native submit status</param>
-/// <param name="ProtectedSendBinding">Protected Send binding</param>
-/// <param name="NewlineBinding">Newline binding</param>
-/// <param name="ManualScanHotkey">Manual scan hotkey</param>
-/// <param name="ReadinessStatus">Readiness status</param>
-/// <param name="ComposerProtected">Whether composer is protected</param>
-/// <param name="ProjectFilesProtected">Whether project files are protected</param>
-/// <param name="ProjectFileStatus">Project file status</param>
-/// <param name="ResidentProcess">Whether resident process</param>
-/// <param name="SetupRequired">Whether setup is required</param>
-/// <param name="HookHost">Native submit hook host</param>
-/// <param name="Controller">Native submit controller</param>
-/// <param name="Runner">Native submit runner</param>
-/// <param name="Profile">Native submit profile</param>
-/// <param name="Runtimes">All native submit runtimes</param>
 internal sealed record ProtectionSnapshot(
     long Generation,
-    string Mode,
-    string Hotkey,
-    string LastStatus,
-    string? LastDecision,
-    int? LastReplacementCount,
-    string? LastProfileId,
-    bool LastApplied,
-    bool LastSubmitted,
-    bool NativeSubmitEnabled,
-    string NativeSubmitStatus,
-    string ProtectedSendBinding,
-    string NewlineBinding,
-    string ManualScanHotkey,
-    string ReadinessStatus,
-    bool ComposerProtected,
-    bool ProjectFilesProtected,
-    string ProjectFileStatus,
-    bool ResidentProcess,
-    bool SetupRequired,
-    INativeSubmitHookHost? HookHost,
-    NativeSubmitInterceptionController? Controller,
-    Func<OsInteractionResult>? Runner,
-    SubmitBindingProfile? Profile,
-    IReadOnlyList<NativeSubmitRuntime> Runtimes);
+    TrayProtectionState State,
+    NativeSubmitRuntimeSet? RuntimeSet,
+    bool HookReady,
+    ISendControlDiscovery? SendControlDiscovery,
+    Func<TextSurfaceDiscoveryResult> ActiveSurfaceDiscovery);
 
 public sealed record TrayProtectionState(
     bool Enabled,
@@ -100,15 +62,10 @@ internal sealed class TrayProtectionController
 {
     private readonly ITrayHotkeyHost _hotkeyHost;
     private readonly Func<OsInteractionResult> _applyOnlyRunner;
-    private INativeSubmitHookHost? _nativeSubmitHookHost;
-    private NativeSubmitInterceptionController? _nativeSubmitController;
-    private Func<OsInteractionResult>? _nativeSubmitRunner;
-    private SubmitBindingProfile? _nativeProfile;
-    private IReadOnlyList<NativeSubmitRuntime> _nativeSubmitRuntimes;
-    private readonly ISendControlDiscovery? _sendControlDiscovery;
-    private readonly Func<TextSurfaceDiscoveryResult> _activeSurfaceDiscovery;
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
     private readonly DefaultStorageLayout _storageLayout;
+    private readonly object _reloadGate = new();
+    private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, ProtectionSnapshot> _classificationSnapshots = new();
     private int _nativeSubmitFlowInProgress;
     private ProtectionSnapshot _currentSnapshot;
 
@@ -132,88 +89,95 @@ internal sealed class TrayProtectionController
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
-        _nativeSubmitHookHost = nativeSubmitHookHost;
-        _nativeSubmitController = nativeSubmitController;
-        _nativeSubmitRunner = nativeSubmitRunner;
-        _nativeProfile = nativeProfile;
-        _nativeSubmitRuntimes = nativeSubmitRuntimes ?? CreateSingleRuntimeList(
+        var resolvedProfile = nativeProfile ?? nativeSubmitController?.Profile;
+        var runtimes = nativeSubmitRuntimes ?? CreateSingleRuntimeList(
             nativeSubmitHookHost,
             nativeSubmitController,
             nativeSubmitRunner,
-            nativeProfile);
+            resolvedProfile);
         _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         _storageLayout = storageLayout ?? DefaultStorageLayout.CreateDefault();
-        _sendControlDiscovery = sendControlDiscovery;
-        _activeSurfaceDiscovery = activeSurfaceDiscovery ?? (() => WindowsActiveSurfaceDiscovery.CreateDefault().DiscoverActiveSurface());
-        State = CreateState(enabled: false, lastStatus: "disabled");
-        _currentSnapshot = CreateSnapshot(0, State, _nativeSubmitHookHost, _nativeSubmitController, _nativeSubmitRunner, _nativeProfile, _nativeSubmitRuntimes);
+        var surfaceDiscovery = activeSurfaceDiscovery ?? (() => WindowsActiveSurfaceDiscovery.CreateDefault().DiscoverActiveSurface());
+        var state = CreateState(enabled: false, lastStatus: "disabled", runtimes: runtimes);
+        _currentSnapshot = new ProtectionSnapshot(
+            0,
+            state,
+            nativeSubmitHookHost is null ? null : new NativeSubmitRuntimeSet(nativeSubmitHookHost, runtimes.ToArray()),
+            HookReady: false,
+            sendControlDiscovery,
+            surfaceDiscovery);
     }
 
     public event EventHandler? StateChanged;
 
-    public TrayProtectionState State { get; private set; }
+    public TrayProtectionState State => ReadSnapshot().State;
 
     public bool Start()
     {
-        // Check first-run setup status using public API (no reflection)
+        var snapshot = ReadSnapshot();
         var setupRequired = false;
-        if (_nativeSubmitController is not null)
+        if (snapshot.RuntimeSet is not null)
         {
             try
             {
-                setupRequired = IsAnySelectedProfileSetupRequired();
+                setupRequired = IsAnySelectedProfileSetupRequired(snapshot.RuntimeSet);
             }
             catch
             {
-                // Ignore setup errors during startup - fail closed by treating as required
                 setupRequired = true;
             }
         }
 
         var manualHotkeyStarted = _hotkeyHost.Start(RunApplyOnlyOnce);
-        var nativeStarted = StartNativeSubmitHook();
+        var nativeStarted = snapshot.RuntimeSet is not null && StartNativeSubmitHook(snapshot.RuntimeSet);
         if (!manualHotkeyStarted && !nativeStarted)
         {
-            var newState = CreateState(
+            PublishSnapshot(snapshot with
+            {
+                State = CreateState(
                 enabled: false,
-                lastStatus: _hotkeyHost.LastErrorCode ?? NativeSubmitUnavailableStatus(),
-                setupRequired: setupRequired);
-            State = newState;
-            _currentSnapshot = CreateSnapshot(0, newState, _nativeSubmitHookHost, _nativeSubmitController, _nativeSubmitRunner, _nativeProfile, _nativeSubmitRuntimes);
-            StateChanged?.Invoke(this, EventArgs.Empty);
+                    lastStatus: _hotkeyHost.LastErrorCode ?? NativeSubmitUnavailableStatus(snapshot),
+                    runtimes: snapshot.RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>(),
+                    setupRequired: setupRequired)
+            });
             return false;
         }
 
         var nativeStatus = nativeStarted
             ? (setupRequired ? OsInteractionStatusIds.NativeSubmitSetupRequired : OsInteractionStatusIds.Protected)
-            : NativeSubmitUnavailableStatus();
+            : NativeSubmitUnavailableStatus(snapshot);
 
-        var newState2 = CreateState(
-            enabled: true,
-            lastStatus: manualHotkeyStarted ? "enabled" : "enabled_native_submit_manual_hotkey_unavailable",
-            nativeSubmitEnabled: nativeStarted && !setupRequired,
-            nativeSubmitStatus: nativeStatus,
-            setupRequired: setupRequired);
-        State = newState2;
-        _currentSnapshot = CreateSnapshot(0, newState2, _nativeSubmitHookHost, _nativeSubmitController, _nativeSubmitRunner, _nativeProfile, _nativeSubmitRuntimes);
-        StateChanged?.Invoke(this, EventArgs.Empty);
+        PublishSnapshot(snapshot with
+        {
+            State = CreateState(
+                enabled: true,
+                lastStatus: manualHotkeyStarted ? "enabled" : "enabled_native_submit_manual_hotkey_unavailable",
+                runtimes: snapshot.RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>(),
+                nativeSubmitEnabled: nativeStarted && !setupRequired,
+                nativeSubmitStatus: nativeStatus,
+                setupRequired: setupRequired),
+            HookReady = nativeStarted
+        });
         return true;
     }
 
     public void Stop()
     {
-        _nativeSubmitHookHost?.Stop();
+        var snapshot = ReadSnapshot();
+        snapshot.RuntimeSet?.HookHost.Stop();
         _hotkeyHost.Stop();
-        var state = CreateState(enabled: false, lastStatus: "disabled");
-        State = state;
-        _currentSnapshot = CreateSnapshot(0, state, null, null, null, null, Array.Empty<NativeSubmitRuntime>());
-        StateChanged?.Invoke(this, EventArgs.Empty);
+        PublishSnapshot(snapshot with
+        {
+            State = CreateState(enabled: false, lastStatus: "disabled", runtimes: Array.Empty<NativeSubmitRuntime>()),
+            RuntimeSet = null,
+            HookReady = false
+        });
     }
 
     /// <summary>
     /// Replaces the native interception runtime after a binding verification.
-    /// The old hook is stopped before the new hook is registered, so a verified
-    /// binding cannot leave two hook owners active.
+    /// The candidate hook starts before its snapshot is published; the previous
+    /// hook is stopped immediately after the new generation becomes active.
     /// </summary>
     public bool ReloadNativeSubmit(NativeSubmitRuntime runtime)
     {
@@ -224,71 +188,37 @@ internal sealed class TrayProtectionController
     public bool ReloadNativeSubmit(NativeSubmitRuntimeSet runtimeSet)
     {
         ArgumentNullException.ThrowIfNull(runtimeSet);
-        if (runtimeSet.Runtimes.Count == 0)
+        lock (_reloadGate)
         {
-            return false;
-        }
+            var previous = ReadSnapshot();
+            var candidate = TryBuildCandidateSnapshot(previous, runtimeSet);
+            if (candidate is null)
+            {
+                return false;
+            }
 
-        // Build and validate candidate before atomic publication
-        var candidateSnapshot = TryBuildCandidateSnapshot(runtimeSet);
-        if (candidateSnapshot is null)
-        {
-            // Validation failed - retain previous complete snapshot
-            return false;
-        }
+            if (!previous.State.Enabled)
+            {
+                previous.RuntimeSet?.HookHost.Stop();
+                PublishSnapshot(candidate);
+                return true;
+            }
 
-        // Atomic publication: replace all fields together
-        var previousHookHost = _nativeSubmitHookHost;
-        var previousController = _nativeSubmitController;
-        var previousRunner = _nativeSubmitRunner;
-        var previousProfile = _nativeProfile;
-        var previousRuntimes = _nativeSubmitRuntimes;
-        var previousSnapshot = _currentSnapshot;
+            if (!StartNativeSubmitHook(candidate.RuntimeSet!))
+            {
+                candidate.RuntimeSet!.HookHost.Stop();
+                return false;
+            }
 
-        _nativeSubmitHookHost = runtimeSet.HookHost;
-        _nativeSubmitRuntimes = runtimeSet.Runtimes;
-        var primaryRuntime = runtimeSet.Runtimes[0];
-        _nativeSubmitController = primaryRuntime.Controller;
-        _nativeSubmitRunner = primaryRuntime.Runner;
-        _nativeProfile = primaryRuntime.Profile;
+            PublishSnapshot(candidate);
+            if (previous.RuntimeSet is not null
+                && !ReferenceEquals(previous.RuntimeSet.HookHost, candidate.RuntimeSet!.HookHost))
+            {
+                previous.RuntimeSet.HookHost.Stop();
+            }
 
-        if (!State.Enabled)
-        {
-            previousHookHost?.Stop();
-            _currentSnapshot = candidateSnapshot;
-            State = CreateState(enabled: false, lastStatus: "native_submit_runtime_reloaded");
-            StateChanged?.Invoke(this, EventArgs.Empty);
             return true;
         }
-
-        var setupRequired = IsAnySelectedProfileSetupRequired();
-        var started = StartNativeSubmitHook();
-        if (!started)
-        {
-            // Rollback on failure - retain previous complete snapshot
-            _nativeSubmitHookHost = previousHookHost;
-            _nativeSubmitController = previousController;
-            _nativeSubmitRunner = previousRunner;
-            _nativeProfile = previousProfile;
-            _nativeSubmitRuntimes = previousRuntimes;
-            _currentSnapshot = previousSnapshot;
-        }
-        else if (previousHookHost is not null && !ReferenceEquals(previousHookHost, _nativeSubmitHookHost))
-        {
-            previousHookHost.Stop();
-            _currentSnapshot = candidateSnapshot;
-        }
-
-        State = CreateState(
-            enabled: true,
-            lastStatus: started ? "native_submit_runtime_reloaded" : NativeSubmitUnavailableStatus(),
-            nativeSubmitEnabled: started && !setupRequired,
-            nativeSubmitStatus: started
-                ? (setupRequired ? OsInteractionStatusIds.NativeSubmitSetupRequired : OsInteractionStatusIds.Protected)
-                : NativeSubmitUnavailableStatus(),
-            setupRequired: setupRequired);
-        StateChanged?.Invoke(this, EventArgs.Empty);
-        return started;
     }
 
     /// <summary>
@@ -297,33 +227,50 @@ internal sealed class TrayProtectionController
     /// </summary>
     public ProtectionSnapshot GetCurrentSnapshot()
     {
-        return _currentSnapshot;
+        return ReadSnapshot();
     }
 
     /// <summary>
     /// Builds a candidate snapshot from runtime set, validating all components
     /// Returns null if validation fails (retaining previous complete snapshot)
     /// </summary>
-    private ProtectionSnapshot? TryBuildCandidateSnapshot(NativeSubmitRuntimeSet runtimeSet)
+    private ProtectionSnapshot? TryBuildCandidateSnapshot(
+        ProtectionSnapshot previous,
+        NativeSubmitRuntimeSet runtimeSet)
     {
         try
         {
-            var nextGeneration = _currentSnapshot.Generation + 1;
-            var state = CreateState(
-                enabled: State.Enabled,
-                lastStatus: "pending_reload",
-                nativeSubmitEnabled: State.NativeSubmitEnabled,
-                nativeSubmitStatus: State.NativeSubmitStatus,
-                setupRequired: State.SetupRequired);
+            var runtimes = runtimeSet.Runtimes?.ToArray() ?? Array.Empty<NativeSubmitRuntime>();
+            if (runtimeSet.HookHost is null
+                || runtimes.Length == 0
+                || runtimes.Any(runtime => runtime is null
+                    || runtime.Controller is null
+                    || runtime.Runner is null
+                    || runtime.Profile is null
+                    || string.IsNullOrWhiteSpace(runtime.Profile.ProfileId)))
+            {
+                return null;
+            }
 
-            return CreateSnapshot(
-                nextGeneration,
+            var candidateRuntimeSet = new NativeSubmitRuntimeSet(runtimeSet.HookHost, runtimes);
+            var setupRequired = IsAnySelectedProfileSetupRequired(candidateRuntimeSet);
+            var state = CreateState(
+                enabled: previous.State.Enabled,
+                lastStatus: "native_submit_runtime_reloaded",
+                runtimes: candidateRuntimeSet.Runtimes,
+                nativeSubmitEnabled: previous.State.Enabled && !setupRequired,
+                nativeSubmitStatus: previous.State.Enabled
+                    ? (setupRequired ? OsInteractionStatusIds.NativeSubmitSetupRequired : OsInteractionStatusIds.Protected)
+                    : OsInteractionStatusIds.NotConfigured,
+                setupRequired: setupRequired);
+
+            return new ProtectionSnapshot(
+                previous.Generation + 1,
                 state,
-                runtimeSet.HookHost,
-                runtimeSet.Runtimes[0].Controller,
-                runtimeSet.Runtimes[0].Runner,
-                runtimeSet.Runtimes[0].Profile,
-                runtimeSet.Runtimes);
+                candidateRuntimeSet,
+                HookReady: previous.State.Enabled,
+                previous.SendControlDiscovery,
+                previous.ActiveSurfaceDiscovery);
         }
         catch
         {
@@ -364,6 +311,7 @@ internal sealed class TrayProtectionController
 
     private void RunApplyOnlyOnce()
     {
+        var snapshot = ReadSnapshot();
         var result = _applyOnlyRunner();
         var state = new TrayProtectionState(
             Enabled: true,
@@ -377,30 +325,23 @@ internal sealed class TrayProtectionController
             LastProfileId: result.Surface?.ProfileId,
             LastApplied: result.Applied,
             LastSubmitted: result.Submitted,
-            NativeSubmitEnabled: State.NativeSubmitEnabled,
-            NativeSubmitStatus: State.NativeSubmitStatus,
-            ProtectedSendBinding: State.ProtectedSendBinding,
-            NewlineBinding: State.NewlineBinding,
-            ManualScanHotkey: State.ManualScanHotkey,
-            ReadinessStatus: State.ReadinessStatus,
-            ComposerProtected: State.ComposerProtected,
-            ProjectFilesProtected: State.ProjectFilesProtected,
-            ProjectFileStatus: State.ProjectFileStatus,
-            ResidentProcess: State.ResidentProcess,
-            SetupRequired: State.SetupRequired);
-        State = state;
-        // Snapshot is not updated for ApplyOnly - it's a transient state
-        StateChanged?.Invoke(this, EventArgs.Empty);
+            NativeSubmitEnabled: snapshot.State.NativeSubmitEnabled,
+            NativeSubmitStatus: snapshot.State.NativeSubmitStatus,
+            ProtectedSendBinding: snapshot.State.ProtectedSendBinding,
+            NewlineBinding: snapshot.State.NewlineBinding,
+            ManualScanHotkey: snapshot.State.ManualScanHotkey,
+            ReadinessStatus: snapshot.State.ReadinessStatus,
+            ComposerProtected: snapshot.State.ComposerProtected,
+            ProjectFilesProtected: snapshot.State.ProjectFilesProtected,
+            ProjectFileStatus: snapshot.State.ProjectFileStatus,
+            ResidentProcess: snapshot.State.ResidentProcess,
+            SetupRequired: snapshot.State.SetupRequired);
+        PublishSnapshot(snapshot with { State = state });
     }
 
-    private bool StartNativeSubmitHook()
+    private bool StartNativeSubmitHook(NativeSubmitRuntimeSet runtimeSet)
     {
-        if (_nativeSubmitHookHost is null || _nativeSubmitController is null || _nativeSubmitRunner is null)
-        {
-            return false;
-        }
-
-        var keyboardStarted = _nativeSubmitHookHost.Start(
+        var keyboardStarted = runtimeSet.HookHost.Start(
             ClassifyNativeGesture,
             RunNativeSubmitOnce);
         if (!keyboardStarted)
@@ -408,14 +349,14 @@ internal sealed class TrayProtectionController
             return false;
         }
 
-        if (_nativeSubmitHookHost is INativeSubmitPointerHookHost pointerHook
-            && _sendControlDiscovery is not null)
+        if (runtimeSet.HookHost is INativeSubmitPointerHookHost pointerHook
+            && ReadSnapshot().SendControlDiscovery is not null)
         {
             if (!pointerHook.StartPointer(
                 ClassifySendControl,
                 RunNativeSendControlOnce))
             {
-                _nativeSubmitHookHost.Stop();
+                runtimeSet.HookHost.Stop();
                 return false;
             }
         }
@@ -425,32 +366,39 @@ internal sealed class TrayProtectionController
 
     private NativeSubmitInterceptionResult ClassifySendControl(NativePointerGesture gesture)
     {
-        if (_sendControlDiscovery is null || _nativeSubmitController is null)
+        var snapshot = ReadSnapshot();
+        if (snapshot.SendControlDiscovery is null || snapshot.RuntimeSet is null)
         {
-            return PassThroughPointer();
+            return RememberSnapshot(snapshot, PassThroughPointer());
         }
 
-        var discovery = _sendControlDiscovery.Discover(gesture);
-        var runtime = ResolveRuntime(discovery.ComposerDiscovery);
-        return discovery.Identified && runtime is not null
+        var discovery = snapshot.SendControlDiscovery.Discover(gesture);
+        var runtime = ResolveRuntime(snapshot, discovery.ComposerDiscovery);
+        var result = discovery.Identified && runtime is not null
             ? runtime.Controller.HandleIdentifiedSendControl(discovery.ComposerDiscovery)
             : PassThroughPointer();
+        return RememberSnapshot(snapshot, result);
     }
 
     private void RunNativeSendControlOnce(NativePointerGesture gesture, NativeSubmitInterceptionResult classification)
     {
-        var runtime = ResolveClassifiedRuntime(classification);
-        if (runtime is null && (_nativeSubmitController is null || _nativeSubmitRunner is null))
+        if (!TryTakeSnapshot(classification, out var snapshot))
+        {
+            return;
+        }
+
+        var runtime = ResolveClassifiedRuntime(snapshot, classification);
+        if (runtime is null)
         {
             return;
         }
 
         if (Interlocked.Exchange(ref _nativeSubmitFlowInProgress, 1) == 1)
         {
-            PublishNativeSubmitState(
+            PublishNativeSubmitState(snapshot,
                 OsInteractionStatusIds.NativeSubmitInProgress,
                 OsInteractionStatusIds.Protected,
-                _nativeProfile?.ProfileId,
+                runtime.Profile.ProfileId,
                 applied: false,
                 submitted: false);
             return;
@@ -458,13 +406,11 @@ internal sealed class TrayProtectionController
 
         try
         {
-            var result = runtime is not null
-                ? runtime.Controller.CompleteGuardedSubmit(classification, runtime.Runner)
-                : _nativeSubmitController!.CompleteGuardedSubmit(classification, _nativeSubmitRunner!);
-            PublishNativeSubmitState(
+            var result = runtime.Controller.CompleteGuardedSubmit(classification, runtime.Runner);
+            PublishNativeSubmitState(snapshot,
                 result.Status,
                 NativeSubmitReadinessStatusAfterFlow(result.Status),
-                runtime?.Profile.ProfileId ?? _nativeProfile?.ProfileId,
+                runtime.Profile.ProfileId,
                 result.Applied,
                 result.Submitted);
         }
@@ -486,18 +432,23 @@ internal sealed class TrayProtectionController
 
     private void RunNativeSubmitOnce(NativeKeyGesture gesture, NativeSubmitInterceptionResult classification)
     {
-        var runtime = ResolveClassifiedRuntime(classification);
-        if (runtime is null && (_nativeSubmitController is null || _nativeSubmitRunner is null))
+        if (!TryTakeSnapshot(classification, out var snapshot))
+        {
+            return;
+        }
+
+        var runtime = ResolveClassifiedRuntime(snapshot, classification);
+        if (runtime is null)
         {
             return;
         }
 
         if (Interlocked.Exchange(ref _nativeSubmitFlowInProgress, 1) == 1)
         {
-            PublishNativeSubmitState(
+            PublishNativeSubmitState(snapshot,
                 OsInteractionStatusIds.NativeSubmitInProgress,
                 readinessStatus: OsInteractionStatusIds.Protected,
-                profileId: _nativeProfile?.ProfileId,
+                profileId: runtime.Profile.ProfileId,
                 applied: false,
                 submitted: false);
             return;
@@ -505,16 +456,14 @@ internal sealed class TrayProtectionController
 
         try
         {
-            NativeSubmitInterceptionResult result = runtime is not null
-                ? runtime.Controller.CompleteGuardedSubmit(classification, runtime.Runner)
-                : _nativeSubmitController!.CompleteGuardedSubmit(classification, _nativeSubmitRunner!);
+            var result = runtime.Controller.CompleteGuardedSubmit(classification, runtime.Runner);
 
             var readinessStatus = NativeSubmitReadinessStatusAfterFlow(result.Status);
             var setupRequired = readinessStatus == OsInteractionStatusIds.NativeSubmitSetupRequired;
-            PublishNativeSubmitState(
+            PublishNativeSubmitState(snapshot,
                 result.Status,
                 readinessStatus,
-                result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
+                result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : runtime.Profile.ProfileId,
                 result.Applied,
                 result.Submitted,
                 setupRequired);
@@ -526,6 +475,7 @@ internal sealed class TrayProtectionController
     }
 
     private void PublishNativeSubmitState(
+        ProtectionSnapshot eventSnapshot,
         string lastStatus,
         string readinessStatus,
         string? profileId,
@@ -533,7 +483,12 @@ internal sealed class TrayProtectionController
         bool submitted,
         bool setupRequired = false)
     {
-        State = new TrayProtectionState(
+        if (!ReferenceEquals(ReadSnapshot(), eventSnapshot))
+        {
+            return;
+        }
+
+        var state = new TrayProtectionState(
             Enabled: true,
             Mode: "NativeSubmit",
             Hotkey: _hotkeyHost.Binding.DisplayText,
@@ -546,15 +501,15 @@ internal sealed class TrayProtectionController
             NativeSubmitEnabled: readinessStatus != OsInteractionStatusIds.DegradedHotkeyOnly
                 && readinessStatus != OsInteractionStatusIds.NotConfigured,
             NativeSubmitStatus: readinessStatus,
-            ProtectedSendBinding: ProtectedSendBindingText(readinessStatus),
-            NewlineBinding: NewlineBindingText(),
+            ProtectedSendBinding: ProtectedSendBindingText(eventSnapshot, readinessStatus),
+            NewlineBinding: NewlineBindingText(eventSnapshot),
             ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
             ReadinessStatus: readinessStatus,
             ComposerProtected: readinessStatus == OsInteractionStatusIds.Protected,
             ProjectFilesProtected: false,
             ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
             ResidentProcess: true);
-        StateChanged?.Invoke(this, EventArgs.Empty);
+        PublishSnapshot(eventSnapshot with { State = state });
     }
 
     private static string NativeSubmitReadinessStatusAfterFlow(string flowStatus)
@@ -569,19 +524,20 @@ internal sealed class TrayProtectionController
             : OsInteractionStatusIds.Protected;
     }
 
-    private string NativeSubmitUnavailableStatus()
+    private static string NativeSubmitUnavailableStatus(ProtectionSnapshot snapshot)
     {
-        if (_nativeSubmitHookHost is null || _nativeSubmitController is null || _nativeSubmitRunner is null)
+        if (snapshot.RuntimeSet is null || snapshot.RuntimeSet.Runtimes.Count == 0)
         {
             return OsInteractionStatusIds.NotConfigured;
         }
 
-        return _nativeSubmitHookHost.LastErrorCode ?? OsInteractionStatusIds.DegradedHotkeyOnly;
+        return snapshot.RuntimeSet.HookHost.LastErrorCode ?? OsInteractionStatusIds.DegradedHotkeyOnly;
     }
 
     private TrayProtectionState CreateState(
         bool enabled,
         string lastStatus,
+        IReadOnlyList<NativeSubmitRuntime> runtimes,
         bool nativeSubmitEnabled = false,
         string nativeSubmitStatus = OsInteractionStatusIds.NotConfigured,
         bool setupRequired = false)
@@ -598,10 +554,10 @@ internal sealed class TrayProtectionController
             LastSubmitted: false,
             NativeSubmitEnabled: nativeSubmitEnabled,
             NativeSubmitStatus: nativeSubmitStatus,
-            ProtectedSendBinding: ProtectedSendBindingText(nativeSubmitStatus),
-            NewlineBinding: NewlineBindingText(),
+            ProtectedSendBinding: ProtectedSendBindingText(runtimes, nativeSubmitStatus),
+            NewlineBinding: NewlineBindingText(runtimes),
             ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
-            ReadinessStatus: ReadinessStatus(nativeSubmitStatus),
+            ReadinessStatus: ReadinessStatus(runtimes, nativeSubmitStatus),
             ComposerProtected: nativeSubmitStatus == OsInteractionStatusIds.Protected,
             ProjectFilesProtected: false,
             ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
@@ -609,48 +565,12 @@ internal sealed class TrayProtectionController
             SetupRequired: setupRequired);
     }
 
-    private ProtectionSnapshot CreateSnapshot(
-        long generation,
-        TrayProtectionState state,
-        INativeSubmitHookHost? hookHost,
-        NativeSubmitInterceptionController? controller,
-        Func<OsInteractionResult>? runner,
-        SubmitBindingProfile? profile,
-        IReadOnlyList<NativeSubmitRuntime> runtimes)
-    {
-        return new ProtectionSnapshot(
-            Generation: generation,
-            Mode: state.Mode,
-            Hotkey: state.Hotkey,
-            LastStatus: state.LastStatus,
-            LastDecision: state.LastDecision,
-            LastReplacementCount: state.LastReplacementCount,
-            LastProfileId: state.LastProfileId,
-            LastApplied: state.LastApplied,
-            LastSubmitted: state.LastSubmitted,
-            NativeSubmitEnabled: state.NativeSubmitEnabled,
-            NativeSubmitStatus: state.NativeSubmitStatus,
-            ProtectedSendBinding: state.ProtectedSendBinding,
-            NewlineBinding: state.NewlineBinding,
-            ManualScanHotkey: state.ManualScanHotkey,
-            ReadinessStatus: state.ReadinessStatus,
-            ComposerProtected: state.ComposerProtected,
-            ProjectFilesProtected: state.ProjectFilesProtected,
-            ProjectFileStatus: state.ProjectFileStatus,
-            ResidentProcess: state.ResidentProcess,
-            SetupRequired: state.SetupRequired,
-            HookHost: hookHost,
-            Controller: controller,
-            Runner: runner,
-            Profile: profile,
-            Runtimes: runtimes);
-    }
-
     private bool EnterprisePolicyBlocksDisable()
     {
+        var primaryRuntime = ReadSnapshot().RuntimeSet?.Runtimes.FirstOrDefault();
         return _enterprisePolicy.ManagedMode
-            && _nativeProfile is not null
-            && _enterprisePolicy.RequiredProfileIds.Contains(_nativeProfile.ProfileId, StringComparer.Ordinal);
+            && primaryRuntime is not null
+            && _enterprisePolicy.RequiredProfileIds.Contains(primaryRuntime.Profile.ProfileId, StringComparer.Ordinal);
     }
 
     private static ProtectionDisableResult DisableResult(
@@ -672,51 +592,78 @@ internal sealed class TrayProtectionController
             });
     }
 
-    private string ProtectedSendBindingText(string nativeSubmitStatus)
+    private static string ProtectedSendBindingText(
+        ProtectionSnapshot snapshot,
+        string nativeSubmitStatus)
     {
-        return nativeSubmitStatus == OsInteractionStatusIds.Protected && _nativeProfile?.SubmitBinding is not null
-            ? _nativeProfile.SubmitBinding.DisplayText
+        return ProtectedSendBindingText(snapshot.RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>(), nativeSubmitStatus);
+    }
+
+    private static string ProtectedSendBindingText(
+        IReadOnlyList<NativeSubmitRuntime> runtimes,
+        string nativeSubmitStatus)
+    {
+        var primaryRuntime = runtimes.FirstOrDefault();
+        return nativeSubmitStatus == OsInteractionStatusIds.Protected && primaryRuntime?.Profile.SubmitBinding is not null
+            ? primaryRuntime.Profile.SubmitBinding.DisplayText
             : "not_configured";
     }
 
-    private string NewlineBindingText()
+    private static string NewlineBindingText(ProtectionSnapshot snapshot)
     {
-        return _nativeProfile?.NewlineBinding?.DisplayText ?? "unknown";
+        return NewlineBindingText(snapshot.RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>());
     }
 
-    private string ReadinessStatus(string nativeSubmitStatus)
+    private static string NewlineBindingText(IReadOnlyList<NativeSubmitRuntime> runtimes)
     {
-        if (_nativeProfile is null)
+        return runtimes.FirstOrDefault()?.Profile.NewlineBinding?.DisplayText ?? "unknown";
+    }
+
+    private static string ReadinessStatus(
+        IReadOnlyList<NativeSubmitRuntime> runtimes,
+        string nativeSubmitStatus)
+    {
+        var primaryRuntime = runtimes.FirstOrDefault();
+        if (primaryRuntime is null)
         {
             return OsInteractionStatusIds.NotConfigured;
         }
 
         return nativeSubmitStatus == OsInteractionStatusIds.Protected
             ? OsInteractionStatusIds.Protected
-            : _nativeProfile.CapabilityStatus;
+            : primaryRuntime.Profile.CapabilityStatus;
     }
 
     private NativeSubmitInterceptionResult ClassifyNativeGesture(NativeKeyGesture gesture)
     {
-        var runtime = ResolveRuntime();
-        return runtime is null
-            ? (_nativeSubmitRuntimes.Count > 1
+        var snapshot = ReadSnapshot();
+        var runtime = ResolveRuntime(snapshot);
+        var result = runtime is null
+            ? (snapshot.RuntimeSet?.Runtimes.Count > 1
                 ? PassThroughPointer()
-                : _nativeSubmitController?.HandleGesture(gesture) ?? PassThroughPointer())
+                : snapshot.RuntimeSet?.Runtimes.FirstOrDefault()?.Controller.HandleGesture(gesture) ?? PassThroughPointer())
             : runtime.Controller.HandleGesture(gesture);
+        return RememberSnapshot(snapshot, result);
     }
 
-    private NativeSubmitRuntime? ResolveRuntime(TextSurfaceDiscoveryResult? knownSurface = null)
+    private NativeSubmitRuntime? ResolveRuntime(
+        ProtectionSnapshot snapshot,
+        TextSurfaceDiscoveryResult? knownSurface = null)
     {
-        if (_nativeSubmitRuntimes.Count == 1)
+        if (snapshot.RuntimeSet is null)
         {
-            return _nativeSubmitRuntimes[0];
+            return null;
+        }
+
+        if (snapshot.RuntimeSet.Runtimes.Count == 1)
+        {
+            return snapshot.RuntimeSet.Runtimes[0];
         }
 
         TextSurfaceDiscoveryResult discovery;
         try
         {
-            discovery = knownSurface ?? _activeSurfaceDiscovery();
+            discovery = knownSurface ?? snapshot.ActiveSurfaceDiscovery();
         }
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
         {
@@ -728,30 +675,65 @@ internal sealed class TrayProtectionController
             return null;
         }
 
-        return _nativeSubmitRuntimes.FirstOrDefault(runtime => string.Equals(
+        return snapshot.RuntimeSet.Runtimes.FirstOrDefault(runtime => string.Equals(
             runtime.Profile.ProfileId,
             discovery.Surface.ProfileId,
             StringComparison.Ordinal));
     }
 
-    private NativeSubmitRuntime? ResolveClassifiedRuntime(NativeSubmitInterceptionResult classification)
+    private static NativeSubmitRuntime? ResolveClassifiedRuntime(
+        ProtectionSnapshot snapshot,
+        NativeSubmitInterceptionResult classification)
     {
         if (!classification.Diagnostics.TryGetValue("profile_id", out var profileId))
         {
             return null;
         }
 
-        return _nativeSubmitRuntimes.FirstOrDefault(runtime => string.Equals(
+        return snapshot.RuntimeSet?.Runtimes.FirstOrDefault(runtime => string.Equals(
             runtime.Profile.ProfileId,
             profileId,
             StringComparison.Ordinal));
     }
 
-    private bool IsAnySelectedProfileSetupRequired()
+    private bool IsAnySelectedProfileSetupRequired(NativeSubmitRuntimeSet runtimeSet)
     {
-        return _nativeSubmitRuntimes.Any(runtime => runtime.Controller.IsSetupRequired(
+        return runtimeSet.Runtimes.Any(runtime => runtime.Controller.IsSetupRequired(
             _storageLayout,
             runtime.Profile.ProfileId));
+    }
+
+    private ProtectionSnapshot ReadSnapshot()
+    {
+        return Volatile.Read(ref _currentSnapshot);
+    }
+
+    private void PublishSnapshot(ProtectionSnapshot snapshot)
+    {
+        Volatile.Write(ref _currentSnapshot, snapshot);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private NativeSubmitInterceptionResult RememberSnapshot(
+        ProtectionSnapshot snapshot,
+        NativeSubmitInterceptionResult classification)
+    {
+        _classificationSnapshots.Add(classification, snapshot);
+        return classification;
+    }
+
+    private bool TryTakeSnapshot(
+        NativeSubmitInterceptionResult classification,
+        out ProtectionSnapshot snapshot)
+    {
+        if (_classificationSnapshots.TryGetValue(classification, out snapshot!))
+        {
+            _classificationSnapshots.Remove(classification);
+            return true;
+        }
+
+        snapshot = null!;
+        return false;
     }
 
     private static IReadOnlyList<NativeSubmitRuntime> CreateSingleRuntimeList(

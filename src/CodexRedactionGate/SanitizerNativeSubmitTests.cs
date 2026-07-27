@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using NUnit.Framework;
 using CodexRedactionGate;
 
@@ -1073,6 +1074,10 @@ public partial class SanitizerTests
 
         public bool Started { get; private set; }
 
+        public bool StartResult { get; set; } = true;
+
+        public Action<FakeNativeSubmitHookHost>? OnStarted { get; set; }
+
         public string? LastErrorCode { get; private set; }
 
         public bool Start(
@@ -1081,8 +1086,13 @@ public partial class SanitizerTests
         {
             _classify = classify;
             _onSuppressedSubmit = onSuppressedSubmit;
-            Started = true;
-            return true;
+            Started = StartResult;
+            if (Started)
+            {
+                OnStarted?.Invoke(this);
+            }
+
+            return Started;
         }
 
         public void Stop()
@@ -1490,6 +1500,151 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(codexCalls, Is.EqualTo(0));
         Assert.That(chatGptCalls, Is.EqualTo(1));
         Assert.That(controller.State.LastProfileId, Is.EqualTo("chatgpt-desktop"));
+    }
+
+    [Test]
+    public void TrayProtectionController_ReloadKeepsUsingPublishedSnapshotUntilCandidateIsPublished()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var candidateHook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var oldRunnerCalls = 0;
+        var candidateRunnerCalls = 0;
+        candidateHook.OnStarted = hook => hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                oldRunnerCalls++;
+                return CreateSubmittedResult(profile.ProfileId);
+            },
+            profile);
+        var candidateRuntime = new NativeSubmitRuntime(
+            candidateHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                candidateRunnerCalls++;
+                return CreateSubmittedResult(profile.ProfileId);
+            },
+            profile);
+
+        controller.Start();
+
+        var reloaded = controller.ReloadNativeSubmit(candidateRuntime);
+
+        Assert.That(reloaded, Is.True);
+        Assert.That(oldRunnerCalls, Is.EqualTo(1));
+        Assert.That(candidateRunnerCalls, Is.EqualTo(0));
+        candidateHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(candidateRunnerCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TrayProtectionController_FailedReloadKeepsPublishedSnapshotAndTrayState()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var failedHook = new FakeNativeSubmitHookHost { StartResult = false };
+        var profile = CreateProtectedProfile();
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        controller.Start();
+        var before = controller.GetCurrentSnapshot();
+        var failedRuntime = new NativeSubmitRuntime(
+            failedHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+
+        var reloaded = controller.ReloadNativeSubmit(failedRuntime);
+
+        Assert.That(reloaded, Is.False);
+        Assert.That(controller.GetCurrentSnapshot(), Is.SameAs(before));
+        Assert.That(controller.State, Is.EqualTo(before.State));
+        Assert.That(oldHook.Started, Is.True);
+        Assert.That(failedHook.Started, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_ReloadPublishesSnapshotWithMatchingTrayState()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var candidateHook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        controller.Start();
+        var candidateRuntime = new NativeSubmitRuntime(
+            candidateHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+
+        Assert.That(controller.ReloadNativeSubmit(candidateRuntime), Is.True);
+
+        Assert.That(controller.GetCurrentSnapshot().State, Is.EqualTo(controller.State));
+        Assert.That(controller.GetCurrentSnapshot().Generation, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TrayProtectionController_ConcurrentReloadRequestsPublishWholeGenerations()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var firstCandidateHook = new FakeNativeSubmitHookHost();
+        var secondCandidateHook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        controller.Start();
+        var firstRuntime = new NativeSubmitRuntime(
+            firstCandidateHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var secondRuntime = new NativeSubmitRuntime(
+            secondCandidateHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        using var start = new ManualResetEventSlim(false);
+
+        var firstReload = System.Threading.Tasks.Task.Run(() =>
+        {
+            start.Wait();
+            return controller.ReloadNativeSubmit(firstRuntime);
+        });
+        var secondReload = System.Threading.Tasks.Task.Run(() =>
+        {
+            start.Wait();
+            return controller.ReloadNativeSubmit(secondRuntime);
+        });
+        start.Set();
+        System.Threading.Tasks.Task.WaitAll(firstReload, secondReload);
+
+        Assert.That(firstReload.Result, Is.True);
+        Assert.That(secondReload.Result, Is.True);
+        Assert.That(controller.GetCurrentSnapshot().Generation, Is.EqualTo(2));
+        Assert.That(controller.GetCurrentSnapshot().State, Is.EqualTo(controller.State));
+        Assert.That(oldHook.Started, Is.False);
+        Assert.That(firstCandidateHook.Started ^ secondCandidateHook.Started, Is.True);
     }
 
     private static OsInteractionResult CreateSubmittedResult(string profileId)

@@ -599,6 +599,8 @@ public sealed class NativeSubmitInterceptionController
     private readonly IFirstRunSetupController? _firstRunSetupController;
     private readonly DefaultStorageLayout? _setupLayout;
 
+    internal SubmitBindingProfile Profile => _profile;
+
     public bool IsSetupRequired(DefaultStorageLayout layout, string? profileId = null)
     {
         if (_firstRunSetupController is null)
