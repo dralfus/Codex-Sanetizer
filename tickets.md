@@ -130,3 +130,73 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Per-user mutex continues to use `CodexRedactionGate_tray` (no prefix)
 - [ ] Code validates elevation before allowing global mutex creation
 - [ ] Documentation explains the elevation requirement and use cases
+
+## 260. Fix IsAnotherInstanceRunning to handle mutex reentrancy correctly
+
+**What to build:** Fix the mutex ownership check in `IsAnotherInstanceRunning` so it correctly detects whether another process owns the mutex, not just whether the current process can acquire it. The current implementation using `WaitOne(TimeSpan.Zero)` fails when the mutex is already owned by the current thread (re-entrant case) or when checking from a different context.
+
+**Blocked by:** 252. Wire per-user single-instance enforcement into the installed tray entry point.
+
+**Do not:** Change the existing API signature; rely on `Mutex.WaitOne()` without proper ownership tracking; or introduce race conditions between check and use.
+
+- [ ] `IsAnotherInstanceRunning` correctly identifies when another process owns the mutex
+- [ ] Implementation handles re-entrant scenarios where current thread already holds the mutex
+- [ ] Edge case: mutex is released but not closed (handle recycling scenario)
+- [ ] Tests cover: normal case, same-thread re-entrancy, process crash recovery
+- [ ] No race condition between `IsAnotherInstanceRunning` and `SingleInstanceEnforcement` constructor
+
+## 261. Make user notification configurable (optional/suppressible)
+
+**What to build:** Make the user notification shown when a second tray instance is blocked configurable via a registry setting or config file. Users should be able to suppress notifications entirely or choose notification type (toast vs balloon vs none).
+
+**Blocked by:** 258. Add user notification when second tray instance is blocked.
+
+**Do not:** Hard-code notification behavior; require recompilation for configuration changes; or expose setting to end users without clear documentation.
+
+- [ ] Add registry key `HKEY_CURRENT_USER\Software\CodexRedactionGate\SingleInstance` with notification settings
+- [ ] Setting `DisableNotification` (DWORD) suppresses all user notifications
+- [ ] Setting `NotificationType` (REG_SZ) allows: `toast`, `balloon`, `messagebox`, `none`
+- [ ] Default value shows notification with message box for compatibility
+- [ ] Configuration is read once at startup and cached
+
+## 262. Add unit tests for SingleInstanceEnforcement crash recovery
+
+**What to build:** Add unit tests that verify `SingleInstanceEnforcement` behaves correctly when a process crashes or is terminated unexpectedly while holding the mutex. The tests should verify that a subsequent launch can still detect and work correctly.
+
+**Blocked by:** 256. Add production integration tests for single-instance enforcement.
+
+**Do not:** Rely on actual process termination (flaky tests); skip testing mutex cleanup timing; or assume immediate cleanup after process exit.
+
+- [ ] Test simulates crash by letting OS clean up mutex on process exit
+- [ ] Test verifies second launch successfully detects new single instance
+- [ ] Test verifies `IsFirstInstance` is true for the new instance
+- [ ] Test verifies no stale state persists between crashes
+- [ ] Test covers multiple rapid crash-restart cycles
+
+## 263. Improve ActivateExistingInstance documentation and limitations
+
+**What to build:** Add comprehensive documentation to `ActivateExistingInstance` explaining the current implementation limitations and what would be required for full window activation. Include code comments about window handle storage requirements and Win32 API dependencies.
+
+**Blocked by:** 257. Implement actual window activation in ActivateExistingInstance.
+
+**Do not:** Remove current simplified implementation; add implementation details to public API; or document as "TODO" without concrete guidance.
+
+- [ ] XML documentation explains why window activation is not implemented
+- [ ] Comments describe required window handle storage mechanism (named shared memory)
+- [ ] Documentation references Win32 API functions needed: `FindWindow`, `SetForegroundWindow`
+- [ ] Document thread-safety requirements for handle storage
+- [ ] Add note about elevation requirements for cross-user scenarios
+
+## 264. Add localization support for user notifications
+
+**What to build:** Add localization infrastructure for user-facing notification messages. Notifications should be displayed in the user's preferred language based on system locale or registry setting.
+
+**Blocked by:** 258. Add user notification when second tray instance is blocked.
+
+**Do not:** Hard-code all message strings in English; require resource files for every language; or add complexity before localization is needed.
+
+- [ ] Notification messages stored in external resource files (`.resx`)
+- [ ] Default fallback to English if locale not supported
+- [ ] Supported locales: English (en-US), Russian (ru-RU), Chinese (zh-CN)
+- [ ] ResourceManager loads appropriate message based on current UI culture
+- [ ] No localization required for technical error details (stack traces, etc.)
