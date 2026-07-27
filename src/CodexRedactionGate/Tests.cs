@@ -1028,7 +1028,7 @@ public class HmacSecretProviderTests
             
             // Invalid length should throw DpapiSecretLoadFailureException
             var ex = Assert.Throws<DpapiSecretLoadFailureException>(() => provider.GetOrCreateSecret());
-            Assert.That(ex!.Message, Does.Contain("invalid length"));
+            Assert.That(ex!.Message, Is.EqualTo("Local protection initialization failed."));
         }
         finally
         {
@@ -4706,7 +4706,7 @@ public partial class SanitizerTests
 
         public bool Start(
             Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-            Action<NativeKeyGesture> onSuppressedSubmit)
+            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
         {
             ArgumentNullException.ThrowIfNull(classify);
             ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
@@ -6214,6 +6214,27 @@ public class CliTests
     }
 
     [Test]
+    public void PublicFailureText_NeverIncludesExceptionMessage()
+    {
+        var exception = new DpapiSecretLoadFailureException(new InvalidOperationException("PROMPT_SECRET_123 C:\\Users\\alexey.andreev"));
+
+        var text = PublicFailureText.Format(exception, "Local restore");
+
+        Assert.That(text, Does.Contain(DpapiSecretLoadFailureException.PublicStatusCode));
+        Assert.That(text, Does.Not.Contain("PROMPT_SECRET_123"));
+        Assert.That(text, Does.Not.Contain("alexey.andreev"));
+    }
+
+    [Test]
+    public void LocalCrashDiagnostics_DefaultDirectoryUsesOneSharedPath()
+    {
+        var directory = LocalCrashDiagnostics.DefaultReportsDirectory();
+
+        Assert.That(directory, Does.EndWith(Path.Combine("CodexRedactionGate", "crashes")));
+        Assert.That(LocalCrashDiagnostics.CreateDefault(), Is.Not.Null);
+    }
+
+    [Test]
     public void Main_UnknownArguments_PrintHelpAndDoNotCrash()
     {
         var (exitCode, stdout, stderr) = CaptureProgramOutput(() =>
@@ -6714,6 +6735,12 @@ public class SingleInstanceEnforcementTests
 
         Assert.That(capturedIncludeDiagnostics, Is.False);
     }
+
+    [Test]
+    public void WindowsTrayApp_SecondInstanceAlwaysProvidesVisibleOutcome()
+    {
+        Assert.That(WindowsTrayApp.ShouldNotifySecondInstance(), Is.True);
+    }
 }
 
 [TestFixture]
@@ -6724,6 +6751,62 @@ public class ResidentFirstRunSetupLaunchTests
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         return directory;
+    }
+
+    [Test]
+    public void FirstRunSetupLaunchCoordinator_UsesSelectedProfileSetNotAnyProtectedProfile()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Save(layout, new[]
+            {
+                new SubmitBindingProfile(
+                    "chatgpt-desktop",
+                    Enabled: true,
+                    BindingSource: "not_verified",
+                    SubmitBinding: null,
+                    NewlineBinding: null,
+                    CapabilityStatus: OsInteractionStatusIds.BindingUnknown,
+                    CompatibilityEvidence: null,
+                    Diagnostics: new Dictionary<string, string>())
+            });
+            var controller = new TestSetupController(_ => new FirstRunSetupResult(
+                Succeeded: true,
+                Code: "setup_complete",
+                State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", true, true),
+                Diagnostics: new Dictionary<string, string>()), statusSucceeded: false);
+
+            var result = new FirstRunSetupLaunchCoordinator(layout, controller).RunIfRequired();
+
+            Assert.That(controller.EnsureSetupCalls, Is.EqualTo(1));
+            Assert.That(result.Succeeded, Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupLaunchCoordinator_DoesNotRunSetupWhenEverySelectedProfileIsVerified()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var controller = new TestSetupController(_ => throw new AssertionException("setup should not run"), setupRequired: false);
+
+            var result = new FirstRunSetupLaunchCoordinator(layout, controller).RunIfRequired();
+
+            Assert.That(controller.EnsureSetupCalls, Is.EqualTo(0));
+            Assert.That(result.Code, Is.EqualTo("setup_complete"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
     }
 
     [Test]
@@ -6941,23 +7024,41 @@ public class ResidentFirstRunSetupLaunchTests
     private sealed class TestSetupController : IFirstRunSetupController
     {
         private readonly Func<DefaultStorageLayout, FirstRunSetupResult> _ensureSetupFunc;
+        private readonly bool _setupRequired;
+        private readonly bool _statusSucceeded;
+        public int EnsureSetupCalls { get; private set; }
 
-        public TestSetupController(Func<DefaultStorageLayout, FirstRunSetupResult> ensureSetupFunc)
+        public TestSetupController(
+            Func<DefaultStorageLayout, FirstRunSetupResult> ensureSetupFunc,
+            bool setupRequired = true,
+            bool statusSucceeded = true)
         {
             _ensureSetupFunc = ensureSetupFunc;
+            _setupRequired = setupRequired;
+            _statusSucceeded = statusSucceeded;
         }
 
         public FirstRunSetupResult EnsureSetup(DefaultStorageLayout layout)
         {
+            EnsureSetupCalls++;
             return _ensureSetupFunc(layout);
         }
 
         public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout, string? profileId = null)
         {
+            if (!_setupRequired)
+            {
+                return new FirstRunSetupResult(
+                    Succeeded: true,
+                    Code: "setup_complete",
+                    State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", true, true),
+                    Diagnostics: new Dictionary<string, string>());
+            }
+
             var storeResult = SubmitBindingProfileStore.Load(layout);
             var hasUnprotected = storeResult.Profiles.Any(p => !p.IsSetupComplete);
             return new FirstRunSetupResult(
-                Succeeded: true,
+                Succeeded: _statusSucceeded,
                 Code: hasUnprotected ? "setup_required" : "setup_complete",
                 State: new FirstRunSetupState(
                     Required: hasUnprotected,

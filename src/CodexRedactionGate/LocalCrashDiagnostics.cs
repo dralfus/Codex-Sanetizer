@@ -31,11 +31,20 @@ public sealed class LocalCrashDiagnostics
 
     public static void CaptureDefault(Exception ex, string component, string statusCode)
     {
-        var reportsDirectory = Path.Combine(
+        CreateDefault().Capture(ex, component, statusCode);
+    }
+
+    public static LocalCrashDiagnostics CreateDefault()
+    {
+        return new LocalCrashDiagnostics(DefaultReportsDirectory());
+    }
+
+    public static string DefaultReportsDirectory()
+    {
+        return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "CodexRedactionGate",
             "crashes");
-        new LocalCrashDiagnostics(reportsDirectory).Capture(ex, component, statusCode);
     }
 
     /// <summary>
@@ -152,5 +161,19 @@ public sealed class LocalCrashDiagnostics
         {
             return "unknown";
         }
+    }
+}
+
+internal static class PublicFailureText
+{
+    public static string Format(Exception exception, string operation)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operation);
+
+        var status = exception is DpapiSecretLoadFailureException
+            ? DpapiSecretLoadFailureException.PublicStatusCode
+            : "local_operation_failed";
+        return $"{operation} could not be completed. status={status}";
     }
 }

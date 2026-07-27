@@ -85,8 +85,9 @@ internal sealed class LocalRestoreForm : Form
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException)
         {
+            LocalCrashDiagnostics.CaptureDefault(exception, "local_restore", "local_restore_failed");
             MessageBox.Show(
-                exception.Message,
+                PublicFailureText.Format(exception, "Local restore"),
                 "Codex Redaction Gate - Local restore failed",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);

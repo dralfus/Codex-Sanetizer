@@ -20,12 +20,7 @@ public static class Program
         {
             try
             {
-                var crashDiag = new LocalCrashDiagnostics(
-                    Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "CodexRedactionGate",
-                        "crashes"));
-                crashDiag.Capture((Exception)args.ExceptionObject, "appdomain_unhandled");
+                LocalCrashDiagnostics.CaptureDefault((Exception)args.ExceptionObject, "appdomain_unhandled", "unhandled_exception");
             }
             catch
             {
@@ -37,12 +32,7 @@ public static class Program
         {
             try
             {
-                var crashDiag = new LocalCrashDiagnostics(
-                    Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "CodexRedactionGate",
-                        "crashes"));
-                crashDiag.Capture(args.Exception, "ui_thread");
+                LocalCrashDiagnostics.CaptureDefault(args.Exception, "ui_thread", "ui_thread_exception");
             }
             catch
             {

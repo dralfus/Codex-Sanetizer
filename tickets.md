@@ -18,6 +18,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Setup completion is evaluated for the selected profile set, not merely because any profile is protected.
 - [ ] Selecting a new Send/newline pair immediately invalidates the old protected profile; only the successfully verified pair becomes protected.
 - [ ] The tray replaces/restarts the live native controller and hook with the newly verified profile, and tray status reports the same active pair.
+- [ ] The previous resident hook remains active until a replacement hook has started successfully; a replacement failure restores the prior protected runtime.
 - [ ] Cancellation, timeout, storage failure, and unexpected setup exception leave the app fail-closed with raw-free diagnostics.
 - [ ] Tests cover empty store, two selected profiles, binding change from protected state, resident reload, setup cancel/failure, and no raw submission.
 
@@ -209,6 +210,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 - [ ] Setup is scheduled after the tray message loop begins and does not block hook dispatch.
 - [ ] A selected Send during setup is suppressed with a raw-free `setup_required` result.
+- [ ] An unexpected setup-worker failure produces a visible raw-free retry path while protection remains blocked.
 - [ ] Regression test covers the real application-context lifecycle without a live cloud submission.
 
 ## 266. Route resident interception across every selected verified profile
@@ -219,6 +221,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 - [ ] The resident controller dispatches by the active selected profile.
 - [ ] Each enabled profile owns its verified binding and a failure for one does not unprotect another.
+- [ ] The profile selected during interception is carried into the deferred sanitize/send flow; a focus change cannot redirect the flow to a different composer.
 - [ ] Tests cover both profiles in one persisted store.
 
 ## 267. Make selected Send-control classification fail closed and bounded
@@ -230,6 +233,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] A selected Send candidate is never passed through because UIA discovery failed or its localized label changed.
 - [ ] Keyboard and mouse callback exceptions after a selected Send candidate fail closed rather than calling through to the original input.
 - [ ] UIA work is bounded outside the low-level hook callback and hook-loss is surfaced as a raw-free degraded state.
+- [ ] An unproven callback failure in an unrelated application does not suppress ordinary keyboard or mouse input.
 - [ ] Tests cover localized evidence, transient UIA failure, and non-Send controls.
 
 ## 268. Remove raw exception messages from all interactive UI failure paths

@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace CodexRedactionGate;
@@ -37,7 +39,8 @@ public static class WindowsTrayApp
         // Single instance enforcement - second launch should activate existing instance and exit
         if (SingleInstanceEnforcement.IsAnotherInstanceRunning("tray", useGlobalMutex))
         {
-            if (!SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex))
+            SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
+            if (ShouldNotifySecondInstance())
             {
                 ShowAlreadyRunningNotification(SingleInstanceNotificationSettings.Load());
             }
@@ -48,6 +51,10 @@ public static class WindowsTrayApp
         if (!enforcement.IsFirstInstance)
         {
             SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
+            if (ShouldNotifySecondInstance())
+            {
+                ShowAlreadyRunningNotification(SingleInstanceNotificationSettings.Load());
+            }
             return 0;
         }
 
@@ -60,7 +67,7 @@ public static class WindowsTrayApp
             new WindowsTrayLocalCommandLauncher(),
             new MessageBoxTrayProtectionDisableConfirmation(),
             enforcement,
-            () => CreateNativeSubmitRuntime(sanitizer, layout));
+            () => CreateNativeSubmitRuntimeSet(sanitizer, layout));
         Application.Run(context);
         return 0;
     }
@@ -99,13 +106,20 @@ public static class WindowsTrayApp
         }
     }
 
+    internal static bool ShouldNotifySecondInstance()
+    {
+        // Foregrounding the resident's hidden activation window is not a user-visible outcome.
+        return true;
+    }
+
     internal static TrayProtectionController CreateController(ISanitizer sanitizer, DefaultStorageLayout? layout = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
 
         var settings = HotkeySettingsStore.Load(layout ?? DefaultStorageLayout.CreateDefault());
         var resolvedLayout = layout ?? DefaultStorageLayout.CreateDefault();
-        var runtime = CreateNativeSubmitRuntime(sanitizer, resolvedLayout);
+        var runtimeSet = CreateNativeSubmitRuntimeSet(sanitizer, resolvedLayout);
+        var runtime = runtimeSet?.Runtimes.FirstOrDefault();
         var nativeProfile = runtime?.Profile;
         var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
         var activeSurfaceDiscovery = WindowsActiveSurfaceDiscovery.CreateDefault();
@@ -127,55 +141,79 @@ public static class WindowsTrayApp
             runtime?.Runner,
             nativeProfile,
             storageLayout: resolvedLayout,
-            sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault());
+            sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault(),
+            nativeSubmitRuntimes: runtimeSet?.Runtimes,
+            activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface);
     }
 
     internal static NativeSubmitRuntime? CreateNativeSubmitRuntime(ISanitizer sanitizer, DefaultStorageLayout layout)
     {
+        return CreateNativeSubmitRuntimeSet(sanitizer, layout)?.Runtimes.FirstOrDefault();
+    }
+
+    internal static NativeSubmitRuntimeSet? CreateNativeSubmitRuntimeSet(ISanitizer sanitizer, DefaultStorageLayout layout)
+    {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
 
-        var nativeProfile = ResolveNativeProfileForProtection(layout);
-        if (nativeProfile is null)
+        var profiles = ResolveNativeProfilesForProtection(layout);
+        if (profiles.Count == 0)
         {
             return null;
         }
 
+        var hookHost = new WindowsNativeSubmitHookHost();
         var activeSurfaceDiscovery = WindowsActiveSurfaceDiscovery.CreateDefault();
-        var controller = new NativeSubmitInterceptionController(
-            nativeProfile,
-            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
-            firstRunSetupController: new FirstRunSetupController(),
-            setupLayout: layout);
-        return new NativeSubmitRuntime(
-            new WindowsNativeSubmitHookHost(),
-            controller,
-            () =>
-            {
-                var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
-                var nativeSubmitOrchestrator = new OsInteractionOrchestrator(
-                    sanitizer,
-                    WindowsFocusedComposerDiscovery.CreateDefault(),
-                    nativeSubmitAdapter,
-                    nativeSubmitAdapter,
-                    new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
-                    new WindowsConfirmationOverlay());
-                return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
-            },
-            nativeProfile);
+        var runtimes = profiles.Select(nativeProfile =>
+        {
+            var controller = new NativeSubmitInterceptionController(
+                nativeProfile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
+                firstRunSetupController: new FirstRunSetupController(),
+                setupLayout: layout);
+            return new NativeSubmitRuntime(
+                hookHost,
+                controller,
+                () =>
+                {
+                    var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
+                    var nativeSubmitOrchestrator = new OsInteractionOrchestrator(
+                        sanitizer,
+                        WindowsFocusedComposerDiscovery.CreateDefault(),
+                        nativeSubmitAdapter,
+                        nativeSubmitAdapter,
+                        new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
+                        new WindowsConfirmationOverlay());
+                    return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
+                },
+                nativeProfile);
+        }).ToArray();
+        return new NativeSubmitRuntimeSet(hookHost, runtimes);
     }
 
     internal static SubmitBindingProfile? ResolveNativeProfileForProtection(DefaultStorageLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
+        return ResolveNativeProfilesForProtection(layout).FirstOrDefault();
+    }
+
+    internal static IReadOnlyList<SubmitBindingProfile> ResolveNativeProfilesForProtection(DefaultStorageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
         var profiles = SubmitBindingProfileStore.Load(layout).Profiles;
-        // Prefer setup-complete profiles, then protected profiles, then any profile
-        return profiles.FirstOrDefault(profile => profile.IsSetupComplete)
-            ?? profiles.FirstOrDefault(profile => profile.IsProtected)
-            ?? profiles.FirstOrDefault()
-            ?? FirstRunSetupController.CreateDefaultSetupProfile("codex-desktop");
+        if (profiles.Count == 0)
+        {
+            return new[]
+            {
+                FirstRunSetupController.CreateDefaultSetupProfile("codex-desktop")!,
+                FirstRunSetupController.CreateDefaultSetupProfile("chatgpt-desktop")!
+            };
+        }
+
+        return profiles.Where(profile => profile.Enabled).ToArray();
     }
 }
 
@@ -218,7 +256,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _toggleItem;
     private readonly ToolStripMenuItem _versionItem;
     private readonly SingleInstanceEnforcement? _singleInstanceEnforcement;
-    private readonly Func<NativeSubmitRuntime?>? _nativeSubmitRuntimeFactory;
+    private readonly Func<NativeSubmitRuntimeSet?>? _nativeSubmitRuntimeFactory;
+    private readonly Func<IFirstRunSetupController> _firstRunSetupControllerFactory;
+    private int _firstRunSetupScheduled;
 
     public WindowsTrayApplicationContext(TrayProtectionController controller)
         : this(controller, DefaultStorageLayout.CreateDefault(), new WindowsTrayLocalCommandLauncher())
@@ -246,19 +286,18 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         ITrayLocalCommandLauncher commandLauncher,
         ITrayProtectionDisableConfirmation disableConfirmation,
         SingleInstanceEnforcement? singleInstanceEnforcement = null,
-        Func<NativeSubmitRuntime?>? nativeSubmitRuntimeFactory = null)
+        Func<NativeSubmitRuntimeSet?>? nativeSubmitRuntimeFactory = null,
+        Func<IFirstRunSetupController>? firstRunSetupControllerFactory = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
         _commandLauncher = commandLauncher ?? throw new ArgumentNullException(nameof(commandLauncher));
         _disableConfirmation = disableConfirmation ?? throw new ArgumentNullException(nameof(disableConfirmation));
         _buildVersion = BuildVersion.Current;
-        _crashDiagnostics = new LocalCrashDiagnostics(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CodexRedactionGate",
-            "crashes"));
+        _crashDiagnostics = LocalCrashDiagnostics.CreateDefault();
         _singleInstanceEnforcement = singleInstanceEnforcement;
         _nativeSubmitRuntimeFactory = nativeSubmitRuntimeFactory;
+        _firstRunSetupControllerFactory = firstRunSetupControllerFactory ?? (() => new FirstRunSetupController());
 
         _activationWindow = new Form
         {
@@ -306,50 +345,74 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             ShowStartupFailure();
         }
 
-        // Launch first-run setup if no protected profile exists (ticket 232)
-        LaunchFirstRunSetupIfRequired();
+        // Begin only after Application.Run starts pumping messages. The native hook
+        // has already been registered and must remain dispatchable while setup waits.
+        ScheduleFirstRunSetupIfRequired();
     }
 
-    private void LaunchFirstRunSetupIfRequired()
+    private void ScheduleFirstRunSetupIfRequired()
     {
+        if (Interlocked.Exchange(ref _firstRunSetupScheduled, 1) != 0)
+        {
+            return;
+        }
+
         try
         {
-            // Check if no protected profiles exist
-            var profilesResult = SubmitBindingProfileStore.Load(_layout);
-            var hasProtectedProfile = profilesResult.Profiles.Any(p => p.IsProtected && p.Enabled);
-            var hasSetupComplete = profilesResult.Profiles.Any(p => p.IsSetupComplete);
-
-            if (!hasSetupComplete)
-            {
-                // Launch first-run setup
-                var setupController = new FirstRunSetupController();
-                var setupResult = setupController.EnsureSetup(_layout);
-
-                // Only refresh status if setup succeeded and profile is setup complete
-                if (setupResult.Succeeded)
-                {
-                    // Wait for setup completion and verify profile is setup complete
-                    var finalStatus = setupController.GetSetupStatus(_layout);
-                    if (!finalStatus.State.Required)
-                    {
-                        var runtime = _nativeSubmitRuntimeFactory?.Invoke();
-                        if (runtime is not null)
-                        {
-                            _controller.ReloadNativeSubmit(runtime);
-                        }
-                    }
-                }
-            }
+            _activationWindow.BeginInvoke(new MethodInvoker(() =>
+                ThreadPool.QueueUserWorkItem(_ => RunFirstRunSetupWorker())));
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+        catch (InvalidOperationException)
+        {
+            // The application is already closing; the setup gate stays fail-closed.
+        }
+    }
+
+    private void RunFirstRunSetupWorker()
+    {
+        FirstRunSetupResult? result = null;
+        try
+        {
+            result = new FirstRunSetupLaunchCoordinator(_layout, _firstRunSetupControllerFactory()).RunIfRequired();
+        }
+        catch (Exception exception)
         {
             LocalCrashDiagnostics.CaptureDefault(exception, "first_run_setup", "setup_failed");
+        }
+
+        if (!_activationWindow.IsDisposed)
+        {
+            try
+            {
+                _activationWindow.BeginInvoke(new MethodInvoker(() => CompleteFirstRunSetup(result)));
+            }
+            catch (InvalidOperationException)
+            {
+                // The application is already closing; no runtime reload is needed.
+            }
+        }
+    }
+
+    private void CompleteFirstRunSetup(FirstRunSetupResult? result)
+    {
+        if (result?.Succeeded == true && !result.State.Required)
+        {
+            var runtimeSet = _nativeSubmitRuntimeFactory?.Invoke();
+            if (runtimeSet is not null)
+            {
+                _controller.ReloadNativeSubmit(runtimeSet);
+            }
+        }
+        else if (result is null || result.Code != "setup_cancelled")
+        {
             MessageBox.Show(
-                "Setup could not be completed. Protected Send remains blocked until verification succeeds.",
+                "Setup could not be completed. Protected Send remains blocked until verification succeeds. Open profile verification from the tray to retry.",
                 "Codex Redaction Gate - Setup required",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
+
+        RefreshStatus();
     }
 
     protected override void Dispose(bool disposing)
@@ -401,8 +464,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {
+            _crashDiagnostics.Capture(exception, "tray_command", "command_failed");
             MessageBox.Show(
-                exception.Message,
+                PublicFailureText.Format(exception, "Command"),
                 "Codex Redaction Gate - Command failed",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -418,8 +482,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
+            _crashDiagnostics.Capture(exception, "local_restore", "local_restore_failed");
             MessageBox.Show(
-                exception.Message,
+                PublicFailureText.Format(exception, "Local restore"),
                 "Codex Redaction Gate - Local restore failed",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -435,8 +500,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
+            _crashDiagnostics.Capture(exception, "dictionary_management", "dictionary_management_failed");
             MessageBox.Show(
-                exception.Message,
+                PublicFailureText.Format(exception, "Sensitive terms"),
                 "Codex Redaction Gate - Sensitive terms failed",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);

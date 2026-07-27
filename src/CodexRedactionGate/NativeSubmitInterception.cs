@@ -766,7 +766,10 @@ public sealed class NativeSubmitInterceptionController
             return PassThrough(diagnostics);
         }
 
-        var setupCandidateGesture = !_profile.IsSetupComplete && IsSetupCandidateGesture(gesture);
+        // A binding change is persisted before it is verified. Consult the store
+        // on the guarded path so the old in-memory binding cannot become a raw
+        // submission bypass while the tray is waiting to reload its runtime.
+        var setupCandidateGesture = IsProfileSetupRequired() && IsSetupCandidateGesture(gesture);
         if (_profile.NewlineBinding?.Matches(gesture) == true && !setupCandidateGesture)
         {
             diagnostics["pass_through_reason"] = "newline_binding";
@@ -840,6 +843,27 @@ public sealed class NativeSubmitInterceptionController
                 Diagnostics: diagnostics);
         }
 
+        return CompleteGuardedSubmit(
+            new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.NativeSubmitGuarded,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: diagnostics),
+            submitFlow);
+    }
+
+    public NativeSubmitInterceptionResult CompleteGuardedSubmit(
+        NativeSubmitInterceptionResult classification,
+        Func<OsInteractionResult> submitFlow)
+    {
+        ArgumentNullException.ThrowIfNull(classification);
+        ArgumentNullException.ThrowIfNull(submitFlow);
+        if (classification.Status != OsInteractionStatusIds.NativeSubmitGuarded || !classification.SuppressOriginalInput)
+        {
+            return classification;
+        }
+
         OsInteractionResult flowResult;
         try
         {
@@ -849,9 +873,12 @@ public sealed class NativeSubmitInterceptionController
         {
             // Exception was caught by OsInteractionOrchestrator.RunOnce and returned as FailedClosed
             // This catch block should never be hit in normal operation
-            diagnostics["flow_exception"] = "true";
-            diagnostics["exception_type"] = ex.GetType().FullName ?? ex.GetType().Name;
-            diagnostics["exception_status"] = "native_submit_flow_failure";
+            var diagnostics = new Dictionary<string, string>(classification.Diagnostics, StringComparer.Ordinal)
+            {
+                ["flow_exception"] = "true",
+                ["exception_type"] = ex.GetType().FullName ?? ex.GetType().Name,
+                ["exception_status"] = "native_submit_flow_failure"
+            };
             return new NativeSubmitInterceptionResult(
                 OsInteractionStatusIds.FailedClosed,
                 SuppressOriginalInput: true,
@@ -860,14 +887,14 @@ public sealed class NativeSubmitInterceptionController
                 Diagnostics: diagnostics);
         }
 
-        diagnostics = new Dictionary<string, string>(Merge(diagnostics, flowResult.Diagnostics), StringComparer.Ordinal);
-        diagnostics["flow_status"] = flowResult.Status;
+        var completedDiagnostics = new Dictionary<string, string>(Merge(classification.Diagnostics, flowResult.Diagnostics), StringComparer.Ordinal);
+        completedDiagnostics["flow_status"] = flowResult.Status;
         return new NativeSubmitInterceptionResult(
             flowResult.Status,
             SuppressOriginalInput: true,
             Applied: flowResult.Applied,
             Submitted: flowResult.Submitted,
-            Diagnostics: diagnostics);
+            Diagnostics: completedDiagnostics);
     }
 
     private NativeSubmitInterceptionResult? EvaluateEnterpriseEnforcement(bool hookHealthy)
@@ -1012,7 +1039,7 @@ public sealed class NativeSubmitInterceptionController
         }
 
         var setupLayout = _setupLayout ?? DefaultStorageLayout.CreateDefault();
-        var setupResult = _firstRunSetupController.GetSetupStatus(setupLayout);
+        var setupResult = _firstRunSetupController.GetSetupStatus(setupLayout, _profile.ProfileId);
         if (setupResult.Succeeded && !setupResult.State.Required)
         {
             return null;
@@ -1038,6 +1065,18 @@ public sealed class NativeSubmitInterceptionController
         return string.Equals(gesture.Key, "ENTER", StringComparison.OrdinalIgnoreCase)
             && !gesture.Alt
             && !gesture.Shift;
+    }
+
+    private bool IsProfileSetupRequired()
+    {
+        if (_firstRunSetupController is null)
+        {
+            return !_profile.IsSetupComplete;
+        }
+
+        var setupLayout = _setupLayout ?? DefaultStorageLayout.CreateDefault();
+        var result = _firstRunSetupController.GetSetupStatus(setupLayout, _profile.ProfileId);
+        return !result.Succeeded || result.State.Required;
     }
 
     private static IReadOnlyDictionary<string, string> Merge(
@@ -1112,7 +1151,7 @@ internal interface INativeSubmitHookHost
 
     bool Start(
         Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativeKeyGesture> onSuppressedSubmit);
+        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit);
 
     void Stop();
 }
@@ -1121,7 +1160,7 @@ internal interface INativeSubmitPointerHookHost
 {
     bool StartPointer(
         Func<NativePointerGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativePointerGesture> onSuppressedSubmit);
+        Action<NativePointerGesture, NativeSubmitInterceptionResult> onSuppressedSubmit);
 }
 
 internal sealed class UnavailableNativeSubmitHookHost : INativeSubmitHookHost
@@ -1137,7 +1176,7 @@ internal sealed class UnavailableNativeSubmitHookHost : INativeSubmitHookHost
 
     public bool Start(
         Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativeKeyGesture> onSuppressedSubmit)
+        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
     {
         ArgumentNullException.ThrowIfNull(classify);
         ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
@@ -1167,9 +1206,9 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     private IntPtr _hook;
     private IntPtr _mouseHook;
     private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
-    private Action<NativeKeyGesture>? _onSuppressedSubmit;
+    private Action<NativeKeyGesture, NativeSubmitInterceptionResult>? _onSuppressedSubmit;
     private Func<NativePointerGesture, NativeSubmitInterceptionResult>? _classifyPointer;
-    private Action<NativePointerGesture>? _onSuppressedPointerSubmit;
+    private Action<NativePointerGesture, NativeSubmitInterceptionResult>? _onSuppressedPointerSubmit;
 
     public WindowsNativeSubmitHookHost()
     {
@@ -1181,7 +1220,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     public bool Start(
         Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativeKeyGesture> onSuppressedSubmit)
+        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
     {
         ArgumentNullException.ThrowIfNull(classify);
         ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
@@ -1236,7 +1275,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     public bool StartPointer(
         Func<NativePointerGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativePointerGesture> onSuppressedSubmit)
+        Action<NativePointerGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
     {
         ArgumentNullException.ThrowIfNull(classify);
         ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
@@ -1294,7 +1333,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         {
             result = _classify(gesture);
         }
-        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        catch (Exception)
         {
             LastErrorCode = "native_submit_hook_callback_failed";
             return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
@@ -1307,7 +1346,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
         {
-            ThreadPool.QueueUserWorkItem(_ => _onSuppressedSubmit(gesture));
+            ThreadPool.QueueUserWorkItem(_ => _onSuppressedSubmit(gesture, result));
         }
 
         return new IntPtr(1);
@@ -1327,7 +1366,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         {
             result = _classifyPointer(gesture);
         }
-        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or COMException)
+        catch (Exception)
         {
             LastErrorCode = "native_send_control_hook_callback_failed";
             return NativeMethods.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
@@ -1340,7 +1379,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
         {
-            ThreadPool.QueueUserWorkItem(_ => _onSuppressedPointerSubmit(gesture));
+            ThreadPool.QueueUserWorkItem(_ => _onSuppressedPointerSubmit(gesture, result));
         }
 
         return new IntPtr(1);
@@ -1611,6 +1650,7 @@ public static class NativeSubmitProductSmokeRunner
         };
     }
 
+
     private static bool RunSetupEnforcementSmoke()
     {
         var directory = Path.Combine(Path.GetTempPath(), "CodexRedactionGate", "product-smoke", Guid.NewGuid().ToString("N"));
@@ -1816,13 +1856,13 @@ public static class NativeSubmitProductSmokeRunner
     private sealed class SmokeNativeSubmitHookHost : INativeSubmitHookHost
     {
         private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
-        private Action<NativeKeyGesture>? _onSuppressedSubmit;
+        private Action<NativeKeyGesture, NativeSubmitInterceptionResult>? _onSuppressedSubmit;
 
         public string? LastErrorCode { get; private set; }
 
         public bool Start(
             Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-            Action<NativeKeyGesture> onSuppressedSubmit)
+            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
         {
             _classify = classify ?? throw new ArgumentNullException(nameof(classify));
             _onSuppressedSubmit = onSuppressedSubmit ?? throw new ArgumentNullException(nameof(onSuppressedSubmit));
@@ -1841,7 +1881,7 @@ public static class NativeSubmitProductSmokeRunner
             var result = _classify!(gesture);
             if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
             {
-                _onSuppressedSubmit!(gesture);
+                _onSuppressedSubmit!(gesture, result);
             }
         }
     }

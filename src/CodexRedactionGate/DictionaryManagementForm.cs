@@ -314,7 +314,8 @@ internal sealed class DictionaryManagementForm : Form
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            SetStatus($"Load failed: {exception.Message}");
+            LocalCrashDiagnostics.CaptureDefault(exception, "dictionary_management", "dictionary_load_failed");
+            SetStatus(PublicFailureText.Format(exception, "Load"));
         }
         finally
         {
@@ -378,7 +379,8 @@ internal sealed class DictionaryManagementForm : Form
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            SetStatus($"Test failed: {exception.Message}");
+            LocalCrashDiagnostics.CaptureDefault(exception, "dictionary_management", "dictionary_test_failed");
+            SetStatus(PublicFailureText.Format(exception, "Test"));
         }
     }
 

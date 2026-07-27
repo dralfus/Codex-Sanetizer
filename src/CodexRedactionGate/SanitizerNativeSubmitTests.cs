@@ -727,7 +727,7 @@ public partial class SanitizerTests
                 (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by VerifyProfile."));
 
             var result = controller.VerifyProfile("codex-desktop", layout);
-            var stored = SubmitBindingProfileStore.Load(layout).Profiles.Single();
+            var stored = SubmitBindingProfileStore.Load(layout).Profiles.Single(profile => profile.ProfileId == "codex-desktop");
 
             Assert.That(result.Succeeded, Is.True);
             Assert.That(stored.IsProtected, Is.True);
@@ -817,7 +817,7 @@ public partial class SanitizerTests
                 (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by VerifyProfile."));
 
             var result = controller.VerifyProfile("codex-desktop", layout);
-            var stored = SubmitBindingProfileStore.Load(layout).Profiles.Single();
+            var stored = SubmitBindingProfileStore.Load(layout).Profiles.Single(profile => profile.ProfileId == "codex-desktop");
 
             Assert.That(result.Succeeded, Is.False);
             Assert.That(stored.IsProtected, Is.False);
@@ -901,11 +901,13 @@ public partial class SanitizerTests
                 (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by VerifyProfile."));
 
             var result = controller.VerifyProfile("codex-desktop", layout);
-            var stored = SubmitBindingProfileStore.Load(layout).Profiles.Single();
+            var stored = SubmitBindingProfileStore.Load(layout).Profiles;
+            var codexProfile = stored.Single(profile => profile.ProfileId == "codex-desktop");
+            var chatGptProfile = stored.Single(profile => profile.ProfileId == "chatgpt-desktop");
 
             Assert.That(result.Succeeded, Is.True);
-            Assert.That(stored.ProfileId, Is.EqualTo("codex-desktop"));
-            Assert.That(stored.IsProtected, Is.True);
+            Assert.That(codexProfile.IsProtected, Is.True);
+            Assert.That(chatGptProfile.IsProtected, Is.False);
         }
         finally
         {
@@ -1064,10 +1066,10 @@ public partial class SanitizerTests
         }
     }
 
-    private sealed class FakeNativeSubmitHookHost : INativeSubmitHookHost
+    internal sealed class FakeNativeSubmitHookHost : INativeSubmitHookHost
     {
         private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
-        private Action<NativeKeyGesture>? _onSuppressedSubmit;
+        private Action<NativeKeyGesture, NativeSubmitInterceptionResult>? _onSuppressedSubmit;
 
         public bool Started { get; private set; }
 
@@ -1075,7 +1077,7 @@ public partial class SanitizerTests
 
         public bool Start(
             Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-            Action<NativeKeyGesture> onSuppressedSubmit)
+            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
         {
             _classify = classify;
             _onSuppressedSubmit = onSuppressedSubmit;
@@ -1095,12 +1097,12 @@ public partial class SanitizerTests
             var result = _classify!(gesture);
             if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
             {
-                _onSuppressedSubmit!(gesture);
+                _onSuppressedSubmit!(gesture, result);
             }
         }
     }
 
-    private sealed class FakeTrayHotkeyHost : ITrayHotkeyHost
+    internal sealed class FakeTrayHotkeyHost : ITrayHotkeyHost
     {
         public HotkeyBinding Binding { get; } = new("fake-hotkey", "Ctrl+Enter", "test");
 
@@ -1405,6 +1407,101 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
         Assert.That(result.SuppressOriginalInput, Is.True);
         Assert.That(result.Submitted, Is.False);
+    }
+
+    [Test]
+    public void NativeSubmitInterception_BindingChangeBlocksNewSubmitBeforeRuntimeReload()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var oldProfile = CreateProtectedProfile();
+            var changedProfile = oldProfile with
+            {
+                BindingSource = "not_verified",
+                CapabilityStatus = OsInteractionStatusIds.BindingUnknown,
+                SubmitBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+                NewlineBinding = SubmitKeyBinding.Parse("Enter").Binding
+            };
+            SubmitBindingProfileStore.Save(layout, new[] { changedProfile });
+            var controller = new NativeSubmitInterceptionController(
+                oldProfile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+                firstRunSetupController: new FirstRunSetupController(),
+                setupLayout: layout);
+
+            var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+            Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
+            Assert.That(result.SuppressOriginalInput, Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void TrayProtectionController_RoutesProtectedSendToTheActiveSelectedProfile()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var codexProfile = CreateProtectedProfile() with { ProfileId = "codex-desktop" };
+        var chatGptProfile = CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" };
+        var codexCalls = 0;
+        var chatGptCalls = 0;
+        var runtimes = new[]
+        {
+            new NativeSubmitRuntime(
+                hook,
+                new NativeSubmitInterceptionController(codexProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                    activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop"))),
+                () =>
+                {
+                    codexCalls++;
+                    return CreateSubmittedResult("codex-desktop");
+                },
+                codexProfile),
+            new NativeSubmitRuntime(
+                hook,
+                new NativeSubmitInterceptionController(chatGptProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                    activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"))),
+                () =>
+                {
+                    chatGptCalls++;
+                    return CreateSubmittedResult("chatgpt-desktop");
+                },
+                chatGptProfile)
+        };
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            runtimes[0].Controller,
+            runtimes[0].Runner,
+            runtimes[0].Profile,
+            nativeSubmitRuntimes: runtimes,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
+
+        controller.Start();
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(codexCalls, Is.EqualTo(0));
+        Assert.That(chatGptCalls, Is.EqualTo(1));
+        Assert.That(controller.State.LastProfileId, Is.EqualTo("chatgpt-desktop"));
+    }
+
+    private static OsInteractionResult CreateSubmittedResult(string profileId)
+    {
+        return new OsInteractionResult(
+            OsInteractionStatusIds.Submitted,
+            CreateNativeSubmitSurface(profileId),
+            null,
+            null,
+            Applied: true,
+            Submitted: true,
+            Diagnostics: new Dictionary<string, string> { ["profile_id"] = profileId });
     }
 
     [Test]

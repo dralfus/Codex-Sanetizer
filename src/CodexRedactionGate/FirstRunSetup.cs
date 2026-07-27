@@ -30,6 +30,34 @@ public interface IFirstRunSetupController
     bool IsSetupComplete(DefaultStorageLayout layout);
 }
 
+/// <summary>
+/// Executes first-run setup without making the resident hook decide setup state
+/// from an arbitrary protected profile. The caller owns scheduling; this class
+/// deliberately has no WinForms dependency so the decision is regression-testable.
+/// </summary>
+internal sealed class FirstRunSetupLaunchCoordinator
+{
+    private readonly DefaultStorageLayout _layout;
+    private readonly IFirstRunSetupController _setupController;
+
+    public FirstRunSetupLaunchCoordinator(DefaultStorageLayout layout, IFirstRunSetupController setupController)
+    {
+        _layout = layout ?? throw new ArgumentNullException(nameof(layout));
+        _setupController = setupController ?? throw new ArgumentNullException(nameof(setupController));
+    }
+
+    public FirstRunSetupResult RunIfRequired()
+    {
+        var status = _setupController.GetSetupStatus(_layout);
+        if (!status.State.Required)
+        {
+            return status;
+        }
+
+        return _setupController.EnsureSetup(_layout);
+    }
+}
+
 internal interface IFirstRunProfileVerifier
 {
     SubmitBindingProfile Verify(SubmitBindingProfile profile);
@@ -205,66 +233,40 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         ArgumentNullException.ThrowIfNull(layout);
 
         var storeResult = SubmitBindingProfileStore.Load(layout);
-        var profile = storeResult.Profiles
+        var visibleProfiles = SetupVisibleProfiles(storeResult.Profiles);
+        var profile = visibleProfiles
             .FirstOrDefault(p => string.Equals(p.ProfileId, profileId, StringComparison.Ordinal));
 
         if (profile is null)
         {
-            profile = CreateDefaultSetupProfile(profileId);
-            if (profile is null)
-            {
-                return new FirstRunSetupResult(
-                    Succeeded: false,
-                    Code: "profile_not_found",
-                    State: CreateSetupState(storeResult.Profiles),
-                    Diagnostics: new Dictionary<string, string>
-                    {
-                        ["profile_id"] = profileId
-                    });
-            }
+            return new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "profile_not_found",
+                State: CreateSetupState(visibleProfiles),
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = profileId
+                });
         }
 
         var verifiedProfile = _profileVerifier.Verify(profile);
-
-        // Only the profile being verified changes state. Other explicitly selected
-        // profiles retain their own verification state.
-        if (verifiedProfile.IsSetupComplete)
+        var updatedProfiles = visibleProfiles
+            .Where(p => !string.Equals(p.ProfileId, profileId, StringComparison.Ordinal))
+            .Append(verifiedProfile)
+            .OrderBy(p => p.ProfileId, StringComparer.Ordinal)
+            .ToArray();
+        var batchSaveResult = SubmitBindingProfileStore.Save(layout, updatedProfiles);
+        if (!batchSaveResult.Succeeded)
         {
-            var uniqueProfiles = storeResult.Profiles
-                .Where(p => !string.Equals(p.ProfileId, profileId, StringComparison.Ordinal))
-                .Append(verifiedProfile)
-                .OrderBy(p => p.ProfileId, StringComparer.Ordinal)
-                .ToArray();
-            var batchSaveResult = SubmitBindingProfileStore.Save(layout, uniqueProfiles);
-            if (!batchSaveResult.Succeeded)
-            {
-                var profiles = (IReadOnlyList<SubmitBindingProfile>)storeResult.Profiles;
-                return new FirstRunSetupResult(
-                    Succeeded: false,
-                    Code: "profile_batch_update_failed",
-                    State: CreateSetupState(profiles, profileId),
-                    Diagnostics: new Dictionary<string, string>
-                    {
-                        ["profile_id"] = profileId,
-                        ["save_status"] = batchSaveResult.Code
-                    });
-            }
-        }
-        else
-        {
-            var saveResult = SubmitBindingProfileStore.Upsert(layout, verifiedProfile);
-            if (!saveResult.Succeeded)
-            {
-                return new FirstRunSetupResult(
-                    Succeeded: false,
-                    Code: "profile_update_failed",
-                    State: CreateSetupState(storeResult.Profiles),
-                    Diagnostics: new Dictionary<string, string>
-                    {
-                        ["profile_id"] = profileId,
-                        ["save_status"] = saveResult.Code
-                    });
-            }
+            return new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "profile_batch_update_failed",
+                State: CreateSetupState(visibleProfiles, profileId),
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = profileId,
+                    ["save_status"] = batchSaveResult.Code
+                });
         }
 
         var updatedStatus = GetSetupStatus(layout);
@@ -320,13 +322,10 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
     {
         ArgumentNullException.ThrowIfNull(profiles);
 
-        return profiles.Count == 0
-            ? new[]
-            {
-                CreateDefaultSetupProfile("codex-desktop")!,
-                CreateDefaultSetupProfile("chatgpt-desktop")!
-            }
-            : profiles;
+        var requiredDefaults = new[] { "codex-desktop", "chatgpt-desktop" }
+            .Where(profileId => !profiles.Any(profile => string.Equals(profile.ProfileId, profileId, StringComparison.Ordinal)))
+            .Select(profileId => CreateDefaultSetupProfile(profileId)!);
+        return profiles.Concat(requiredDefaults).ToArray();
     }
 
     private static FirstRunSetupState CreateSetupState(IReadOnlyList<SubmitBindingProfile> profiles)
@@ -420,6 +419,7 @@ internal sealed class FirstRunSetupForm : Form
     private RadioButton? _enterSendRadioButton;
     private RadioButton? _ctrlEnterSendRadioButton;
     private Label? _bindingPairLabel;
+    private readonly Dictionary<string, ProfileCardState> _profileCards = new(StringComparer.Ordinal);
 
     public bool SetupCompleted => _setupCompleted;
 
@@ -535,7 +535,8 @@ internal sealed class FirstRunSetupForm : Form
         foreach (var profile in _profiles)
         {
             var profileCard = CreateProfileCard(profile);
-            profilesFlow.Controls.Add(profileCard);
+            _profileCards.Add(profile.ProfileId, profileCard);
+            profilesFlow.Controls.Add(profileCard.Container);
         }
 
         profilesPanel.Controls.Add(profilesFlow);
@@ -622,7 +623,7 @@ internal sealed class FirstRunSetupForm : Form
         return (string.Empty, string.Empty);
     }
 
-    private Panel CreateProfileCard(SubmitBindingProfile profile)
+    private ProfileCardState CreateProfileCard(SubmitBindingProfile profile)
     {
         var card = new Panel
         {
@@ -671,7 +672,7 @@ internal sealed class FirstRunSetupForm : Form
         card.Controls.Add(statusLabel);
         card.Controls.Add(detailsLabel);
 
-        return card;
+        return new ProfileCardState(card, statusLabel, detailsLabel);
     }
 
     private void OnVerifyProfile(string profileId)
@@ -703,23 +704,13 @@ internal sealed class FirstRunSetupForm : Form
             };
 
             // Update UI to show verification in progress
-            var card = FindProfileCard(profileId);
+            _profileCards.TryGetValue(profileId, out var card);
             if (card is not null)
             {
-                var statusLabel = card.Controls.OfType<Label>().FirstOrDefault(l => l.Text == "○ Not verified" || l.Text == "✓ Protected");
-                if (statusLabel is not null)
-                {
-                    statusLabel.Text = "⟳ Verifying...";
-                    statusLabel.ForeColor = Color.Orange;
-                }
-
-                // Update details label to show selected bindings
-                var detailsLabel = card.Controls.OfType<Label>().FirstOrDefault(l => l.Text.Contains("Submit:") && l.Text.Contains("Newline:"));
-                if (detailsLabel is not null)
-                {
-                    detailsLabel.Text = $"Submit: {selectedSubmit} | Newline: {selectedNewline}";
-                    detailsLabel.ForeColor = Color.Black;
-                }
+                card.StatusLabel.Text = "⟳ Verifying...";
+                card.StatusLabel.ForeColor = Color.Orange;
+                card.DetailsLabel.Text = $"Submit: {selectedSubmit} | Newline: {selectedNewline}";
+                card.DetailsLabel.ForeColor = Color.Black;
             }
 
             TopMost = false;
@@ -752,15 +743,8 @@ internal sealed class FirstRunSetupForm : Form
 
             if (card is not null)
             {
-                var statusLabel = card.Controls.OfType<Label>().FirstOrDefault(l =>
-                    l.Text == "⟳ Verifying..."
-                    || l.Text == "○ Not verified"
-                    || l.Text == "✓ Protected");
-                if (statusLabel is not null)
-                {
-                    statusLabel.Text = result.Succeeded ? "✓ Protected" : "○ Not verified";
-                    statusLabel.ForeColor = result.Succeeded ? Color.Green : Color.Gray;
-                }
+                card.StatusLabel.Text = result.Succeeded ? "✓ Protected" : "○ Not verified";
+                card.StatusLabel.ForeColor = result.Succeeded ? Color.Green : Color.Gray;
             }
 
             if (!result.Succeeded)
@@ -781,34 +765,7 @@ internal sealed class FirstRunSetupForm : Form
         }
     }
 
-    private Panel? FindProfileCard(string profileId)
-    {
-        // Walk the controls hierarchy to find the panel for this profile
-        foreach (Control control in Controls)
-        {
-            if (control is Panel panel)
-            {
-                foreach (Control innerControl in panel.Controls)
-                {
-                    if (innerControl is FlowLayoutPanel flow)
-                    {
-                        foreach (Control card in flow.Controls)
-                        {
-                            if (card is Panel cardPanel)
-                            {
-                                var label = cardPanel.Controls.OfType<Label>().FirstOrDefault();
-                                if (label is not null && label.Text == profileId)
-                                {
-                                    return cardPanel;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return null;
-    }
+    private sealed record ProfileCardState(Panel Container, Label StatusLabel, Label DetailsLabel);
 
     private void OnSkipSetup()
     {

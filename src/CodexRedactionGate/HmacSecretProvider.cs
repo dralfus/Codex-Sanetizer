@@ -124,15 +124,21 @@ public sealed class DpapiProtectedHmacSecretProvider
         }
         catch (Exception ex) when (ex is Win32Exception || ex is CryptographicException || ex is InvalidOperationException)
         {
-            throw new DpapiSecretLoadFailureException($"Failed to load HMAC secret: {ex.Message}", ex);
+            throw new DpapiSecretLoadFailureException(ex);
         }
     }
 }
 
 public sealed class DpapiSecretLoadFailureException : InvalidOperationException
 {
+    public const string PublicStatusCode = "local_protection_initialization_failed";
+
     public DpapiSecretLoadFailureException(string message) : base(message) { }
-    public DpapiSecretLoadFailureException(string message, Exception inner) : base(message, inner) { }
+
+    public DpapiSecretLoadFailureException(Exception inner)
+        : base("Local protection initialization failed.", inner)
+    {
+    }
 }
 
 public sealed class WindowsDpapiDataProtector : IDataProtector
