@@ -6810,19 +6810,19 @@ public class ResidentFirstRunSetupLaunchTests
             return _ensureSetupFunc(layout);
         }
 
-        public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout)
+        public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout, string? profileId = null)
         {
             var storeResult = SubmitBindingProfileStore.Load(layout);
-            var hasUnprotected = storeResult.Profiles.Any(p => !p.IsProtected);
+            var hasUnprotected = storeResult.Profiles.Any(p => !p.IsSetupComplete);
             return new FirstRunSetupResult(
                 Succeeded: true,
                 Code: hasUnprotected ? "setup_required" : "setup_complete",
                 State: new FirstRunSetupState(
                     Required: hasUnprotected,
-                    UnprotectedProfileIds: storeResult.Profiles.Where(p => !p.IsProtected).Select(p => p.ProfileId).ToArray(),
+                    UnprotectedProfileIds: storeResult.Profiles.Where(p => !p.IsSetupComplete).Select(p => p.ProfileId).ToArray(),
                     Status: hasUnprotected ? "incomplete" : "complete",
-                    VerifiedCodex: storeResult.Profiles.Any(p => p.ProfileId == "codex-desktop" && p.IsProtected),
-                    VerifiedChatGpt: storeResult.Profiles.Any(p => p.ProfileId == "chatgpt-desktop" && p.IsProtected)),
+                    VerifiedCodex: storeResult.Profiles.Any(p => p.ProfileId == "codex-desktop" && p.IsSetupComplete),
+                    VerifiedChatGpt: storeResult.Profiles.Any(p => p.ProfileId == "chatgpt-desktop" && p.IsSetupComplete)),
                 Diagnostics: new Dictionary<string, string>());
         }
 

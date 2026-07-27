@@ -94,7 +94,7 @@ internal sealed class TrayProtectionController
             try
             {
                 var setupLayout = DefaultStorageLayout.CreateDefault();
-                setupRequired = _nativeSubmitController.IsSetupRequired(setupLayout);
+                setupRequired = _nativeSubmitController.IsSetupRequired(setupLayout, _nativeProfile?.ProfileId);
             }
             catch
             {

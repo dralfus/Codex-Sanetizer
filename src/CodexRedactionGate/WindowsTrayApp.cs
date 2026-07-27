@@ -84,7 +84,9 @@ public static class WindowsTrayApp
         ArgumentNullException.ThrowIfNull(layout);
 
         var profiles = SubmitBindingProfileStore.Load(layout).Profiles;
-        return profiles.FirstOrDefault(profile => profile.IsProtected)
+        // Prefer setup-complete profiles, then protected profiles, then any profile
+        return profiles.FirstOrDefault(profile => profile.IsSetupComplete)
+            ?? profiles.FirstOrDefault(profile => profile.IsProtected)
             ?? profiles.FirstOrDefault()
             ?? FirstRunSetupController.CreateDefaultSetupProfile("codex-desktop");
     }
@@ -209,21 +211,22 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             // Check if no protected profiles exist
             var profilesResult = SubmitBindingProfileStore.Load(_layout);
             var hasProtectedProfile = profilesResult.Profiles.Any(p => p.IsProtected && p.Enabled);
+            var hasSetupComplete = profilesResult.Profiles.Any(p => p.IsSetupComplete);
 
-            if (!hasProtectedProfile)
+            if (!hasSetupComplete)
             {
                 // Launch first-run setup
                 var setupController = new FirstRunSetupController();
                 var setupResult = setupController.EnsureSetup(_layout);
 
-                // Only refresh status if setup succeeded and profile is protected
+                // Only refresh status if setup succeeded and profile is setup complete
                 if (setupResult.Succeeded)
                 {
-                    // Wait for setup completion and verify profile is protected
+                    // Wait for setup completion and verify profile is setup complete
                     var finalStatus = setupController.GetSetupStatus(_layout);
                     if (!finalStatus.State.Required)
                     {
-                        // Profile is protected, safe to refresh status
+                        // Profile is setup complete, safe to refresh status
                         RefreshStatus();
                     }
                 }

@@ -1161,7 +1161,7 @@ public partial class SanitizerTests
             return _result;
         }
 
-        public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout)
+        public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout, string? profileId = null)
         {
             return _result;
         }

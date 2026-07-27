@@ -25,7 +25,7 @@ public sealed record FirstRunSetupResult(
 public interface IFirstRunSetupController
 {
     FirstRunSetupResult EnsureSetup(DefaultStorageLayout layout);
-    FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout);
+    FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout, string? profileId = null);
     FirstRunSetupResult VerifyProfile(string profileId, DefaultStorageLayout layout);
     bool IsSetupComplete(DefaultStorageLayout layout);
 }
@@ -157,7 +157,7 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
             }));
     }
 
-    public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout)
+    public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout, string? profileId = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
@@ -174,7 +174,9 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
                 });
         }
 
-        var state = CreateSetupState(storeResult.Profiles);
+        var state = profileId is null
+            ? CreateSetupState(storeResult.Profiles)
+            : CreateSetupState(storeResult.Profiles, profileId);
         return new FirstRunSetupResult(
             Succeeded: !state.Required,
             Code: state.Required ? "setup_required" : "setup_complete",
@@ -213,19 +215,62 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         }
 
         var verifiedProfile = _profileVerifier.Verify(profile);
-        var saveResult = SubmitBindingProfileStore.Upsert(layout, verifiedProfile);
 
-        if (!saveResult.Succeeded)
+        // Invalidate old protected profile if the new profile is setup complete
+        // This ensures only one profile can be in protected state
+        if (verifiedProfile.IsSetupComplete)
         {
-            return new FirstRunSetupResult(
-                Succeeded: false,
-                Code: "profile_update_failed",
-                State: CreateSetupState(storeResult.Profiles),
-                Diagnostics: new Dictionary<string, string>
+            // Get updated profiles list if we created a new profile
+            var profilesToUpdate = profile.ProfileId != profileId ? storeResult.Profiles : storeResult.Profiles;
+            var updatedProfiles = profilesToUpdate.Select(p =>
+            {
+                if (string.Equals(p.ProfileId, profileId, StringComparison.Ordinal))
                 {
-                    ["profile_id"] = profileId,
-                    ["save_status"] = saveResult.Code
-                });
+                    return verifiedProfile;
+                }
+                // Invalidate old protected profile by setting CapabilityStatus to BindingUnknown
+                if (p.IsProtected)
+                {
+                    return p with
+                    {
+                        CapabilityStatus = OsInteractionStatusIds.BindingUnknown,
+                        BindingSource = "not_verified"
+                    };
+                }
+                return p;
+            }).Append(verifiedProfile).ToArray();
+            // Filter out duplicate profileId before saving - keep the first occurrence (verifiedProfile)
+            var uniqueProfiles = updatedProfiles.GroupBy(p => p.ProfileId).Select(g => g.First()).ToArray();
+            var batchSaveResult = SubmitBindingProfileStore.Save(layout, uniqueProfiles);
+            if (!batchSaveResult.Succeeded)
+            {
+                var profiles = (IReadOnlyList<SubmitBindingProfile>)storeResult.Profiles;
+                return new FirstRunSetupResult(
+                    Succeeded: false,
+                    Code: "profile_batch_update_failed",
+                    State: CreateSetupState(profiles, profileId),
+                    Diagnostics: new Dictionary<string, string>
+                    {
+                        ["profile_id"] = profileId,
+                        ["save_status"] = batchSaveResult.Code
+                    });
+            }
+        }
+        else
+        {
+            var saveResult = SubmitBindingProfileStore.Upsert(layout, verifiedProfile);
+            if (!saveResult.Succeeded)
+            {
+                return new FirstRunSetupResult(
+                    Succeeded: false,
+                    Code: "profile_update_failed",
+                    State: CreateSetupState(storeResult.Profiles),
+                    Diagnostics: new Dictionary<string, string>
+                    {
+                        ["profile_id"] = profileId,
+                        ["save_status"] = saveResult.Code
+                    });
+            }
         }
 
         var updatedStatus = GetSetupStatus(layout);
@@ -293,10 +338,10 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
     private static FirstRunSetupState CreateSetupState(IReadOnlyList<SubmitBindingProfile> profiles)
     {
         var visibleProfiles = SetupVisibleProfiles(profiles);
-        var anyProtected = visibleProfiles.Any(p => p.IsProtected);
-        var unprotected = anyProtected
+        var anySetupComplete = visibleProfiles.Any(p => p.IsSetupComplete);
+        var unprotected = anySetupComplete
             ? Array.Empty<string>()
-            : visibleProfiles.Where(p => !p.IsProtected).Select(p => p.ProfileId).ToArray();
+            : visibleProfiles.Where(p => !p.IsSetupComplete).Select(p => p.ProfileId).ToArray();
         var codexProfile = visibleProfiles.FirstOrDefault(p => string.Equals(p.ProfileId, "codex-desktop", StringComparison.Ordinal));
         var chatGptProfile = visibleProfiles.FirstOrDefault(p => string.Equals(p.ProfileId, "chatgpt-desktop", StringComparison.Ordinal));
 
@@ -304,8 +349,22 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
             Required: unprotected.Length > 0,
             UnprotectedProfileIds: unprotected,
             Status: unprotected.Length == 0 ? "complete" : "pending",
-            VerifiedCodex: codexProfile?.IsProtected ?? false,
-            VerifiedChatGpt: chatGptProfile?.IsProtected ?? false);
+            VerifiedCodex: codexProfile?.IsSetupComplete ?? false,
+            VerifiedChatGpt: chatGptProfile?.IsSetupComplete ?? false);
+    }
+
+    private static FirstRunSetupState CreateSetupState(IReadOnlyList<SubmitBindingProfile> profiles, string profileId)
+    {
+        var visibleProfiles = SetupVisibleProfiles(profiles);
+        var selectedProfile = visibleProfiles.FirstOrDefault(p => string.Equals(p.ProfileId, profileId, StringComparison.Ordinal));
+        var setupComplete = selectedProfile?.IsSetupComplete ?? false;
+
+        return new FirstRunSetupState(
+            Required: !setupComplete,
+            UnprotectedProfileIds: setupComplete ? Array.Empty<string>() : new[] { profileId },
+            Status: setupComplete ? "complete" : "pending",
+            VerifiedCodex: profileId == "codex-desktop" && setupComplete,
+            VerifiedChatGpt: profileId == "chatgpt-desktop" && setupComplete);
     }
 
     private static void SetSetupComplete(DefaultStorageLayout layout)

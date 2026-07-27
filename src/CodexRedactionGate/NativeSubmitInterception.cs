@@ -216,6 +216,10 @@ public sealed record SubmitBindingProfile(
         && SubmitBinding is not null
         && NewlineBinding is not null;
 
+    public bool IsSetupComplete => BindingSource is "user_verified" or "product_verified"
+        && SubmitBinding is not null
+        && NewlineBinding is not null;
+
     public IReadOnlyDictionary<string, string> ToRawFreeDiagnostics()
     {
         var diagnostics = new Dictionary<string, string>(Diagnostics, StringComparer.Ordinal)
@@ -592,14 +596,14 @@ public sealed class NativeSubmitInterceptionController
     private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
     private readonly IFirstRunSetupController? _firstRunSetupController;
 
-    public bool IsSetupRequired(DefaultStorageLayout layout)
+    public bool IsSetupRequired(DefaultStorageLayout layout, string? profileId = null)
     {
         if (_firstRunSetupController is null)
         {
             return false;
         }
 
-        var setupResult = _firstRunSetupController.GetSetupStatus(layout);
+        var setupResult = _firstRunSetupController.GetSetupStatus(layout, profileId ?? _profile.ProfileId);
         return !setupResult.Succeeded || setupResult.State.Required;
     }
 
