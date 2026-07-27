@@ -43,6 +43,28 @@ The OS adapter seam is intentionally platform-neutral above the concrete adapter
 
 Native submit interception protects the composer submit path only. It does not, by itself, protect a full coding-agent workflow where project files are read from disk and sent to the model as context. Project-file protection requires a separate file-context broker that owns file reads, supported text extraction, sanitized virtual file delivery, restore-aware writes and raw-free evidence for every file-derived cloud-bound payload. This boundary is captured in `adr/ADR-005-project-file-context-requires-a-restore-aware-broker.md`.
 
+### Resident Protection State
+
+The Windows native adapter is a resident protection state machine. Its safety decision must not be reconstructed from independent mutable fields while a profile reload, setup change, hook replacement, or deferred overlay flow is in progress.
+
+The adapter therefore publishes one immutable, versioned resident-protection snapshot. It includes the selected profile set and their verified bindings, hook readiness, the guarded submit flow, UI Automation/classification capability, and the captured-target contract. A native input callback reads one snapshot and completes its decision from that snapshot alone.
+
+Snapshot publication is transactional: build and validate a candidate first, start any required hook resources, then atomically publish the complete candidate. If candidate creation or activation fails, the previous complete snapshot remains active. Readers must never observe a mixture of profiles/bindings from one generation and controller, runner, or hook state from another.
+
+Every native input event uses this decision table:
+
+| Context at the event boundary | Decision |
+| --- | --- |
+| Input is outside a selected AI client | Pass through; it is outside Code Sanitizer's protected boundary. |
+| Selected AI client, verified non-Send control or newline binding | Pass through unchanged. |
+| Selected AI client, verified Send control/binding | Suppress first; run local sanitization and only an approved safe submission path. |
+| Selected AI client, uncertain composer, Send-control identity, hook health, UI Automation, setup state, or target validity | Suppress and report raw-free degraded/setup status. Do not submit. |
+| Deferred approval/replay cannot revalidate the initiating target | Abort raw-free. Do not rediscover the current foreground window and redirect the attempt. |
+
+The target identity and snapshot generation captured for the original gesture travel with deferred sanitization, confirmation, and replay. A later focus change cannot redirect that attempt to another composer. The normal cloud-bound paths remain: a locally verified prompt without sensitive terms, locally verified sanitized text approved in the overlay, or the separately confirmed one-shot emergency bypass. No cancellation, reload failure, exception, or stale state may create an additional pass-through path.
+
+The highest resident-adapter test seam is an application-context/native-hook lifecycle harness that injects a classified input event and observes suppression, status, and approved replay. Unit tests support that seam, but release readiness requires lifecycle evidence covering startup, setup, reload, target change, and repeated sends.
+
 ### Redaction Engine
 
 Pure local library that transforms text.

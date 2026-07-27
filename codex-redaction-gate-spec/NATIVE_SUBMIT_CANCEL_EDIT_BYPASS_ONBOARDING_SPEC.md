@@ -49,6 +49,8 @@ At runtime, Code Sanitizer must intercept only the exact configured Send shortcu
 15. As a Codex/ChatGPT Desktop user, I want ordinary `Enter`, newline input, and skill-selection controls to keep working when they are not my configured Send action, so that protection does not make the AI app unusable.
 16. As a security reviewer, I want CS to intercept the exact verified Send action and identifiable Send button only, so that raw sensitive prompts cannot leave while unrelated application input is not blocked.
 17. As a user, I want only one resident CS instance to own input protection, so that duplicate tray processes cannot produce conflicting keyboard behavior.
+18. As a Codex/ChatGPT Desktop user, I want one coherent protection state for each Send attempt, so that reload, setup, and deferred confirmation cannot combine stale and current state into a raw pass-through.
+19. As a user of other Windows applications, I want Code Sanitizer to distinguish selected-client uncertainty from unrelated input, so that it fails closed at the cloud boundary without disrupting ordinary applications.
 
 ## Implementation Decisions
 
@@ -71,6 +73,10 @@ At runtime, Code Sanitizer must intercept only the exact configured Send shortcu
 - The native hook must use the stored, verified profile binding for matching. It must not contain a ChatGPT- or Codex-specific hard-coded `Enter` assumption.
 - The hook may fail closed for the stored Send shortcut on an identifiable Send control in the selected protected AI app. It must pass through that shortcut on non-Send controls and pass through every non-Send shortcut, including the stored newline shortcut.
 - The resident tray process must enforce a per-user single-instance boundary. A second launch must not register another input hook; it should foreground the existing tray UI or exit with a raw-free status.
+- Native resident protection is published as one immutable, versioned snapshot containing selected profiles and bindings, hook readiness, the guarded submit flow, classification capability, and target identity rules. A callback reads exactly one snapshot and cannot combine independently changing fields.
+- Candidate reload/setup state is fully validated before atomic publication. If activation fails, the prior complete snapshot remains active. A selected AI Send attempt must not be released during a transition or because the candidate cannot be published.
+- The event decision matrix is fixed: verified selected Send suppresses and guards; verified selected non-Send/newline passes; uncertainty inside a selected AI client suppresses with raw-free status; uncertainty outside selected AI clients passes through. This distinction prevents both cloud leakage and global keyboard interference.
+- Deferred sanitize, overlay, and replay work carries the captured snapshot generation and composer/window identity. It must abort raw-free if that exact target cannot be revalidated; it must not use a later foreground-window lookup.
 
 ## Testing Decisions
 
@@ -84,6 +90,8 @@ At runtime, Code Sanitizer must intercept only the exact configured Send shortcu
 - Native-hook tests must prove that with `Ctrl+Enter` as Send, `Enter` passes through in the verified composer and unrelated selected-app controls, while `Ctrl+Enter` is suppressed and guarded. The inverse pair must have symmetric coverage.
 - Tests must prove that keyboard interaction with non-Send controls, including skill selection, remains available; an identifiable selected-app Send button remains fail-closed for keyboard and mouse activation.
 - Resident-process tests must prove that a second launch does not create a second hook-owning tray instance.
+- Lifecycle tests must prove atomic snapshot publication, rollback to the prior snapshot after failed reload, and the selected-client versus unrelated-client uncertainty matrix.
+- Deferred-flow tests must prove that changing focus after suppression cannot redirect replay and instead results in raw-free abort.
 - The installed-app release checklist must include a manual verification for each supported binding pair and must report the saved profile binding before sensitive test input is entered.
 
 ## Out of Scope

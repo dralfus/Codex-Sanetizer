@@ -72,6 +72,10 @@ The mapping table must be user-global across projects. The same real URL, domain
 54. As a Codex/ChatGPT Desktop user, I want to select and verify my effective Send/newline shortcut pair, so that Code Sanitizer protects the shortcut that really submits my prompt rather than assuming `Enter`.
 55. As a Codex/ChatGPT Desktop user, I want normal editing and non-Send controls to retain their keyboard behavior, so that protection does not block `Enter`, multiline input, or skill selection when those are not my configured Send action.
 56. As a Windows user, I want only one resident Code Sanitizer instance to own the input hook, so that duplicate tray processes cannot produce conflicting interception behavior.
+57. As a Codex/ChatGPT Desktop user, I want each Send decision to use one complete resident protection state, so that profile reloads, setup changes, and hook replacement cannot mix old and new protection data.
+58. As a Codex/ChatGPT Desktop user, I want an uncertain selected AI Send attempt to stop locally, so that a transient UI Automation, hook, or focus failure cannot release my prompt to the cloud.
+59. As a user of other Windows applications, I want uncertainty outside a selected AI client to leave my input alone, so that Code Sanitizer does not interfere with unrelated work.
+60. As a maintainer, I want a release gate based on real resident lifecycle evidence, so that a collection of isolated unit tests cannot falsely prove protected submission.
 
 ## Implementation Decisions
 
@@ -104,6 +108,12 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Each AI surface profile must store both `submit_binding` and `newline_binding`. The adapter may claim `protected` only when it can distinguish them for the active focused composer.
 - Selecting a different binding pair invalidates the old protected binding until delayed focused verification succeeds. A cancelled, failed, or timed-out change must leave the profile unprotected rather than retaining a stale protected binding.
 - The native hook must pass through non-Send keys and keyboard use of non-Send controls, including ordinary `Enter` when `Ctrl+Enter` is the configured Send binding. It may suppress the configured binding fail-closed only for the verified composer or an identifiable selected-app Send control.
+- Resident protection state is an immutable, versioned snapshot published atomically. A snapshot contains the selected profile set and verified bindings, hook readiness, controller/runner needed to guard a submit, and the target identity contract. A native input event reads exactly one snapshot; it must never assemble a decision from separately mutable profile, controller, runner, or hook fields.
+- Reload is transactional: build and verify a candidate snapshot first, then publish it in one operation. A failed candidate preserves the previous complete snapshot. No event may observe a controller from one generation with bindings, profiles, or a hook from another generation.
+- The selected-client decision contract is explicit. For a selected AI client, a verified non-Send control passes through, a verified Send control is suppressed and guarded, and uncertainty in composer identity, Send-control identity, hook health, UI Automation, or target validity blocks the submission with raw-free status. Input outside a selected AI client remains outside the protected boundary and continues normally.
+- Deferred sanitize/confirm/replay work must receive the snapshot generation and the composer/window target identity captured for the original gesture. It must not rediscover the foreground target later. If the captured target is invalid, changed, or cannot be verified before replay, it aborts raw-free and does not submit.
+- The only normal cloud-submission paths from a selected protected surface remain: no sensitive terms after local processing, verified sanitized text from the replacement overlay, or the separately confirmed one-shot emergency bypass. A stale runtime state, failed reload, cancelled overlay, or uncertain target is never a fourth path.
+- Work that changes native protection must be delivered as a complete vertical state transition with its regression evidence. Installer, notification, and cosmetic work cannot be used as proof that the protected-send core is complete.
 - The resident tray app must enforce one hook-owning instance per user. A second launch must foreground or signal the existing instance and exit without registering another keyboard hook.
 - The tray/menu status must distinguish `protected` from `not_configured`, `binding_unknown`, `surface_unverified` and `degraded_hotkey_only`.
 - Native submit interception must include a visible, raw-free emergency disable path and hook-health watchdog. An emergency action disables protection temporarily; it must not silently send the raw prompt.
@@ -150,6 +160,10 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Native profile verification tests should cover delayed focused-composer verification, raw-free output, and command/tray discoverability for both Codex Desktop and ChatGPT Desktop.
 - Product smoke must continue to exercise the Windows Codex/ChatGPT native submit readiness path every run, including selected-profile gating and raw-free status reporting.
 - Native submit regression tests should trigger repeated protected Send gestures and prove the overlay/sanitizer path runs for each attempt, not only the first one.
+- Resident-state tests must exercise the externally visible decision matrix for selected verified Send, selected verified non-Send, selected uncertain, and unrelated uncertain input. They must prove the selected uncertain case is suppressed while unrelated input continues.
+- Runtime reload tests must prove that an event sees one complete snapshot generation, that failed replacement retains the previous working snapshot, and that no mixed profile/binding/controller/runner state is observable.
+- Deferred-flow tests must prove replay targets the composer/window captured for the initiating gesture and aborts raw-free when that target changes or cannot be revalidated.
+- Release smoke must exercise the real resident application-context lifecycle and native-hook seam, rather than infer protection from file presence, constants, or isolated helper tests.
 - Native submit regression tests should cover Cancel followed by another Send with the same or edited composer text and prove the sanitizer/confirmation path runs again.
 - Confirmation overlay tests should cover manual editing of sanitized text, verification before submit, rejection of edited text that reintroduces sensitive values, and explicit emergency bypass behavior.
 - First-run setup tests should cover installer-launched resident startup with no protected profile, active delayed-focus setup, and fail-closed submit attempts before setup completes.

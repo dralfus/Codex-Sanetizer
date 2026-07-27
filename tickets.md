@@ -2,15 +2,42 @@
 
 # Tickets: Codex Redaction Gate - SurfaceMetadata and Native Submit Improvements
 
-All tickets 238-250 completed. Frontier now at tickets 251-255.
+All tickets 238-250 completed. The convergence frontier starts with ticket 273.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
+
+## 273. Publish atomic resident protection snapshots
+
+**What to build:** Make the resident native adapter publish one immutable, versioned protection snapshot rather than exposing separately mutable profile, binding, hook, controller, runner, and reload state. A callback must make its full decision from one snapshot generation.
+
+**Blocked by:** 250. Restore verified composer identity after SurfaceMetadata migration.
+
+**Do not:** Publish profile data before its guarding hook/controller is ready, replace fields one by one during reload, let a failed candidate remove working protection, or use locking that can block a low-level input callback on UI Automation or sanitization work.
+
+- [ ] The published snapshot contains all data needed to classify and guard a selected-profile submit, including generation, selected profiles/bindings, hook readiness, guarded submit flow, and target-identity contract.
+- [ ] A reload builds and validates a candidate before one atomic publication; an activation or validation failure retains the previous complete snapshot.
+- [ ] Every native callback reads one snapshot generation and cannot observe a mixed old/new profile, binding, controller, runner, or hook state.
+- [ ] Tests simulate reload, rollback, and concurrent event classification without relying on timing sleeps or a live cloud submission.
+
+## 274. Make selected-client uncertainty and target identity explicit
+
+**What to build:** Implement the resident decision matrix that separates selected AI-client uncertainty from unrelated application input and carries the initiating composer/window identity into deferred sanitize, confirmation, and replay work.
+
+**Blocked by:** 273. Publish atomic resident protection snapshots.
+
+**Do not:** Treat an unrecognized selected AI control as unrelated, re-read the foreground window after suppression to choose a replay target, pass through a selected-client Send because UI Automation or hook status is uncertain, or suppress ordinary input in an unrelated application.
+
+- [ ] Selected verified Send suppresses and enters the protected flow; selected verified non-Send/newline passes through.
+- [ ] Uncertain composer, Send-control identity, UI Automation, hook health, setup, or target validity inside a selected AI client suppresses with a raw-free status.
+- [ ] Uncertain input outside selected AI clients continues normally.
+- [ ] The deferred flow carries snapshot generation and captured composer/window identity; an invalid or changed target aborts raw-free and cannot submit or redirect to the current foreground window.
+- [ ] Tests cover the complete matrix, focus change after suppression, classifier exceptions, and repeated events after cancellation.
 
 ## 251. Make selected-profile setup and binding changes fail closed in the resident hook
 
 **What to build:** Make first-run setup and Send-binding changes transactional for every explicitly selected AI profile. While setup or a binding change is incomplete, the resident hook must guard the selected app's configured Send path; after verification succeeds it must atomically reload the new profile and binding into the live hook without requiring a tray restart.
 
-**Blocked by:** 250. Restore verified composer identity after SurfaceMetadata migration.
+**Blocked by:** 273. Publish atomic resident protection snapshots.
 
 **Do not:** Pass through because the startup/default profile is disabled, treat one protected profile as setup completion for a different selected unprotected profile, retain `protected` while a new pair is awaiting verification, silently default to `Enter`, or swallow setup failures without a visible raw-free fail-closed status.
 
@@ -40,7 +67,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **What to build:** Integrate production UI-control identification and Send-button activation with native interception. CS must guard the identifiable Send button for a selected protected AI profile, including mouse/UI Automation activation, while skill pickers and other non-Send controls retain normal keyboard behavior.
 
-**Blocked by:** 251. Make selected-profile setup and binding changes fail closed in the resident hook.
+**Blocked by:** 251. Make selected-profile setup and binding changes fail closed in the resident hook; 274. Make selected-client uncertainty and target identity explicit.
 
 **Do not:** Classify every foreground window as a composer or Send control, suppress ordinary `Enter` in a skill picker, leave mouse Send unguarded, or permit a raw fallback when control identity is unavailable.
 
@@ -63,20 +90,6 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [x] Orchestrator, native-submit, sanitizer, and DPAPI/readiness failures return raw-free diagnostics without exception text.
 - [x] Tray/CLI crash viewing shows only the safe summary.
 - [x] Tests inject exceptions containing synthetic prompt, path, and window-title values and prove none reach reports, status, audit, or CLI output.
-
-## 255. Make release smoke exercise the real protected-send invariants and remove committed test run artifacts
-
-**What to build:** Replace smoke placeholders with executable assertions for setup enforcement, binding transitions, composer identity, single-instance startup, and selected Send-control handling. Remove committed ad-hoc test output files and prevent them from returning; clear nullable warnings introduced by the reviewed code so a clean build is a meaningful release signal.
-
-**Blocked by:** 250. Restore verified composer identity after SurfaceMetadata migration; 251. Make selected-profile setup and binding changes fail closed in the resident hook; 252. Wire per-user single-instance enforcement into the installed tray entry point; 253. Connect selected-app Send controls to native interception without blocking other controls; 254. Make crash and failure diagnostics structurally raw-free.
-
-**Do not:** Set smoke statuses to constants, treat a passing unit-test suite as proof of the resident hook, retain generated console logs as source artifacts, hide warnings, or add raw-sensitive fixtures to release output.
-
-- [ ] Product smoke executes and fails on setup enforcement, persisted/reloaded bindings, composer identity mismatch, Send-button handling, raw-free failures, and single-instance behavior.
-- [ ] Smoke output reflects actual assertions; no security status is hard-coded to `true`.
-- [ ] Tracked ad-hoc `test_*.txt` and `all_tests_output*.txt` files are removed and ignored as generated evidence.
-- [ ] Build has zero new nullable warnings in production and test code.
-- [ ] Full tests, and installer/release smoke pass with raw-free artifacts.
 
 ## 256. Add production integration tests for single-instance enforcement
 
@@ -207,7 +220,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **What to build:** Start the resident message loop before opening first-run setup, so the native hook continues to suppress a selected app's Send path while the user verifies profiles.
 
-**Blocked by:** 251.
+**Blocked by:** 251. Make selected-profile setup and binding changes fail closed in the resident hook; 274. Make selected-client uncertainty and target identity explicit.
 
 - [ ] Setup is scheduled after the tray message loop begins and does not block hook dispatch.
 - [ ] A selected Send during setup is suppressed with a raw-free `setup_required` result.
@@ -218,7 +231,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **What to build:** Replace first-profile selection with profile routing so Codex Desktop and ChatGPT Desktop can both be selected and protected concurrently.
 
-**Blocked by:** 251.
+**Blocked by:** 251. Make selected-profile setup and binding changes fail closed in the resident hook; 273. Publish atomic resident protection snapshots; 274. Make selected-client uncertainty and target identity explicit.
 
 - [ ] The resident controller dispatches by the active selected profile.
 - [ ] Each enabled profile owns its verified binding and a failure for one does not unprotect another.
@@ -231,7 +244,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **What to build:** Persist verified UI Automation evidence for each selected Send control, support localized evidence, and prevent a UIA error or hook timeout from releasing a selected Send click.
 
-**Blocked by:** 253.
+**Blocked by:** 253. Connect selected-app Send controls to native interception without blocking other controls; 274. Make selected-client uncertainty and target identity explicit.
 
 - [ ] A selected Send candidate is never passed through because UIA discovery failed or its localized label changed.
 - [ ] Keyboard and mouse callback exceptions after a selected Send candidate fail closed rather than calling through to the original input.
@@ -289,3 +302,17 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Each visible profile has a typed state/control reference rather than label-text lookup.
 - [ ] Binding selection and verification status update the intended profile without string matching.
 - [ ] Tests cover both desktop profiles and a localized display label.
+
+## 255. Make release smoke exercise the real protected-send invariants and remove committed test run artifacts
+
+**What to build:** Make the final release smoke consume the real resident-lifecycle evidence from the protected-send harness, then verify package hygiene and raw-free release output. This is the only ticket that can declare the current native-protection frontier release-ready.
+
+**Blocked by:** 252. Wire per-user single-instance enforcement into the installed tray entry point; 254. Make crash and failure diagnostics structurally raw-free; 269. Exercise installed resident runtime paths in release smoke; 272. Replace setup-form control discovery with typed profile-card state.
+
+**Do not:** Set smoke statuses to constants, infer resident protection from file presence, treat a passing unit-test suite as proof of the resident hook, retain generated console logs as source artifacts, hide warnings, or add raw-sensitive fixtures to release output.
+
+- [ ] Product smoke consumes executable lifecycle assertions for setup enforcement, atomic reload/rollback, composer identity mismatch, selected Send handling, target-change abort, raw-free failures, and single-instance behavior.
+- [ ] Smoke output reflects actual assertions and raw-free evidence; no security status is hard-coded to `true`.
+- [ ] Tracked ad-hoc `test_*.txt` and `all_tests_output*.txt` files are removed and ignored as generated evidence.
+- [ ] Build has zero new nullable warnings in production and test code.
+- [ ] Full tests, installer smoke, and the final release smoke pass with raw-free artifacts.
