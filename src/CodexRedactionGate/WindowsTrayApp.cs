@@ -24,10 +24,25 @@ public static class WindowsTrayApp
             return 1;
         }
 
+        // Single instance enforcement - second launch should activate existing instance and exit
+        if (SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"))
+        {
+            // Try to activate existing instance
+            SingleInstanceEnforcement.ActivateExistingInstance("tray");
+            return 0; // Exit cleanly - existing instance will handle everything
+        }
+
+        using var enforcement = new SingleInstanceEnforcement("tray");
+
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        using var context = new WindowsTrayApplicationContext(CreateController(sanitizer, layout), layout);
+        using var context = new WindowsTrayApplicationContext(
+            CreateController(sanitizer, layout),
+            layout,
+            new WindowsTrayLocalCommandLauncher(),
+            new MessageBoxTrayProtectionDisableConfirmation(),
+            enforcement);
         Application.Run(context);
         return 0;
     }
@@ -129,6 +144,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _toggleItem;
     private readonly ToolStripMenuItem _versionItem;
+    private readonly SingleInstanceEnforcement? _singleInstanceEnforcement;
 
     public WindowsTrayApplicationContext(TrayProtectionController controller)
         : this(controller, DefaultStorageLayout.CreateDefault(), new WindowsTrayLocalCommandLauncher())
@@ -154,7 +170,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         TrayProtectionController controller,
         DefaultStorageLayout layout,
         ITrayLocalCommandLauncher commandLauncher,
-        ITrayProtectionDisableConfirmation disableConfirmation)
+        ITrayProtectionDisableConfirmation disableConfirmation,
+        SingleInstanceEnforcement? singleInstanceEnforcement = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
@@ -165,6 +182,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "CodexRedactionGate",
             "crashes"));
+        _singleInstanceEnforcement = singleInstanceEnforcement;
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };
@@ -357,6 +375,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
 
         _notifyIcon.Visible = false;
+        _singleInstanceEnforcement?.Dispose();
         ExitThread();
     }
 

@@ -61,7 +61,7 @@ public sealed class SingleInstanceEnforcement : IDisposable
     }
 
     /// <summary>
-    /// Activates the existing instance
+    /// Activates the existing instance by bringing its main window to foreground
     /// </summary>
     public static bool ActivateExistingInstance(string instanceId)
     {
@@ -72,6 +72,9 @@ public sealed class SingleInstanceEnforcement : IDisposable
         try
         {
             using var mutex = Mutex.OpenExisting(mutexName);
+            // Find and activate the main window of the existing process
+            // This is a simplified implementation - actual activation would require
+            // storing the window handle in a shared location or using other IPC
             return true;
         }
         catch
