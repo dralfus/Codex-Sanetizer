@@ -48,6 +48,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Keyboard activation of an identifiable Send control and mouse/UI Automation Send activation enter the same suppress-first protected flow.
 - [ ] Non-Send controls and the configured newline shortcut pass through unchanged.
 - [ ] Unknown control identity on a selected protected Send path fails closed without exposing prompt/window/control text.
+- [ ] Once the foreground window is identified as a selected AI client, an unrecognized or transiently unavailable Send-control identity cannot release the original click.
 - [ ] Tests cover composer, skill picker, Send button, mouse activation, selected versus unselected apps, and overlay-originated replay.
 
 ## 254. Make crash and failure diagnostics structurally raw-free
@@ -222,6 +223,8 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] The resident controller dispatches by the active selected profile.
 - [ ] Each enabled profile owns its verified binding and a failure for one does not unprotect another.
 - [ ] The profile selected during interception is carried into the deferred sanitize/send flow; a focus change cannot redirect the flow to a different composer.
+- [ ] Hook callbacks read one atomically published runtime snapshot; reload and rollback cannot expose a mixed controller/profile/runner state.
+- [ ] The deferred flow uses the captured composer/window identity, not a later focused-window lookup, and aborts raw-free if that target is no longer valid.
 - [ ] Tests cover both profiles in one persisted store.
 
 ## 267. Make selected Send-control classification fail closed and bounded
@@ -234,6 +237,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Keyboard and mouse callback exceptions after a selected Send candidate fail closed rather than calling through to the original input.
 - [ ] UIA work is bounded outside the low-level hook callback and hook-loss is surfaced as a raw-free degraded state.
 - [ ] An unproven callback failure in an unrelated application does not suppress ordinary keyboard or mouse input.
+- [ ] Candidate classification distinguishes selected-app uncertainty from unrelated input: selected-app uncertainty blocks Send, unrelated input continues normally.
 - [ ] Tests cover localized evidence, transient UIA failure, and non-Send controls.
 
 ## 268. Remove raw exception messages from all interactive UI failure paths
@@ -254,6 +258,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 - [ ] Smoke fails when any listed resident boundary is disconnected or pass-through.
 - [ ] The smoke result contains only raw-free evidence.
+- [ ] Smoke launches the actual application context and proves hook registration, setup gating, runtime reload, selected Send failure handling, and second-instance behavior without a cloud submission.
 
 ## 270. Make second-instance activation visibly useful
 
@@ -272,6 +277,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 - [ ] CLI, UI-thread, and readiness crash capture call one shared initialization path.
 - [ ] A capture failure never changes the protected-send decision or prints raw exception text.
+- [ ] Crash-view CLI resolves its reports directory through the same shared default path API.
 - [ ] Focused tests cover the shared bootstrap path.
 
 ## 272. Replace setup-form control discovery with typed profile-card state
