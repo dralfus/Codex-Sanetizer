@@ -121,6 +121,8 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
             CanSubmit: match.Profile.ProfileId is "codex-desktop" or "chatgpt-desktop",
             Metadata: new SurfaceMetadata(
                 ComposerStatus: OsInteractionStatusIds.SupportedComposer,
+                WindowHandle: snapshot.WindowHandle.ToInt64().ToString("X"),
+                ElementAutomationId: snapshot.ElementAutomationId,
                 ArbitraryMetadata: arbitraryMetadata));
 
         return new TextSurfaceDiscoveryResult(

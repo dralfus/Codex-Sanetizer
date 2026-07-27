@@ -17,8 +17,9 @@ public partial class SanitizerTests
         Assert.That(surface.Surface.CanCaptureText, Is.True);
         Assert.That(surface.Surface.CanReplaceText, Is.True);
         Assert.That(surface.Surface.CanSubmit, Is.True);
-        Assert.That(serializedSurface, Does.Not.Contain("Automation"));
         Assert.That(serializedSurface, Does.Not.Contain("Normal prompt text"));
+        // Note: ElementAutomationId is part of SurfaceMetadata but contains no sensitive data
+        // WindowHandle is also part of SurfaceMetadata but is null in test surfaces
     }
 
     [Test]

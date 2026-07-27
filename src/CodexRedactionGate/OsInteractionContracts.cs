@@ -49,11 +49,15 @@ public static class OsInteractionStatusIds
 /// <param name="SurfaceKind">The kind of surface (e.g., "disposable_local_target").</param>
 /// <param name="CloudSubmission">Whether cloud submission is enabled.</param>
 /// <param name="ComposerStatus">The composer status (e.g., "supported_composer").</param>
+/// <param name="WindowHandle">The window handle for identity verification (hex string).</param>
+/// <param name="ElementAutomationId">The element automation ID for composer identity (optional).</param>
 /// <param name="ArbitraryMetadata">Additional arbitrary key-value pairs.</param>
 public sealed record SurfaceMetadata(
     string? SurfaceKind = null,
     string? CloudSubmission = null,
     string? ComposerStatus = null,
+    string? WindowHandle = null,
+    string? ElementAutomationId = null,
     IReadOnlyDictionary<string, string>? ArbitraryMetadata = null)
 {
     public IReadOnlyDictionary<string, string> ToDictionary()
@@ -65,6 +69,10 @@ public sealed record SurfaceMetadata(
             dict["cloud_submission"] = CloudSubmission;
         if (ComposerStatus is not null)
             dict["composer_status"] = ComposerStatus;
+        if (WindowHandle is not null)
+            dict["window_handle"] = WindowHandle;
+        if (ElementAutomationId is not null)
+            dict["element_automation_id"] = ElementAutomationId;
         if (ArbitraryMetadata is not null)
         {
             foreach (var kvp in ArbitraryMetadata)
@@ -81,7 +89,9 @@ public sealed record SurfaceMetadata(
             SurfaceKind: dict.TryGetValue("surface_kind", out var sk) ? sk : null,
             CloudSubmission: dict.TryGetValue("cloud_submission", out var cs) ? cs : null,
             ComposerStatus: dict.TryGetValue("composer_status", out var cs2) ? cs2 : null,
-            ArbitraryMetadata: dict.Where(kvp => kvp.Key is not ("surface_kind" or "cloud_submission" or "composer_status"))
+            WindowHandle: dict.TryGetValue("window_handle", out var wh) ? wh : null,
+            ElementAutomationId: dict.TryGetValue("element_automation_id", out var ea) ? ea : null,
+            ArbitraryMetadata: dict.Where(kvp => kvp.Key is not ("surface_kind" or "cloud_submission" or "composer_status" or "window_handle" or "element_automation_id"))
                 .ToDictionary(kvp => kvp.Key, kvp => kvp.Value, StringComparer.Ordinal));
     }
 
@@ -92,9 +102,11 @@ public sealed record SurfaceMetadata(
             "surface_kind" => SurfaceKind,
             "cloud_submission" => CloudSubmission,
             "composer_status" => ComposerStatus,
+            "window_handle" => WindowHandle,
+            "element_automation_id" => ElementAutomationId,
             _ => ArbitraryMetadata?.TryGetValue(key, out value) == true ? value : null
         };
-        return value != null || SurfaceKind != null || CloudSubmission != null || ComposerStatus != null || (ArbitraryMetadata?.Count > 0);
+        return value != null || SurfaceKind != null || CloudSubmission != null || ComposerStatus != null || WindowHandle != null || ElementAutomationId != null || (ArbitraryMetadata?.Count > 0);
     }
 
     public string? TryGetValue(string key)
@@ -104,6 +116,8 @@ public sealed record SurfaceMetadata(
             "surface_kind" => SurfaceKind,
             "cloud_submission" => CloudSubmission,
             "composer_status" => ComposerStatus,
+            "window_handle" => WindowHandle,
+            "element_automation_id" => ElementAutomationId,
             _ => ArbitraryMetadata?.TryGetValue(key, out var value) == true ? value : null
         };
     }
