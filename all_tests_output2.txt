@@ -1,7 +1,0 @@
-  Определение проектов для восстановления...
-  Все проекты обновлены для восстановления.
-  CodexRedactionGate -> S:\6. DevSecOps\Codex security\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll
-Тестовый запуск для S:\6. DevSecOps\Codex security\src\CodexRedactionGate\bin\Debug\net10.0-windows\CodexRedactionGate.dll (.NETCoreApp,Version=v10.0)
-Общее количество тестовых файлов (1), соответствующих указанному шаблону.
-
-Пройден!   : не пройдено     0, пройдено  1260, пропущено     0, всего  1260, длительность 8 s. - CodexRedactionGate.dll (net10.0)

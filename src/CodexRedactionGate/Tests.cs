@@ -1028,7 +1028,7 @@ public class HmacSecretProviderTests
             
             // Invalid length should throw DpapiSecretLoadFailureException
             var ex = Assert.Throws<DpapiSecretLoadFailureException>(() => provider.GetOrCreateSecret());
-            Assert.That(ex.Message, Does.Contain("invalid length"));
+            Assert.That(ex!.Message, Does.Contain("invalid length"));
         }
         finally
         {
@@ -1079,7 +1079,7 @@ public class HmacSecretProviderTests
 
             // Corrupted data should throw DpapiSecretLoadFailureException
             var ex = Assert.Throws<DpapiSecretLoadFailureException>(() => provider.GetOrCreateSecret());
-            Assert.That(ex.Message, Does.Not.Contain("192.168.10.25"));
+            Assert.That(ex!.Message, Does.Not.Contain("192.168.10.25"));
             Assert.That(ex.Message, Does.Not.Contain("BLOCK_THIS"));
         }
         finally
@@ -6367,16 +6367,17 @@ public class CrashDiagnosticsTests
             var crashDiag = new LocalCrashDiagnostics(crashDirectory);
 
             // Capture a test crash
-            var ex = new InvalidOperationException("Test crash");
+            var ex = new InvalidOperationException("PROMPT_SECRET_123 C:\\Users\\alexey.andreev");
             crashDiag.Capture(ex, "test_component");
 
             // Load the report
             var reports = crashDiag.LoadReports();
             Assert.That(reports, Has.Count.EqualTo(1));
             Assert.That(reports[0].Component, Is.EqualTo("test_component"));
-            Assert.That(reports[0].ExceptionMessage, Is.EqualTo("Test crash"));
             Assert.That(reports[0].ExceptionType, Is.EqualTo("System.InvalidOperationException"));
             Assert.That(reports[0].BuildVersion, Is.Not.Null);
+            Assert.That(System.Text.Json.JsonSerializer.Serialize(reports), Does.Not.Contain("PROMPT_SECRET_123"));
+            Assert.That(System.Text.Json.JsonSerializer.Serialize(reports), Does.Not.Contain("alexey.andreev"));
         }
         finally
         {
@@ -6421,14 +6422,13 @@ public class CrashDiagnosticsTests
             var crashDirectory = Path.Combine(tempDirectory, "crashes");
             var crashDiag = new LocalCrashDiagnostics(crashDirectory);
 
-            crashDiag.Capture(new Exception("Secret123"), "test");
+            crashDiag.Capture(new Exception("PROMPT_SECRET_123"), "test");
 
             var summary = crashDiag.GetRawFreeSummary();
             Assert.That(summary, Has.Count.EqualTo(3));
             Assert.That(summary[0], Does.Contain("test"));
-            // Summary contains raw exception message which includes "Secret123" - this is expected behavior
-            // The important thing is that the file on disk doesn't leak secrets
             Assert.That(summary[0], Does.Contain("System.Exception"));
+            Assert.That(string.Join(Environment.NewLine, summary), Does.Not.Contain("PROMPT_SECRET_123"));
         }
         finally
         {
@@ -6467,7 +6467,7 @@ public class CrashDiagnosticsTests
             var crashDiag = new LocalCrashDiagnostics(crashDirectory);
 
             // Create a mock sanitizer that throws
-            var sanitizer = new ThrowingSanitizer(new InvalidOperationException("Simulated crash"));
+            var sanitizer = new ThrowingSanitizer(new InvalidOperationException("PROMPT_SECRET_123 C:\\Users\\alexey.andreev"));
 
             var orchestrator = new OsInteractionOrchestrator(
                 sanitizer,
@@ -6483,6 +6483,8 @@ public class CrashDiagnosticsTests
             Assert.That(result.Applied, Is.False);
             Assert.That(result.Submitted, Is.False);
             Assert.That(result.Diagnostics["failed_closed"], Is.EqualTo("true"));
+            Assert.That(System.Text.Json.JsonSerializer.Serialize(result.Diagnostics), Does.Not.Contain("PROMPT_SECRET_123"));
+            Assert.That(System.Text.Json.JsonSerializer.Serialize(result.Diagnostics), Does.Not.Contain("alexey.andreev"));
         }
         finally
         {
@@ -6571,6 +6573,18 @@ public class SingleInstanceEnforcementTests
         var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
 
         Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId), Is.False);
+    }
+
+    [Test]
+    public void SingleInstanceEnforcement_ReentrantCheckDoesNotCreateAnotherOwner()
+    {
+        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        using var first = new SingleInstanceEnforcement(instanceId);
+
+        Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId), Is.False);
+
+        using var second = new SingleInstanceEnforcement(instanceId);
+        Assert.That(second.IsFirstInstance, Is.False);
     }
 
     [Test]

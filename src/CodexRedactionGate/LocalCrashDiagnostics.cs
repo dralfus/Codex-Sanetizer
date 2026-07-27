@@ -11,9 +11,8 @@ namespace CodexRedactionGate;
 /// </summary>
 public sealed record CrashReport(
     string ExceptionType,
-    string ExceptionMessage,
-    string StackTrace,
     string Component,
+    string StatusCode,
     string BuildVersion,
     DateTimeOffset Timestamp);
 
@@ -30,13 +29,23 @@ public sealed class LocalCrashDiagnostics
         _reportsDirectory = reportsDirectory;
     }
 
+    public static void CaptureDefault(Exception ex, string component, string statusCode)
+    {
+        var reportsDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CodexRedactionGate",
+            "crashes");
+        new LocalCrashDiagnostics(reportsDirectory).Capture(ex, component, statusCode);
+    }
+
     /// <summary>
     /// Capture a crash report without leaking raw prompt text or sensitive values
     /// </summary>
-    public void Capture(Exception ex, string component)
+    public void Capture(Exception ex, string component, string statusCode = "unexpected_failure")
     {
         ArgumentNullException.ThrowIfNull(ex);
         ArgumentException.ThrowIfNullOrWhiteSpace(component);
+        ArgumentException.ThrowIfNullOrWhiteSpace(statusCode);
 
         try
         {
@@ -44,9 +53,8 @@ public sealed class LocalCrashDiagnostics
             
             var report = new CrashReport(
                 ExceptionType: ex.GetType().FullName ?? ex.GetType().Name,
-                ExceptionMessage: ex.Message,
-                StackTrace: ex.StackTrace ?? string.Empty,
                 Component: component,
+                StatusCode: statusCode,
                 BuildVersion: GetBuildVersion(),
                 Timestamp: DateTimeOffset.UtcNow);
 
@@ -125,7 +133,7 @@ public sealed class LocalCrashDiagnostics
         foreach (var report in reports)
         {
             summary.Add($"[{report.Timestamp:O}] {report.Component} failed: {report.ExceptionType}");
-            summary.Add($"  Message: {report.ExceptionMessage}");
+            summary.Add($"  Status: {report.StatusCode}");
             summary.Add($"  Build: {report.BuildVersion}");
         }
 

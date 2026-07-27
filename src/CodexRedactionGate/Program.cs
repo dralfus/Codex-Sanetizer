@@ -1000,7 +1000,7 @@ public static class Program
             Console.WriteLine($"timestamp: {report.Timestamp:O}");
             Console.WriteLine($"component: {report.Component}");
             Console.WriteLine($"exception_type: {report.ExceptionType}");
-            Console.WriteLine($"exception_message: {report.ExceptionMessage}");
+            Console.WriteLine($"status_code: {report.StatusCode}");
             Console.WriteLine($"build_version: {report.BuildVersion}");
             Console.WriteLine("---");
         }

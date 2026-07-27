@@ -50,11 +50,12 @@ internal sealed class TrayProtectionController
 {
     private readonly ITrayHotkeyHost _hotkeyHost;
     private readonly Func<OsInteractionResult> _applyOnlyRunner;
-    private readonly INativeSubmitHookHost? _nativeSubmitHookHost;
-    private readonly NativeSubmitInterceptionController? _nativeSubmitController;
-    private readonly Func<OsInteractionResult>? _nativeSubmitRunner;
-    private readonly SubmitBindingProfile? _nativeProfile;
+    private INativeSubmitHookHost? _nativeSubmitHookHost;
+    private NativeSubmitInterceptionController? _nativeSubmitController;
+    private Func<OsInteractionResult>? _nativeSubmitRunner;
+    private SubmitBindingProfile? _nativeProfile;
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
+    private readonly DefaultStorageLayout _storageLayout;
     private int _nativeSubmitFlowInProgress;
 
     public TrayProtectionController(ITrayHotkeyHost hotkeyHost, Func<OsInteractionResult> applyOnlyRunner)
@@ -69,7 +70,8 @@ internal sealed class TrayProtectionController
         NativeSubmitInterceptionController? nativeSubmitController,
         Func<OsInteractionResult>? nativeSubmitRunner,
         SubmitBindingProfile? nativeProfile = null,
-        NativeSubmitEnterprisePolicy? enterprisePolicy = null)
+        NativeSubmitEnterprisePolicy? enterprisePolicy = null,
+        DefaultStorageLayout? storageLayout = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
@@ -78,6 +80,7 @@ internal sealed class TrayProtectionController
         _nativeSubmitRunner = nativeSubmitRunner;
         _nativeProfile = nativeProfile;
         _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
+        _storageLayout = storageLayout ?? DefaultStorageLayout.CreateDefault();
         State = CreateState(enabled: false, lastStatus: "disabled");
     }
 
@@ -93,8 +96,7 @@ internal sealed class TrayProtectionController
         {
             try
             {
-                var setupLayout = DefaultStorageLayout.CreateDefault();
-                setupRequired = _nativeSubmitController.IsSetupRequired(setupLayout, _nativeProfile?.ProfileId);
+                setupRequired = _nativeSubmitController.IsSetupRequired(_storageLayout, _nativeProfile?.ProfileId);
             }
             catch
             {
@@ -135,6 +137,42 @@ internal sealed class TrayProtectionController
         _hotkeyHost.Stop();
         State = CreateState(enabled: false, lastStatus: "disabled");
         StateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Replaces the native interception runtime after a binding verification.
+    /// The old hook is stopped before the new hook is registered, so a verified
+    /// binding cannot leave two hook owners active.
+    /// </summary>
+    public bool ReloadNativeSubmit(NativeSubmitRuntime runtime)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+
+        _nativeSubmitHookHost?.Stop();
+        _nativeSubmitHookHost = runtime.HookHost;
+        _nativeSubmitController = runtime.Controller;
+        _nativeSubmitRunner = runtime.Runner;
+        _nativeProfile = runtime.Profile;
+
+        if (!State.Enabled)
+        {
+            State = CreateState(enabled: false, lastStatus: "native_submit_runtime_reloaded");
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        var setupRequired = _nativeSubmitController.IsSetupRequired(_storageLayout, _nativeProfile.ProfileId);
+        var started = StartNativeSubmitHook();
+        State = CreateState(
+            enabled: true,
+            lastStatus: started ? "native_submit_runtime_reloaded" : NativeSubmitUnavailableStatus(),
+            nativeSubmitEnabled: started && !setupRequired,
+            nativeSubmitStatus: started
+                ? (setupRequired ? OsInteractionStatusIds.NativeSubmitSetupRequired : OsInteractionStatusIds.Protected)
+                : NativeSubmitUnavailableStatus(),
+            setupRequired: setupRequired);
+        StateChanged?.Invoke(this, EventArgs.Empty);
+        return started;
     }
 
     public ProtectionDisableResult TryDisableProtection(string action, bool confirmed)
@@ -379,6 +417,12 @@ internal sealed class TrayProtectionController
             : _nativeProfile.CapabilityStatus;
     }
 }
+
+internal sealed record NativeSubmitRuntime(
+    INativeSubmitHookHost HookHost,
+    NativeSubmitInterceptionController Controller,
+    Func<OsInteractionResult> Runner,
+    SubmitBindingProfile Profile);
 
 internal static class TrayStatusFormatter
 {

@@ -933,7 +933,7 @@ public partial class SanitizerTests
     }
 
     [Test]
-    public void WindowsTrayApp_UsesDefaultUnprotectedProfileBeforeFirstVerification()
+    public void WindowsTrayApp_UsesUnconfiguredProfileBeforeFirstVerification()
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         try
@@ -945,8 +945,8 @@ public partial class SanitizerTests
             Assert.That(profile, Is.Not.Null);
             Assert.That(profile!.ProfileId, Is.EqualTo("codex-desktop"));
             Assert.That(profile.IsProtected, Is.False);
-            Assert.That(profile.SubmitBinding!.DisplayText, Is.EqualTo("Enter"));
-            Assert.That(profile.NewlineBinding!.DisplayText, Is.EqualTo("Ctrl+Enter"));
+            Assert.That(profile.SubmitBinding, Is.Null);
+            Assert.That(profile.NewlineBinding, Is.Null);
         }
         finally
         {
@@ -1472,7 +1472,7 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
-    public void HandleButtonClick_PassThroughWhenUnprotectedProfile()
+    public void HandleButtonClick_SuppressesUnprotectedProfile()
     {
         var unprotectedProfile = new SubmitBindingProfile(
             "codex-desktop",
@@ -1494,8 +1494,8 @@ public class HandleButtonClickTests : SanitizerTests
 
         var result = controller.HandleButtonClick(activeSurface);
 
-        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
-        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.BindingUnknown));
+        Assert.That(result.SuppressOriginalInput, Is.True);
     }
 
     [Test]

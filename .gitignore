@@ -34,6 +34,8 @@ packages/
 ## Local log files
 build.log
 test.log
+test_*.txt
+all_tests_output*.txt
 
 ## Locally generated secret-scanner fixtures
 codex-redaction-gate-spec/spikes/tool-evaluation/.generated/

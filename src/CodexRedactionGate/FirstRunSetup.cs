@@ -62,11 +62,21 @@ internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileV
             Thread.Sleep(_verificationDelay);
         }
 
+        if (profile.SubmitBinding is null || profile.NewlineBinding is null)
+        {
+            return profile with
+            {
+                Enabled = true,
+                BindingSource = "not_verified",
+                CapabilityStatus = OsInteractionStatusIds.BindingUnknown
+            };
+        }
+
         var discovery = _discoveryFactory();
         return SubmitBindingOnboardingVerifier.VerifyUserBindings(
             profile.ProfileId,
-            profile.SubmitBinding?.DisplayText ?? "Enter",
-            profile.NewlineBinding?.DisplayText ?? "Ctrl+Enter",
+            profile.SubmitBinding.DisplayText,
+            profile.NewlineBinding.DisplayText,
             discovery,
             profile.CompatibilityEvidence);
     }
@@ -216,31 +226,15 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
 
         var verifiedProfile = _profileVerifier.Verify(profile);
 
-        // Invalidate old protected profile if the new profile is setup complete
-        // This ensures only one profile can be in protected state
+        // Only the profile being verified changes state. Other explicitly selected
+        // profiles retain their own verification state.
         if (verifiedProfile.IsSetupComplete)
         {
-            // Get updated profiles list if we created a new profile
-            var profilesToUpdate = profile.ProfileId != profileId ? storeResult.Profiles : storeResult.Profiles;
-            var updatedProfiles = profilesToUpdate.Select(p =>
-            {
-                if (string.Equals(p.ProfileId, profileId, StringComparison.Ordinal))
-                {
-                    return verifiedProfile;
-                }
-                // Invalidate old protected profile by setting CapabilityStatus to BindingUnknown
-                if (p.IsProtected)
-                {
-                    return p with
-                    {
-                        CapabilityStatus = OsInteractionStatusIds.BindingUnknown,
-                        BindingSource = "not_verified"
-                    };
-                }
-                return p;
-            }).Append(verifiedProfile).ToArray();
-            // Filter out duplicate profileId before saving - keep the first occurrence (verifiedProfile)
-            var uniqueProfiles = updatedProfiles.GroupBy(p => p.ProfileId).Select(g => g.First()).ToArray();
+            var uniqueProfiles = storeResult.Profiles
+                .Where(p => !string.Equals(p.ProfileId, profileId, StringComparison.Ordinal))
+                .Append(verifiedProfile)
+                .OrderBy(p => p.ProfileId, StringComparer.Ordinal)
+                .ToArray();
             var batchSaveResult = SubmitBindingProfileStore.Save(layout, uniqueProfiles);
             if (!batchSaveResult.Succeeded)
             {
@@ -307,10 +301,10 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         {
             "codex-desktop" or "chatgpt-desktop" => new SubmitBindingProfile(
                 profileId,
-                Enabled: false,
+                Enabled: true,
                 BindingSource: "not_verified",
-                SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding,
-                NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+                SubmitBinding: null,
+                NewlineBinding: null,
                 CapabilityStatus: OsInteractionStatusIds.BindingUnknown,
                 CompatibilityEvidence: null,
                 Diagnostics: new Dictionary<string, string>
@@ -338,10 +332,10 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
     private static FirstRunSetupState CreateSetupState(IReadOnlyList<SubmitBindingProfile> profiles)
     {
         var visibleProfiles = SetupVisibleProfiles(profiles);
-        var anySetupComplete = visibleProfiles.Any(p => p.IsSetupComplete);
-        var unprotected = anySetupComplete
-            ? Array.Empty<string>()
-            : visibleProfiles.Where(p => !p.IsSetupComplete).Select(p => p.ProfileId).ToArray();
+        var unprotected = visibleProfiles
+            .Where(p => !p.IsSetupComplete)
+            .Select(p => p.ProfileId)
+            .ToArray();
         var codexProfile = visibleProfiles.FirstOrDefault(p => string.Equals(p.ProfileId, "codex-desktop", StringComparison.Ordinal));
         var chatGptProfile = visibleProfiles.FirstOrDefault(p => string.Equals(p.ProfileId, "chatgpt-desktop", StringComparison.Ordinal));
 
@@ -494,7 +488,7 @@ internal sealed class FirstRunSetupForm : Form
             Dock = DockStyle.Left,
             AutoSize = true,
             Margin = new Padding(0, 8, 10, 0),
-            Checked = true
+            Checked = false
         };
 
         _ctrlEnterSendRadioButton = new RadioButton
@@ -507,7 +501,7 @@ internal sealed class FirstRunSetupForm : Form
 
         _bindingPairLabel = new Label
         {
-            Text = "Currently selected: Enter Send / Ctrl+Enter Newline",
+            Text = "Select the application's Send key before verification.",
             Dock = DockStyle.Top,
             AutoSize = true,
             Padding = new Padding(12, 5, 12, 0),
@@ -625,7 +619,7 @@ internal sealed class FirstRunSetupForm : Form
         {
             return ("Ctrl+Enter", "Enter");
         }
-        return ("Enter", "Ctrl+Enter"); // default
+        return (string.Empty, string.Empty);
     }
 
     private Panel CreateProfileCard(SubmitBindingProfile profile)
@@ -689,10 +683,23 @@ internal sealed class FirstRunSetupForm : Form
         {
             // Update profile with selected binding pair
             var (selectedSubmit, selectedNewline) = GetSelectedBindingPair();
+            if (string.IsNullOrEmpty(selectedSubmit) || string.IsNullOrEmpty(selectedNewline))
+            {
+                MessageBox.Show(
+                    "Select the application's Send key before verification.",
+                    "Codex Redaction Gate - Setup required",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
             var profileWithBinding = updatedProfile with
             {
                 SubmitBinding = SubmitKeyBinding.Parse(selectedSubmit).Binding,
-                NewlineBinding = SubmitKeyBinding.Parse(selectedNewline).Binding
+                NewlineBinding = SubmitKeyBinding.Parse(selectedNewline).Binding,
+                Enabled = true,
+                BindingSource = "not_verified",
+                CapabilityStatus = OsInteractionStatusIds.BindingUnknown
             };
 
             // Update UI to show verification in progress

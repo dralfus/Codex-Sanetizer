@@ -68,7 +68,7 @@ public sealed class OsInteractionOrchestrator
                 Diagnostics: new Dictionary<string, string>
                 {
                     ["exception_type"] = ex.GetType().FullName ?? ex.GetType().Name,
-                    ["exception_message"] = ex.Message,
+                    ["exception_status"] = "orchestrator_failure",
                     ["failed_closed"] = "true"
                 });
         }

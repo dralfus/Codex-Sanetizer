@@ -42,6 +42,11 @@ public static class WindowsTrayApp
         }
 
         using var enforcement = new SingleInstanceEnforcement("tray");
+        if (!enforcement.IsFirstInstance)
+        {
+            SingleInstanceEnforcement.ActivateExistingInstance("tray");
+            return 0;
+        }
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -51,7 +56,8 @@ public static class WindowsTrayApp
             layout,
             new WindowsTrayLocalCommandLauncher(),
             new MessageBoxTrayProtectionDisableConfirmation(),
-            enforcement);
+            enforcement,
+            () => CreateNativeSubmitRuntime(sanitizer, layout));
         Application.Run(context);
         return 0;
     }
@@ -62,7 +68,8 @@ public static class WindowsTrayApp
 
         var settings = HotkeySettingsStore.Load(layout ?? DefaultStorageLayout.CreateDefault());
         var resolvedLayout = layout ?? DefaultStorageLayout.CreateDefault();
-        var nativeProfile = ResolveNativeProfileForProtection(resolvedLayout);
+        var runtime = CreateNativeSubmitRuntime(sanitizer, resolvedLayout);
+        var nativeProfile = runtime?.Profile;
         var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
         var activeSurfaceDiscovery = WindowsActiveSurfaceDiscovery.CreateDefault();
         var orchestrator = new OsInteractionOrchestrator(
@@ -78,28 +85,46 @@ public static class WindowsTrayApp
                 ? new WindowsTrayHotkeyHost(settings.Settings.ProtectionHotkey)
                 : new UnavailableTrayHotkeyHost(settings.Settings.ProtectionHotkey.Binding, settings.Code),
             () => orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly),
-            nativeProfile is null ? null : new WindowsNativeSubmitHookHost(),
-            nativeProfile is null
-                ? null
-                : new NativeSubmitInterceptionController(
-                    nativeProfile,
-                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-                    activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
-                    firstRunSetupController: new FirstRunSetupController()),
-            nativeProfile is null
-                ? null
-                : () =>
-                {
-                    var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
-                    var nativeSubmitOrchestrator = new OsInteractionOrchestrator(
-                        sanitizer,
-                        WindowsFocusedComposerDiscovery.CreateDefault(),
-                        nativeSubmitAdapter,
-                        nativeSubmitAdapter,
-                        new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
-                        new WindowsConfirmationOverlay());
-                    return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
-                },
+            runtime?.HookHost,
+            runtime?.Controller,
+            runtime?.Runner,
+            nativeProfile,
+            storageLayout: resolvedLayout);
+    }
+
+    internal static NativeSubmitRuntime? CreateNativeSubmitRuntime(ISanitizer sanitizer, DefaultStorageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(sanitizer);
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var nativeProfile = ResolveNativeProfileForProtection(layout);
+        if (nativeProfile is null)
+        {
+            return null;
+        }
+
+        var activeSurfaceDiscovery = WindowsActiveSurfaceDiscovery.CreateDefault();
+        var controller = new NativeSubmitInterceptionController(
+            nativeProfile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
+            firstRunSetupController: new FirstRunSetupController(),
+            setupLayout: layout);
+        return new NativeSubmitRuntime(
+            new WindowsNativeSubmitHookHost(),
+            controller,
+            () =>
+            {
+                var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
+                var nativeSubmitOrchestrator = new OsInteractionOrchestrator(
+                    sanitizer,
+                    WindowsFocusedComposerDiscovery.CreateDefault(),
+                    nativeSubmitAdapter,
+                    nativeSubmitAdapter,
+                    new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
+                    new WindowsConfirmationOverlay());
+                return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
+            },
             nativeProfile);
     }
 
@@ -154,6 +179,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _toggleItem;
     private readonly ToolStripMenuItem _versionItem;
     private readonly SingleInstanceEnforcement? _singleInstanceEnforcement;
+    private readonly Func<NativeSubmitRuntime?>? _nativeSubmitRuntimeFactory;
 
     public WindowsTrayApplicationContext(TrayProtectionController controller)
         : this(controller, DefaultStorageLayout.CreateDefault(), new WindowsTrayLocalCommandLauncher())
@@ -180,7 +206,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         DefaultStorageLayout layout,
         ITrayLocalCommandLauncher commandLauncher,
         ITrayProtectionDisableConfirmation disableConfirmation,
-        SingleInstanceEnforcement? singleInstanceEnforcement = null)
+        SingleInstanceEnforcement? singleInstanceEnforcement = null,
+        Func<NativeSubmitRuntime?>? nativeSubmitRuntimeFactory = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
@@ -192,6 +219,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             "CodexRedactionGate",
             "crashes"));
         _singleInstanceEnforcement = singleInstanceEnforcement;
+        _nativeSubmitRuntimeFactory = nativeSubmitRuntimeFactory;
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };
@@ -253,15 +281,23 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                     var finalStatus = setupController.GetSetupStatus(_layout);
                     if (!finalStatus.State.Required)
                     {
-                        // Profile is setup complete, safe to refresh status
-                        RefreshStatus();
+                        var runtime = _nativeSubmitRuntimeFactory?.Invoke();
+                        if (runtime is not null)
+                        {
+                            _controller.ReloadNativeSubmit(runtime);
+                        }
                     }
                 }
             }
         }
-        catch
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            // Swallow any errors to avoid crashing the tray app
+            LocalCrashDiagnostics.CaptureDefault(exception, "first_run_setup", "setup_failed");
+            MessageBox.Show(
+                "Setup could not be completed. Protected Send remains blocked until verification succeeds.",
+                "Codex Redaction Gate - Setup required",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
         }
     }
 

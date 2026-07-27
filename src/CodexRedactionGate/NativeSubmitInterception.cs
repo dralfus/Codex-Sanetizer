@@ -595,6 +595,7 @@ public sealed class NativeSubmitInterceptionController
     private readonly Func<DateTimeOffset> _clock;
     private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
     private readonly IFirstRunSetupController? _firstRunSetupController;
+    private readonly DefaultStorageLayout? _setupLayout;
 
     public bool IsSetupRequired(DefaultStorageLayout layout, string? profileId = null)
     {
@@ -613,7 +614,8 @@ public sealed class NativeSubmitInterceptionController
         NativeSubmitEnterprisePolicy? policy = null,
         Func<DateTimeOffset>? clock = null,
         Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null,
-        IFirstRunSetupController? firstRunSetupController = null)
+        IFirstRunSetupController? firstRunSetupController = null,
+        DefaultStorageLayout? setupLayout = null)
     {
         _profile = profile ?? throw new ArgumentNullException(nameof(profile));
         _emergencyState = emergencyState ?? throw new ArgumentNullException(nameof(emergencyState));
@@ -621,6 +623,7 @@ public sealed class NativeSubmitInterceptionController
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _activeSurfaceDiscovery = activeSurfaceDiscovery;
         _firstRunSetupController = firstRunSetupController;
+        _setupLayout = setupLayout;
     }
 
     public NativeSubmitInterceptionResult HandleButtonClick(
@@ -664,7 +667,7 @@ public sealed class NativeSubmitInterceptionController
                 Diagnostics: new Dictionary<string, string>
                 {
                     ["profile_id"] = _profile.ProfileId,
-                    ["active_composer_status"] = composerStatus,
+                    ["active_composer_status"] = composerStatus ?? OsInteractionStatusIds.NotComposer,
                     ["fail_closed_reason"] = "unverified_surface"
                 });
         }
@@ -721,14 +724,6 @@ public sealed class NativeSubmitInterceptionController
             return _emergencyState.DisableTemporarily(_profile.ProfileId, _clock());
         }
 
-        // Skip disabled profiles
-        if (!_profile.IsEnabled)
-        {
-            diagnostics["enabled"] = "false";
-            diagnostics["pass_through_reason"] = "profile_disabled";
-            return PassThrough(diagnostics);
-        }
-
         if (_emergencyState.IsDisabled(_profile.ProfileId, _clock()))
         {
             diagnostics["emergency_disabled"] = "true";
@@ -746,13 +741,14 @@ public sealed class NativeSubmitInterceptionController
             return PassThrough(diagnostics);
         }
 
-        if (_profile.NewlineBinding?.Matches(gesture) == true)
+        var setupCandidateGesture = !_profile.IsSetupComplete && IsSetupCandidateGesture(gesture);
+        if (_profile.NewlineBinding?.Matches(gesture) == true && !setupCandidateGesture)
         {
             diagnostics["pass_through_reason"] = "newline_binding";
             return PassThrough(diagnostics);
         }
 
-        if (_profile.SubmitBinding?.Matches(gesture) != true)
+        if (_profile.SubmitBinding?.Matches(gesture) != true && !setupCandidateGesture)
         {
             diagnostics["pass_through_reason"] = "not_submit_binding";
             return PassThrough(diagnostics);
@@ -768,6 +764,15 @@ public sealed class NativeSubmitInterceptionController
         if (setupGate is not null)
         {
             return setupGate;
+        }
+
+        // A disabled profile is only allowed to pass through after the selected
+        // profile's setup gate has determined that this is not its Send path.
+        if (!_profile.IsEnabled)
+        {
+            diagnostics["enabled"] = "false";
+            diagnostics["pass_through_reason"] = "profile_disabled";
+            return PassThrough(diagnostics);
         }
 
         var enforcement = EvaluateEnterpriseEnforcement(hookHealthy);
@@ -790,8 +795,10 @@ public sealed class NativeSubmitInterceptionController
         if (!_profile.IsProtected)
         {
             return new NativeSubmitInterceptionResult(
-                _profile.CapabilityStatus,
-                SuppressOriginalInput: false,
+                _profile.CapabilityStatus == OsInteractionStatusIds.NativeSubmitPassThrough
+                    ? OsInteractionStatusIds.BindingUnknown
+                    : _profile.CapabilityStatus,
+                SuppressOriginalInput: true,
                 Applied: false,
                 Submitted: false,
                 Diagnostics: diagnostics);
@@ -819,7 +826,7 @@ public sealed class NativeSubmitInterceptionController
             // This catch block should never be hit in normal operation
             diagnostics["flow_exception"] = "true";
             diagnostics["exception_type"] = ex.GetType().FullName ?? ex.GetType().Name;
-            diagnostics["exception_message"] = ex.Message;
+            diagnostics["exception_status"] = "native_submit_flow_failure";
             return new NativeSubmitInterceptionResult(
                 OsInteractionStatusIds.FailedClosed,
                 SuppressOriginalInput: true,
@@ -979,7 +986,7 @@ public sealed class NativeSubmitInterceptionController
             return null;
         }
 
-        var setupLayout = DefaultStorageLayout.CreateDefault();
+        var setupLayout = _setupLayout ?? DefaultStorageLayout.CreateDefault();
         var setupResult = _firstRunSetupController.GetSetupStatus(setupLayout);
         if (setupResult.Succeeded && !setupResult.State.Required)
         {
@@ -999,6 +1006,13 @@ public sealed class NativeSubmitInterceptionController
             Applied: false,
             Submitted: false,
             Diagnostics: diagnostics);
+    }
+
+    private static bool IsSetupCandidateGesture(NativeKeyGesture gesture)
+    {
+        return string.Equals(gesture.Key, "ENTER", StringComparison.OrdinalIgnoreCase)
+            && !gesture.Alt
+            && !gesture.Shift;
     }
 
     private static IReadOnlyDictionary<string, string> Merge(
@@ -1378,6 +1392,7 @@ public static class NativeSubmitProductSmokeRunner
             profile1,
             CreateSurface("chatgpt-desktop", "profile-smoke"),
             null);
+        var setupEnforcementRegressionPassed = RunSetupEnforcementSmoke();
 
         var serialized = JsonSerializer.Serialize(new
         {
@@ -1418,10 +1433,8 @@ public static class NativeSubmitProductSmokeRunner
             && emergencyDisable.SuppressOriginalInput
             && enterprise.Status == OsInteractionStatusIds.EnterpriseBlocked
             && mismatch.Status == OsInteractionStatusIds.SurfaceUnverified
+            && setupEnforcementRegressionPassed
             && rawFree;
-
-        // Setup enforcement regression tests are covered by SetupEnforcementRegressionTests
-        var setupEnforcementRegressionPassed = true;
 
         return new NativeSubmitProductSmokeReport(
             passed,
@@ -1462,8 +1475,41 @@ public static class NativeSubmitProductSmokeRunner
             $"emergency_disable: {report.EmergencyDisablePassed.ToString().ToLowerInvariant()}",
             $"enterprise_enforcement: {report.EnterpriseEnforcementPassed.ToString().ToLowerInvariant()}",
             $"mismatch_warning: {report.MismatchWarningPassed.ToString().ToLowerInvariant()}",
+            $"setup_enforcement_regression: {report.SetupEnforcementRegressionPassed.ToString().ToLowerInvariant()}",
             $"raw_free_artifacts: {report.RawFreeArtifactsPassed.ToString().ToLowerInvariant()}"
         };
+    }
+
+    private static bool RunSetupEnforcementSmoke()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "CodexRedactionGate", "product-smoke", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(directory);
+            var profile = FirstRunSetupController.CreateDefaultSetupProfile("codex-desktop");
+            if (profile is null)
+            {
+                return false;
+            }
+
+            var controller = new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateSurface("codex-desktop", "setup-smoke")),
+                firstRunSetupController: new FirstRunSetupController(),
+                setupLayout: layout);
+            var result = controller.HandleGesture(new NativeKeyGesture("Enter"));
+            return result.Status == OsInteractionStatusIds.NativeSubmitSetupRequired
+                && result.SuppressOriginalInput
+                && !result.Submitted;
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     private static ResidentSessionSmokeResult RunResidentSessionSmoke(SubmitBindingProfile profile, byte[] hmacSecret)

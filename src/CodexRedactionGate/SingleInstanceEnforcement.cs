@@ -19,6 +19,7 @@ public sealed class SingleInstanceEnforcement : IDisposable
 {
     private readonly Mutex _mutex;
     private readonly bool _mutexCreated;
+    private readonly bool _ownsMutex;
     private readonly string _mutexName;
 
     /// <summary>
@@ -31,6 +32,7 @@ public sealed class SingleInstanceEnforcement : IDisposable
         // Use local mutex name (no Global\ prefix - requires elevation on Windows)
         _mutexName = $"CodexRedactionGate_{instanceId}";
         _mutex = new Mutex(initiallyOwned: true, name: _mutexName, createdNew: out _mutexCreated);
+        _ownsMutex = _mutexCreated;
     }
 
     /// <summary>
@@ -53,8 +55,26 @@ public sealed class SingleInstanceEnforcement : IDisposable
             // Try to wait on the mutex without blocking
             // Returns true if we acquired it (meaning no other instance owns it)
             // Returns false if we didn't acquire it (meaning another instance owns it)
-            var acquired = mutex.WaitOne(TimeSpan.Zero);
-            return !acquired; // If we didn't acquire, another instance owns it
+            var acquired = false;
+            try
+            {
+                acquired = mutex.WaitOne(TimeSpan.Zero);
+                return !acquired;
+            }
+            catch (AbandonedMutexException)
+            {
+                // The prior process exited without releasing the mutex. Windows
+                // transferred ownership to this caller, so the slot is available.
+                acquired = true;
+                return false;
+            }
+            finally
+            {
+                if (acquired)
+                {
+                    mutex.ReleaseMutex();
+                }
+            }
         }
         catch (WaitHandleCannotBeOpenedException)
         {
@@ -109,7 +129,10 @@ public sealed class SingleInstanceEnforcement : IDisposable
 
     public void Dispose()
     {
-        _mutex?.ReleaseMutex();
+        if (_ownsMutex)
+        {
+            _mutex.ReleaseMutex();
+        }
         _mutex?.Close();
         GC.SuppressFinalize(this);
     }
