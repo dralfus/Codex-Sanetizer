@@ -262,10 +262,19 @@ All tests verify that `HandleGesture` correctly passes through non-Send Enter/Ct
 
 **Do not:** Fall back to the currently focused overlay or a generic foreground element, weaken the same-window check, log raw window/composer text, or report a successful confirm-and-send path when the verified composer cannot be re-acquired.
 
-- [ ] `SurfaceMetadata` retains the opaque window and focused-composer identity needed by the verified writer, alongside its typed status fields.
-- [ ] A native confirm flow can re-acquire the pre-overlay composer and verify sanitized write-back before one replay of the selected binding.
-- [ ] Missing, stale, or mismatched composer identity fails closed with raw-free reason codes and no replay.
-- [ ] Tests cover real discovery metadata, overlay focus transition, identity mismatch, and no raw fallback submission.
+- [x] `SurfaceMetadata` retains the opaque window and focused-composer identity needed by the verified writer, alongside its typed status fields.
+- [x] A native confirm flow can re-acquire the pre-overlay composer and verify sanitized write-back before one replay of the selected binding.
+- [x] Missing, stale, or mismatched composer identity fails closed with raw-free reason codes and no replay.
+- [x] Tests cover real discovery metadata, overlay focus transition, identity mismatch, and no raw fallback submission.
+
+**Status:** Completed - commit 907a67d
+
+**Changes:**
+- SurfaceMetadata extended with `WindowHandle` and `ElementAutomationId` fields
+- WindowsFocusedComposerSurface updated to include identity metadata
+- Verified writer re-acquires pre-overlay composer using identity fields
+- Fail-closed logic for missing/stale/mismatched identity (already in place)
+- All 1264 tests pass
 
 ## 251. Make selected-profile setup and binding changes fail closed in the resident hook
 
