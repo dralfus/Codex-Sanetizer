@@ -27,6 +27,7 @@ public sealed class SingleInstanceEnforcement : IDisposable
     private readonly bool _isFirstInstance;
     private readonly bool _ownsMutex;
     private readonly string _mutexName;
+    private int _disposed;
 
     /// <summary>
     /// Creates a new single instance enforcement
@@ -197,18 +198,29 @@ public sealed class SingleInstanceEnforcement : IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
         if (_ownsMutex)
         {
-            _mutex.ReleaseMutex();
-            UnregisterProcessOwnership(_mutexName);
+            try
+            {
+                _mutex.ReleaseMutex();
+            }
+            catch (ApplicationException)
+            {
+                // The owner thread has already released the mutex.
+            }
+            finally
+            {
+                UnregisterProcessOwnership(_mutexName);
+            }
         }
-        _mutex?.Close();
-        GC.SuppressFinalize(this);
-    }
 
-    ~SingleInstanceEnforcement()
-    {
-        Dispose();
+        _mutex.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     internal static string BuildMutexName(string instanceId, bool useGlobalNamespace)

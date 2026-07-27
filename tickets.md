@@ -57,10 +57,10 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Serialize or print `Exception.Message`, `StackTrace`, raw paths, window titles, prompt text, configuration contents, or scanner findings; duplicate crash-report schemas across sanitizer, readiness, and native-submit paths; or turn a diagnostic write failure into a send path.
 
-- [ ] All crash reports use one schema and one writer with allowlisted raw-free fields only.
-- [ ] Orchestrator, native-submit, sanitizer, and DPAPI/readiness failures return raw-free diagnostics without exception text.
-- [ ] Tray/CLI crash viewing shows only the safe summary.
-- [ ] Tests inject exceptions containing synthetic prompt, path, and window-title values and prove none reach reports, status, audit, or CLI output.
+- [x] All crash reports use one schema and one writer with allowlisted raw-free fields only.
+- [x] Orchestrator, native-submit, sanitizer, and DPAPI/readiness failures return raw-free diagnostics without exception text.
+- [x] Tray/CLI crash viewing shows only the safe summary.
+- [x] Tests inject exceptions containing synthetic prompt, path, and window-title values and prove none reach reports, status, audit, or CLI output.
 
 ## 255. Make release smoke exercise the real protected-send invariants and remove committed test run artifacts
 
@@ -125,11 +125,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Use global mutex by default (requires elevation); change existing per-user behavior; or expose the setting to end users without clear explanation.
 
-- [ ] Add `--global` command-line flag or registry setting to enable global mutex
-- [ ] Global mutex uses `Global\CodexRedactionGate_tray` name
-- [ ] Per-user mutex continues to use `CodexRedactionGate_tray` (no prefix)
-- [ ] Code validates elevation before allowing global mutex creation
-- [ ] Documentation explains the elevation requirement and use cases
+- [x] Add `--global` command-line flag or registry setting to enable global mutex
+- [x] Global mutex uses `Global\CodexRedactionGate_tray` name
+- [x] Per-user mutex continues to use `CodexRedactionGate_tray` (no prefix)
+- [x] Code validates elevation before allowing global mutex creation
+- [x] Documentation explains the elevation requirement and use cases
 
 ## 260. Fix IsAnotherInstanceRunning to handle mutex reentrancy correctly
 
@@ -139,11 +139,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Change the existing API signature; rely on `Mutex.WaitOne()` without proper ownership tracking; or introduce race conditions between check and use.
 
-- [ ] `IsAnotherInstanceRunning` correctly identifies when another process owns the mutex
-- [ ] Implementation handles re-entrant scenarios where current thread already holds the mutex
-- [ ] Edge case: mutex is released but not closed (handle recycling scenario)
-- [ ] Tests cover: normal case, same-thread re-entrancy, process crash recovery
-- [ ] No race condition between `IsAnotherInstanceRunning` and `SingleInstanceEnforcement` constructor
+- [x] `IsAnotherInstanceRunning` correctly identifies when another process owns the mutex
+- [x] Implementation handles re-entrant scenarios where current thread already holds the mutex
+- [x] Edge case: mutex is released but not closed (handle recycling scenario)
+- [x] Tests cover: normal case, same-thread re-entrancy, process crash recovery
+- [x] No race condition between `IsAnotherInstanceRunning` and `SingleInstanceEnforcement` constructor
 
 ## 261. Make user notification configurable (optional/suppressible)
 
@@ -195,8 +195,65 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Hard-code all message strings in English; require resource files for every language; or add complexity before localization is needed.
 
-- [ ] Notification messages stored in external resource files (`.resx`)
-- [ ] Default fallback to English if locale not supported
-- [ ] Supported locales: English (en-US), Russian (ru-RU), Chinese (zh-CN)
-- [ ] ResourceManager loads appropriate message based on current UI culture
-- [ ] No localization required for technical error details (stack traces, etc.)
+- [x] Notification messages stored in external resource files (`.resx`)
+- [x] Default fallback to English if locale not supported
+- [x] Supported locales: English (en-US), Russian (ru-RU), Chinese (zh-CN)
+- [x] ResourceManager loads appropriate message based on current UI culture
+- [x] No localization required for technical error details (stack traces, etc.)
+
+## 265. Keep first-run fail-closed protection active while onboarding is displayed
+
+**What to build:** Start the resident message loop before opening first-run setup, so the native hook continues to suppress a selected app's Send path while the user verifies profiles.
+
+**Blocked by:** 251.
+
+- [ ] Setup is scheduled after the tray message loop begins and does not block hook dispatch.
+- [ ] A selected Send during setup is suppressed with a raw-free `setup_required` result.
+- [ ] Regression test covers the real application-context lifecycle without a live cloud submission.
+
+## 266. Route resident interception across every selected verified profile
+
+**What to build:** Replace first-profile selection with profile routing so Codex Desktop and ChatGPT Desktop can both be selected and protected concurrently.
+
+**Blocked by:** 251.
+
+- [ ] The resident controller dispatches by the active selected profile.
+- [ ] Each enabled profile owns its verified binding and a failure for one does not unprotect another.
+- [ ] Tests cover both profiles in one persisted store.
+
+## 267. Make selected Send-control classification fail closed and bounded
+
+**What to build:** Persist verified UI Automation evidence for each selected Send control, support localized evidence, and prevent a UIA error or hook timeout from releasing a selected Send click.
+
+**Blocked by:** 253.
+
+- [ ] A selected Send candidate is never passed through because UIA discovery failed or its localized label changed.
+- [ ] UIA work is bounded outside the low-level hook callback and hook-loss is surfaced as a raw-free degraded state.
+- [ ] Tests cover localized evidence, transient UIA failure, and non-Send controls.
+
+## 268. Remove raw exception messages from all interactive UI failure paths
+
+**What to build:** Replace `Exception.Message` in tray, dictionary, and local-restore dialogs with safe status text and centralized local crash capture.
+
+**Blocked by:** 254.
+
+- [ ] No interactive failure dialog includes an arbitrary exception message, path, prompt, title, or rule value.
+- [ ] Tests inject synthetic sensitive values and prove UI output remains raw-free.
+
+## 269. Exercise installed resident runtime paths in release smoke
+
+**What to build:** Make release smoke execute the application-context/native-hook lifecycle seams for profile reload, setup blocking, selected Send control failure, and second-launch behavior.
+
+**Blocked by:** 265, 266, 267.
+
+- [ ] Smoke fails when any listed resident boundary is disconnected or pass-through.
+- [ ] The smoke result contains only raw-free evidence.
+
+## 270. Make second-instance activation visibly useful
+
+**What to build:** Replace invisible activation-window foregrounding with a visible tray/menu or diagnostics/settings surface, or show the non-modal notification even after signalling succeeds.
+
+**Blocked by:** 257.
+
+- [ ] A second launch produces a visible user outcome without stealing focus to an invisible form.
+- [ ] Tests cover activation success and notification fallback.

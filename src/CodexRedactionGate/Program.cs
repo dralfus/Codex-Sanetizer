@@ -104,7 +104,17 @@ public static class Program
     {
         if (args.Length == 1 && args[0] == "--self-test")
         {
-            return RunSelfTest(() => runtime.SanitizerFactory(Array.Empty<DictionaryTerm>()));
+            try
+            {
+                return RunSelfTest(() => runtime.SanitizerFactory(Array.Empty<DictionaryTerm>()));
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or DpapiSecretLoadFailureException)
+            {
+                LocalCrashDiagnostics.CaptureDefault(exception, "self_test", "self_test_initialization_failed");
+                Console.WriteLine("status: self_test_unavailable");
+                Console.WriteLine("failure: local_protection_initialization_failed");
+                return 1;
+            }
         }
 
         if (args.Length == 2 && args[0] == "--sanitize")

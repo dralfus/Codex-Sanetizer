@@ -6199,6 +6199,21 @@ public class CliTests
     }
 
     [Test]
+    public void Main_SelfTest_DpapiFailureIsRawFree()
+    {
+        var (exitCode, stdout, stderr) = CaptureProgramOutput(() =>
+            Program.Main(
+                new[] { "--self-test" },
+                () => throw new DpapiSecretLoadFailureException("PROMPT_SECRET_123 C:\\Users\\alexey.andreev")));
+
+        Assert.That(exitCode, Is.EqualTo(1));
+        Assert.That(stdout, Does.Contain("self_test_unavailable"));
+        Assert.That(stdout, Does.Not.Contain("PROMPT_SECRET_123"));
+        Assert.That(stdout, Does.Not.Contain("C:\\Users\\alexey.andreev"));
+        Assert.That(stderr, Is.Empty);
+    }
+
+    [Test]
     public void Main_UnknownArguments_PrintHelpAndDoNotCrash()
     {
         var (exitCode, stdout, stderr) = CaptureProgramOutput(() =>
@@ -6621,6 +6636,15 @@ public class SingleInstanceEnforcementTests
     public void SingleInstanceNotificationSettings_NormalizesKnownTypes(string? configured, string expected)
     {
         Assert.That(SingleInstanceNotificationSettings.NormalizeType(configured), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void SingleInstanceEnforcement_DisposeIsIdempotent()
+    {
+        var enforcement = new SingleInstanceEnforcement("codex-redaction-gate-test-" + Guid.NewGuid().ToString("N"));
+
+        Assert.DoesNotThrow(enforcement.Dispose);
+        Assert.DoesNotThrow(enforcement.Dispose);
     }
 
     [Test]
