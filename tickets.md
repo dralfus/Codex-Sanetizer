@@ -74,4 +74,59 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Smoke output reflects actual assertions; no security status is hard-coded to `true`.
 - [ ] Tracked ad-hoc `test_*.txt` and `all_tests_output*.txt` files are removed and ignored as generated evidence.
 - [ ] Build has zero new nullable warnings in production and test code.
-- [ ] Full tests, product smoke, and installer/release smoke pass with raw-free artifacts.
+- [ ] Full tests, and installer/release smoke pass with raw-free artifacts.
+
+## 256. Add production integration tests for single-instance enforcement
+
+**What to build:** Add tests that verify the single-instance behavior at the production entry point (`CodexRedactionGate.Tray.exe`). Tests should verify that launching the tray twice results in one hook-owning process and one tray icon, with the second launch exiting cleanly after attempting to activate the existing instance.
+
+**Blocked by:** 252. Wire per-user single-instance enforcement into the installed tray entry point.
+
+**Do not:** Test only the helper class in isolation; rely on mock mutexes; or skip testing the exit code path for second launches.
+
+- [ ] Test verifies second launch detects existing instance via `IsAnotherInstanceRunning("tray")`
+- [ ] Test verifies second launch calls `ActivateExistingInstance("tray")` before exiting
+- [ ] Test verifies second launch exits with code 0 (raw-free) not 1 (error)
+- [ ] Test verifies first instance retains hook ownership and tray icon
+- [ ] Test verifies behavior on abnormal first-instance termination (mutex cleanup)
+
+## 257. Implement actual window activation in ActivateExistingInstance
+
+**What to build:** Implement real window activation in `ActivateExistingInstance` so that when a second launch occurs, the user's existing tray window is brought to the foreground. This requires storing the tray window handle in a shared location (e.g., Windows message clipboard or named shared memory) when the first instance starts.
+
+**Blocked by:** 252. Wire per-user single-instance enforcement into the installed tray entry point.
+
+**Do not:** Return true without actual activation; rely on process ID alone; or expose window handles in a way that allows unauthorized access.
+
+- [ ] First instance stores its main window handle in a per-user shared location on startup
+- [ ] Second instance retrieves the stored handle and activates the window via Win32 API
+- [ ] Activation failure returns false; success returns true with actual foreground activation
+- [ ] Shared handle storage uses proper ACLs to allow only the same user to access it
+- [ ] Cleanup removes the stored handle on normal exit
+
+## 258. Add user notification when second tray instance is blocked
+
+**What to build:** Add user-facing notification when a second launch of the tray is blocked by single-instance enforcement. The notification should briefly inform the user that the tray is already running and has been activated.
+
+**Blocked by:** 252. Wire per-user single-instance enforcement into the installed tray entry point.
+
+**Do not:** Show a modal dialog that requires user interaction; log to event viewer without user feedback; or leak window titles or process IDs in the message.
+
+- [ ] Second launch shows a non-modal, auto-dismissing notification (toast or balloon)
+- [ ] Notification text is localized and contains no sensitive information
+- [ ] Notification is suppressed if activation succeeded silently
+- [ ] Notification includes a link to "Open diagnostics" for troubleshooting
+
+## 259. Add Global\ mutex option for multi-user system support
+
+**What to build:** Add support for global mutex (with `Global\` prefix) to enable single-instance enforcement across user sessions on multi-user systems. This should be optional and configurable via a registry setting or config file.
+
+**Blocked by:** 252. Wire per-user single-instance enforcement into the installed tray entry point.
+
+**Do not:** Use global mutex by default (requires elevation); change existing per-user behavior; or expose the setting to end users without clear explanation.
+
+- [ ] Add `--global` command-line flag or registry setting to enable global mutex
+- [ ] Global mutex uses `Global\CodexRedactionGate_tray` name
+- [ ] Per-user mutex continues to use `CodexRedactionGate_tray` (no prefix)
+- [ ] Code validates elevation before allowing global mutex creation
+- [ ] Documentation explains the elevation requirement and use cases
