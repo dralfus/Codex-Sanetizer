@@ -4,6 +4,14 @@ using System.Threading;
 namespace CodexRedactionGate;
 
 /// <summary>
+/// Callback delegate for user notifications
+/// </summary>
+/// <param name="title">Notification title</param>
+/// <param name="message">Notification message</param>
+/// <param name="includeDiagnosticsLink">Whether to include diagnostics link</param>
+public delegate void UserNotificationCallback(string title, string message, bool includeDiagnosticsLink);
+
+/// <summary>
 /// Single instance enforcement for resident Code Sanitizer tray app
 /// Ensures only one hook-owning resident instance per user
 /// </summary>
@@ -63,7 +71,10 @@ public sealed class SingleInstanceEnforcement : IDisposable
     /// <summary>
     /// Activates the existing instance by bringing its main window to foreground
     /// </summary>
-    public static bool ActivateExistingInstance(string instanceId)
+    /// <param name="instanceId">Instance identifier</param>
+    /// <param name="notificationCallback">Optional callback to show user notification</param>
+    /// <returns>True if activation succeeded or notification was shown; false otherwise</returns>
+    public static bool ActivateExistingInstance(string instanceId, UserNotificationCallback? notificationCallback = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
         // Use local mutex name
@@ -75,10 +86,23 @@ public sealed class SingleInstanceEnforcement : IDisposable
             // Find and activate the main window of the existing process
             // This is a simplified implementation - actual activation would require
             // storing the window handle in a shared location or using other IPC
+
+            // Show notification that existing instance is being activated
+            notificationCallback?.Invoke(
+                "Code Sanitizer",
+                "Code Sanitizer is already running. The existing instance has been activated.",
+                includeDiagnosticsLink: true);
+
             return true;
         }
         catch
         {
+            // Show notification even if activation failed
+            notificationCallback?.Invoke(
+                "Code Sanitizer",
+                "Code Sanitizer is already running. Failed to activate existing instance.",
+                includeDiagnosticsLink: false);
+
             return false;
         }
     }

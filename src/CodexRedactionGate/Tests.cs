@@ -6569,8 +6569,76 @@ public class SingleInstanceEnforcementTests
     public void SingleInstanceEnforcement_NoInstanceWhenEmpty()
     {
         var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
-        
+
         Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId), Is.False);
+    }
+
+    [Test]
+    public void SingleInstanceEnforcement_ActivateExistingInstance_WithCallback()
+    {
+        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        string? capturedTitle = null;
+        string? capturedMessage = null;
+        bool? capturedIncludeDiagnostics = null;
+
+        // Start first instance
+        using var enforcement1 = new SingleInstanceEnforcement(instanceId);
+        Assert.That(enforcement1.IsFirstInstance, Is.True);
+
+        // Second instance should detect first and call callback
+        SingleInstanceEnforcement.ActivateExistingInstance(
+            instanceId,
+            (title, message, includeDiagnostics) =>
+            {
+                capturedTitle = title;
+                capturedMessage = message;
+                capturedIncludeDiagnostics = includeDiagnostics;
+            });
+
+        Assert.That(capturedTitle, Is.EqualTo("Code Sanitizer"));
+        Assert.That(capturedMessage, Is.Not.Null.And.Contains("already running"));
+        Assert.That(capturedIncludeDiagnostics, Is.True);
+    }
+
+    [Test]
+    public void SingleInstanceEnforcement_ActivateExistingInstance_WithoutCallback()
+    {
+        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+
+        // Start first instance
+        using var enforcement1 = new SingleInstanceEnforcement(instanceId);
+        Assert.That(enforcement1.IsFirstInstance, Is.True);
+
+        // Second instance should succeed without callback
+        var result = SingleInstanceEnforcement.ActivateExistingInstance(instanceId);
+        Assert.That(result, Is.True);
+    }
+
+    [Test]
+    public void SingleInstanceEnforcement_ActivateExistingInstance_NoInstanceReturnsFalse()
+    {
+        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+
+        // No instance running - should return false
+        var result = SingleInstanceEnforcement.ActivateExistingInstance(instanceId);
+        Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public void SingleInstanceEnforcement_ActivateExistingInstance_NoInstanceIncludesNoDiagnosticsLink()
+    {
+        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        bool? capturedIncludeDiagnostics = null;
+
+        // No instance running - callback should be called with includeDiagnosticsLink=false
+        SingleInstanceEnforcement.ActivateExistingInstance(
+            instanceId,
+            (title, message, includeDiagnostics) =>
+            {
+                capturedIncludeDiagnostics = includeDiagnostics;
+            });
+
+        Assert.That(capturedIncludeDiagnostics, Is.False);
     }
 }
 

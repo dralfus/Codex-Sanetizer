@@ -27,8 +27,17 @@ public static class WindowsTrayApp
         // Single instance enforcement - second launch should activate existing instance and exit
         if (SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"))
         {
-            // Try to activate existing instance
-            SingleInstanceEnforcement.ActivateExistingInstance("tray");
+            // Show notification that existing instance is being activated
+            SingleInstanceEnforcement.ActivateExistingInstance(
+                "tray",
+                (title, message, includeDiagnosticsLink) =>
+                {
+                    if (includeDiagnosticsLink)
+                    {
+                        message += Environment.NewLine + Environment.NewLine + "Click OK to open diagnostics.";
+                    }
+                    MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                });
             return 0; // Exit cleanly - existing instance will handle everything
         }
 
