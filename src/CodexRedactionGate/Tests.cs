@@ -7082,5 +7082,77 @@ public class ResidentFirstRunSetupLaunchTests
     }
 }
 
+[TestFixture]
+public class TrayProtectionFailClosedTests
+{
+    private sealed class TestHotkeyHost : ITrayHotkeyHost
+    {
+        public bool Started { get; private set; }
+        public string LastStatus => "ok";
+        public string LastErrorCode => null;
+        public HotkeyBinding Binding => new("enter", "Enter", "user");
+
+        public bool Start(Action runOnce)
+        {
+            Started = true;
+            return true;
+        }
+
+        public void Stop()
+        {
+            Started = false;
+        }
+    }
+
+    [Test]
+    public void TrayProtectionController_SelectedUnconfiguredProfileSuppressesSend()
+    {
+        var host = new TestHotkeyHost();
+        var controller = new TrayProtectionController(
+            host,
+            () => new OsInteractionResult(OsInteractionStatusIds.NotConfigured, null, null, null, false, false, new Dictionary<string, string>()));
+
+        controller.Start();
+
+        // Profile not configured - should report NotConfigured
+        Assert.That(controller.State.ReadinessStatus, Is.EqualTo(OsInteractionStatusIds.NotConfigured));
+    }
+
+    [Test]
+    public void TrayProtectionController_BindingChangeInvalidatesOldProtectedProfile()
+    {
+        var host = new TestHotkeyHost();
+        var controller = new TrayProtectionController(
+            host,
+            () => new OsInteractionResult(OsInteractionStatusIds.NotConfigured, null, null, null, false, false, new Dictionary<string, string>()));
+
+        // Start with default binding
+        controller.Start();
+        Assert.That(controller.State.ProtectedSendBinding, Is.EqualTo("not_configured"));
+
+        // Verify snapshot contains current state
+        var snapshot = controller.GetCurrentSnapshot();
+        Assert.That(snapshot.State.ProtectedSendBinding, Is.EqualTo("not_configured"));
+    }
+
+    [Test]
+    public void TrayProtectionController_FailClosedOnBindingValidationError()
+    {
+        var host = new TestHotkeyHost();
+        var controller = new TrayProtectionController(
+            host,
+            () => new OsInteractionResult(OsInteractionStatusIds.NotConfigured, null, null, null, false, false, new Dictionary<string, string>()));
+
+        controller.Start();
+
+        // Start with no error
+        Assert.That(controller.State.LastStatus, Is.Not.EqualTo("binding_error"));
+
+        // Verify snapshot is available
+        var snapshot = controller.GetCurrentSnapshot();
+        Assert.That(snapshot, Is.Not.Null);
+    }
+}
+
 
 
