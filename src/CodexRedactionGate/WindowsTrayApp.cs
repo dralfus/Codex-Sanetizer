@@ -11,10 +11,15 @@ public static class WindowsTrayApp
 {
     public static int Run(ISanitizer sanitizer)
     {
-        return Run(sanitizer, DefaultStorageLayout.CreateDefault());
+        return Run(sanitizer, DefaultStorageLayout.CreateDefault(), useGlobalMutex: false);
     }
 
     internal static int Run(ISanitizer sanitizer, DefaultStorageLayout layout)
+    {
+        return Run(sanitizer, layout, useGlobalMutex: false);
+    }
+
+    internal static int Run(ISanitizer sanitizer, DefaultStorageLayout layout, bool useGlobalMutex)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
@@ -24,27 +29,25 @@ public static class WindowsTrayApp
             return 1;
         }
 
-        // Single instance enforcement - second launch should activate existing instance and exit
-        if (SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"))
+        if (useGlobalMutex && !SingleInstanceEnforcement.CanUseGlobalMutex)
         {
-            // Show notification that existing instance is being activated
-            SingleInstanceEnforcement.ActivateExistingInstance(
-                "tray",
-                (title, message, includeDiagnosticsLink) =>
-                {
-                    if (includeDiagnosticsLink)
-                    {
-                        message += Environment.NewLine + Environment.NewLine + "Click OK to open diagnostics.";
-                    }
-                    MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Information);
-                });
+            return 1;
+        }
+
+        // Single instance enforcement - second launch should activate existing instance and exit
+        if (SingleInstanceEnforcement.IsAnotherInstanceRunning("tray", useGlobalMutex))
+        {
+            if (!SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex))
+            {
+                ShowAlreadyRunningNotification(SingleInstanceNotificationSettings.Load());
+            }
             return 0; // Exit cleanly - existing instance will handle everything
         }
 
-        using var enforcement = new SingleInstanceEnforcement("tray");
+        using var enforcement = new SingleInstanceEnforcement("tray", useGlobalMutex);
         if (!enforcement.IsFirstInstance)
         {
-            SingleInstanceEnforcement.ActivateExistingInstance("tray");
+            SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
             return 0;
         }
 
@@ -60,6 +63,40 @@ public static class WindowsTrayApp
             () => CreateNativeSubmitRuntime(sanitizer, layout));
         Application.Run(context);
         return 0;
+    }
+
+    private static void ShowAlreadyRunningNotification(SingleInstanceNotificationSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!settings.Enabled || settings.Type == "none")
+        {
+            return;
+        }
+
+        if (settings.Type == "messagebox")
+        {
+            MessageBox.Show(
+                AppStrings.Get("AlreadyRunning"),
+                AppStrings.Get("ProductName"),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+            return;
+        }
+
+        using var notification = new NotifyIcon
+        {
+            Icon = System.Drawing.SystemIcons.Information,
+            Visible = true,
+            BalloonTipTitle = AppStrings.Get("ProductName"),
+            BalloonTipText = AppStrings.Get("AlreadyRunning")
+        };
+        notification.ShowBalloonTip(3000);
+        var until = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < until)
+        {
+            Application.DoEvents();
+            System.Threading.Thread.Sleep(50);
+        }
     }
 
     internal static TrayProtectionController CreateController(ISanitizer sanitizer, DefaultStorageLayout? layout = null)
@@ -89,7 +126,8 @@ public static class WindowsTrayApp
             runtime?.Controller,
             runtime?.Runner,
             nativeProfile,
-            storageLayout: resolvedLayout);
+            storageLayout: resolvedLayout,
+            sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault());
     }
 
     internal static NativeSubmitRuntime? CreateNativeSubmitRuntime(ISanitizer sanitizer, DefaultStorageLayout layout)
@@ -175,6 +213,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly string _buildVersion;
     private readonly LocalCrashDiagnostics _crashDiagnostics;
     private readonly NotifyIcon _notifyIcon;
+    private readonly Form _activationWindow;
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _toggleItem;
     private readonly ToolStripMenuItem _versionItem;
@@ -220,6 +259,18 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             "crashes"));
         _singleInstanceEnforcement = singleInstanceEnforcement;
         _nativeSubmitRuntimeFactory = nativeSubmitRuntimeFactory;
+
+        _activationWindow = new Form
+        {
+            Text = SingleInstanceEnforcement.ActivationWindowTitle,
+            FormBorderStyle = FormBorderStyle.None,
+            ShowInTaskbar = false,
+            Size = new System.Drawing.Size(1, 1),
+            Location = new System.Drawing.Point(-32000, -32000),
+            Opacity = 0,
+            StartPosition = FormStartPosition.Manual
+        };
+        _activationWindow.Show();
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };
@@ -306,6 +357,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         if (disposing)
         {
             StopProtectionAndHideIcon();
+            _activationWindow.Dispose();
             _notifyIcon.Dispose();
         }
 

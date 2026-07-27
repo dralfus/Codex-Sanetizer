@@ -373,10 +373,14 @@ public static class Program
             return RunCrashReports();
         }
 
-        if (args.Length == 1 && args[0] == "--tray-app")
+        if ((args.Length == 1 && args[0] == "--tray-app")
+            || (args.Length == 2 && args[0] == "--tray-app" && args[1] == "--global"))
         {
             var layout = runtime.LayoutFactory();
-            return WindowsTrayApp.Run(runtime.SanitizerFactory(Array.Empty<DictionaryTerm>()), layout);
+            return WindowsTrayApp.Run(
+                runtime.SanitizerFactory(Array.Empty<DictionaryTerm>()),
+                layout,
+                useGlobalMutex: args.Length == 2);
         }
 
         if (args.Length == 1 && args[0] == "--os-profiles-list")
@@ -1808,7 +1812,7 @@ public static class Program
         Console.WriteLine("  --project-attachment-bypass-status workspace");
         Console.WriteLine("  --project-connector-bypass-status workspace");
         Console.WriteLine("  --project-file-product-smoke");
-        Console.WriteLine("  --tray-app");
+        Console.WriteLine("  --tray-app [--global]");
         Console.WriteLine("  --os-profiles-list");
         Console.WriteLine("  --os-compatibility-matrix");
         Console.WriteLine("  --os-surface-diagnostic");

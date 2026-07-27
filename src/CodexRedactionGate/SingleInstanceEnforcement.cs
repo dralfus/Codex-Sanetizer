@@ -1,4 +1,7 @@
 using System;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace CodexRedactionGate;
@@ -17,8 +20,11 @@ public delegate void UserNotificationCallback(string title, string message, bool
 /// </summary>
 public sealed class SingleInstanceEnforcement : IDisposable
 {
+    internal const string ActivationWindowTitle = "CodexRedactionGate.Tray.Activation";
+    private static readonly object OwnedNamesLock = new();
+    private static readonly HashSet<string> ProcessOwnedNames = new(StringComparer.Ordinal);
     private readonly Mutex _mutex;
-    private readonly bool _mutexCreated;
+    private readonly bool _isFirstInstance;
     private readonly bool _ownsMutex;
     private readonly string _mutexName;
 
@@ -27,27 +33,73 @@ public sealed class SingleInstanceEnforcement : IDisposable
     /// </summary>
     /// <param name="instanceId">Unique instance identifier</param>
     public SingleInstanceEnforcement(string instanceId)
+        : this(instanceId, useGlobalNamespace: false)
+    {
+    }
+
+    public SingleInstanceEnforcement(string instanceId, bool useGlobalNamespace)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
-        // Use local mutex name (no Global\ prefix - requires elevation on Windows)
-        _mutexName = $"CodexRedactionGate_{instanceId}";
-        _mutex = new Mutex(initiallyOwned: true, name: _mutexName, createdNew: out _mutexCreated);
-        _ownsMutex = _mutexCreated;
+        if (useGlobalNamespace && !IsElevated())
+        {
+            throw new UnauthorizedAccessException("global_mutex_requires_elevation");
+        }
+
+        _mutexName = BuildMutexName(instanceId, useGlobalNamespace);
+        _mutex = new Mutex(initiallyOwned: true, name: _mutexName, createdNew: out var createdNew);
+        if (createdNew)
+        {
+            _ownsMutex = true;
+            _isFirstInstance = true;
+            RegisterProcessOwnership(_mutexName);
+            return;
+        }
+
+        if (ProcessOwns(_mutexName))
+        {
+            _ownsMutex = false;
+            _isFirstInstance = false;
+            return;
+        }
+
+        try
+        {
+            _ownsMutex = _mutex.WaitOne(TimeSpan.Zero);
+        }
+        catch (AbandonedMutexException)
+        {
+            _ownsMutex = true;
+        }
+
+        _isFirstInstance = _ownsMutex;
+        if (_ownsMutex)
+        {
+            RegisterProcessOwnership(_mutexName);
+        }
     }
 
     /// <summary>
     /// Checks if this is the first instance
     /// </summary>
-    public bool IsFirstInstance => _mutexCreated;
+    public bool IsFirstInstance => _isFirstInstance;
 
     /// <summary>
     /// Check if another instance is already running
     /// </summary>
     public static bool IsAnotherInstanceRunning(string instanceId)
     {
+        return IsAnotherInstanceRunning(instanceId, useGlobalNamespace: false);
+    }
+
+    public static bool IsAnotherInstanceRunning(string instanceId, bool useGlobalNamespace)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
-        // Use local mutex name (no Global\ prefix - requires elevation on Windows)
-        var mutexName = $"CodexRedactionGate_{instanceId}";
+        if (useGlobalNamespace && !IsElevated())
+        {
+            return true;
+        }
+
+        var mutexName = BuildMutexName(instanceId, useGlobalNamespace);
         
         try
         {
@@ -89,38 +141,54 @@ public sealed class SingleInstanceEnforcement : IDisposable
     }
 
     /// <summary>
-    /// Activates the existing instance by bringing its main window to foreground
+    /// Activates the existing tray instance through its private activation window.
+    /// The window is created only by the first resident instance and is accepted
+    /// only after the matching per-user mutex was opened. Win32 foreground rules
+    /// may still deny activation; callers must treat <c>false</c> as a visible,
+    /// raw-free notification case. This mechanism is session-local: a global
+    /// mutex prevents duplicate hook ownership across sessions but does not grant
+    /// cross-session UI activation rights.
     /// </summary>
     /// <param name="instanceId">Instance identifier</param>
     /// <param name="notificationCallback">Optional callback to show user notification</param>
-    /// <returns>True if activation succeeded or notification was shown; false otherwise</returns>
+    /// <returns>True only when the existing instance's activation window was foregrounded.</returns>
     public static bool ActivateExistingInstance(string instanceId, UserNotificationCallback? notificationCallback = null)
     {
+        return ActivateExistingInstance(instanceId, useGlobalNamespace: false, notificationCallback);
+    }
+
+    public static bool ActivateExistingInstance(
+        string instanceId,
+        bool useGlobalNamespace,
+        UserNotificationCallback? notificationCallback = null)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
-        // Use local mutex name
-        var mutexName = $"CodexRedactionGate_{instanceId}";
+        var mutexName = BuildMutexName(instanceId, useGlobalNamespace);
 
         try
         {
             using var mutex = Mutex.OpenExisting(mutexName);
-            // Find and activate the main window of the existing process
-            // This is a simplified implementation - actual activation would require
-            // storing the window handle in a shared location or using other IPC
+            var window = NativeMethods.FindWindow(null, ActivationWindowTitle);
+            if (window != IntPtr.Zero && NativeMethods.IsWindow(window))
+            {
+                NativeMethods.ShowWindow(window, NativeMethods.SwRestore);
+                if (NativeMethods.SetForegroundWindow(window))
+                {
+                    return true;
+                }
+            }
 
-            // Show notification that existing instance is being activated
             notificationCallback?.Invoke(
-                "Code Sanitizer",
-                "Code Sanitizer is already running. The existing instance has been activated.",
-                includeDiagnosticsLink: true);
-
-            return true;
+                AppStrings.Get("ProductName"),
+                AppStrings.Get("AlreadyRunning"),
+                includeDiagnosticsLink: false);
+            return false;
         }
         catch
         {
-            // Show notification even if activation failed
             notificationCallback?.Invoke(
-                "Code Sanitizer",
-                "Code Sanitizer is already running. Failed to activate existing instance.",
+                AppStrings.Get("ProductName"),
+                AppStrings.Get("AlreadyRunning"),
                 includeDiagnosticsLink: false);
 
             return false;
@@ -132,6 +200,7 @@ public sealed class SingleInstanceEnforcement : IDisposable
         if (_ownsMutex)
         {
             _mutex.ReleaseMutex();
+            UnregisterProcessOwnership(_mutexName);
         }
         _mutex?.Close();
         GC.SuppressFinalize(this);
@@ -140,5 +209,69 @@ public sealed class SingleInstanceEnforcement : IDisposable
     ~SingleInstanceEnforcement()
     {
         Dispose();
+    }
+
+    internal static string BuildMutexName(string instanceId, bool useGlobalNamespace)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
+        var name = $"CodexRedactionGate_{instanceId}";
+        return useGlobalNamespace ? $"Global\\{name}" : name;
+    }
+
+    internal static bool CanUseGlobalMutex => IsElevated();
+
+    private static bool IsElevated()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    private static bool ProcessOwns(string mutexName)
+    {
+        lock (OwnedNamesLock)
+        {
+            return ProcessOwnedNames.Contains(mutexName);
+        }
+    }
+
+    private static void RegisterProcessOwnership(string mutexName)
+    {
+        lock (OwnedNamesLock)
+        {
+            ProcessOwnedNames.Add(mutexName);
+        }
+    }
+
+    private static void UnregisterProcessOwnership(string mutexName)
+    {
+        lock (OwnedNamesLock)
+        {
+            ProcessOwnedNames.Remove(mutexName);
+        }
+    }
+
+    private static class NativeMethods
+    {
+        internal const int SwRestore = 9;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern IntPtr FindWindow(string? className, string? windowName);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool IsWindow(IntPtr window);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool ShowWindow(IntPtr window, int command);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool SetForegroundWindow(IntPtr window);
     }
 }

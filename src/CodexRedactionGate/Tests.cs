@@ -6588,7 +6588,43 @@ public class SingleInstanceEnforcementTests
     }
 
     [Test]
-    public void SingleInstanceEnforcement_ActivateExistingInstance_WithCallback()
+    public void SingleInstanceEnforcement_BuildMutexNameKeepsPerUserAsDefault()
+    {
+        Assert.That(SingleInstanceEnforcement.BuildMutexName("tray", useGlobalNamespace: false), Is.EqualTo("CodexRedactionGate_tray"));
+        Assert.That(SingleInstanceEnforcement.BuildMutexName("tray", useGlobalNamespace: true), Is.EqualTo("Global\\CodexRedactionGate_tray"));
+    }
+
+    [Test]
+    public void SingleInstanceEnforcement_RecoversAfterAbandonedMutex()
+    {
+        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        using var ready = new ManualResetEventSlim(false);
+        var thread = new Thread(() =>
+        {
+            _ = new Mutex(initiallyOwned: true, name: SingleInstanceEnforcement.BuildMutexName(instanceId, false));
+            ready.Set();
+        });
+        thread.Start();
+        Assert.That(ready.Wait(TimeSpan.FromSeconds(2)), Is.True);
+        thread.Join();
+
+        using var recovered = new SingleInstanceEnforcement(instanceId);
+        Assert.That(recovered.IsFirstInstance, Is.True);
+    }
+
+    [TestCase(null, "balloon")]
+    [TestCase("toast", "toast")]
+    [TestCase("balloon", "balloon")]
+    [TestCase("messagebox", "messagebox")]
+    [TestCase("none", "none")]
+    [TestCase("unexpected", "balloon")]
+    public void SingleInstanceNotificationSettings_NormalizesKnownTypes(string? configured, string expected)
+    {
+        Assert.That(SingleInstanceNotificationSettings.NormalizeType(configured), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void SingleInstanceEnforcement_ActivateExistingInstance_ReportsFailureWithoutAnActivationWindow()
     {
         var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
         string? capturedTitle = null;
@@ -6609,13 +6645,13 @@ public class SingleInstanceEnforcementTests
                 capturedIncludeDiagnostics = includeDiagnostics;
             });
 
-        Assert.That(capturedTitle, Is.EqualTo("Code Sanitizer"));
-        Assert.That(capturedMessage, Is.Not.Null.And.Contains("already running"));
-        Assert.That(capturedIncludeDiagnostics, Is.True);
+        Assert.That(capturedTitle, Is.EqualTo(AppStrings.Get("ProductName")));
+        Assert.That(capturedMessage, Is.EqualTo(AppStrings.Get("AlreadyRunning")));
+        Assert.That(capturedIncludeDiagnostics, Is.False);
     }
 
     [Test]
-    public void SingleInstanceEnforcement_ActivateExistingInstance_WithoutCallback()
+    public void SingleInstanceEnforcement_ActivateExistingInstance_WithoutWindowReturnsFalse()
     {
         var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
 
@@ -6623,9 +6659,9 @@ public class SingleInstanceEnforcementTests
         using var enforcement1 = new SingleInstanceEnforcement(instanceId);
         Assert.That(enforcement1.IsFirstInstance, Is.True);
 
-        // Second instance should succeed without callback
+        // A mutex alone is not proof of foreground activation.
         var result = SingleInstanceEnforcement.ActivateExistingInstance(instanceId);
-        Assert.That(result, Is.True);
+        Assert.That(result, Is.False);
     }
 
     [Test]

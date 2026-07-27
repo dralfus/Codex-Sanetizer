@@ -168,6 +168,8 @@ public sealed record NativeKeyGesture(
     public static NativeKeyGesture CtrlAltShiftPause { get; } = new("PAUSE", Ctrl: true, Alt: true, Shift: true);
 }
 
+public sealed record NativePointerGesture(int X, int Y, string Button);
+
 public sealed record SurfaceCompatibilityEvidence(
     string PackageFamilyName,
     string PackageFullNamePattern,
@@ -706,6 +708,29 @@ public sealed class NativeSubmitInterceptionController
         return HandleGesture(_profile.SubmitBinding.ToNativeKeyGesture(), submitFlow, hookHealthy);
     }
 
+    public NativeSubmitInterceptionResult HandleIdentifiedSendControl(
+        TextSurfaceDiscoveryResult composerDiscovery,
+        Func<OsInteractionResult>? submitFlow = null,
+        bool hookHealthy = true)
+    {
+        ArgumentNullException.ThrowIfNull(composerDiscovery);
+        if (!composerDiscovery.Succeeded || composerDiscovery.Surface is null)
+        {
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.SurfaceUnverified,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = _profile.ProfileId,
+                    ["fail_closed_reason"] = "identified_send_control_composer_unverified"
+                });
+        }
+
+        return HandleButtonClick(composerDiscovery.Surface, submitFlow, hookHealthy);
+    }
+
     public NativeSubmitInterceptionResult HandleGesture(
         NativeKeyGesture gesture,
         Func<OsInteractionResult>? submitFlow = null,
@@ -1092,6 +1117,13 @@ internal interface INativeSubmitHookHost
     void Stop();
 }
 
+internal interface INativeSubmitPointerHookHost
+{
+    bool StartPointer(
+        Func<NativePointerGesture, NativeSubmitInterceptionResult> classify,
+        Action<NativePointerGesture> onSuppressedSubmit);
+}
+
 internal sealed class UnavailableNativeSubmitHookHost : INativeSubmitHookHost
 {
     public UnavailableNativeSubmitHookHost(string errorCode)
@@ -1117,11 +1149,13 @@ internal sealed class UnavailableNativeSubmitHookHost : INativeSubmitHookHost
     }
 }
 
-internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost
+internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INativeSubmitPointerHookHost
 {
     private const int WhKeyboardLl = 13;
+    private const int WhMouseLl = 14;
     private const int WmKeyDown = 0x0100;
     private const int WmSysKeyDown = 0x0104;
+    private const int WmLButtonDown = 0x0201;
     private const int VkControl = 0x11;
     private const int VkShift = 0x10;
     private const int VkMenu = 0x12;
@@ -1129,13 +1163,18 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost
     private const uint LlkhfInjected = 0x10;
 
     private readonly NativeMethods.LowLevelKeyboardProc _callback;
+    private readonly NativeMethods.LowLevelMouseProc _mouseCallback;
     private IntPtr _hook;
+    private IntPtr _mouseHook;
     private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
     private Action<NativeKeyGesture>? _onSuppressedSubmit;
+    private Func<NativePointerGesture, NativeSubmitInterceptionResult>? _classifyPointer;
+    private Action<NativePointerGesture>? _onSuppressedPointerSubmit;
 
     public WindowsNativeSubmitHookHost()
     {
         _callback = HookCallback;
+        _mouseCallback = MouseHookCallback;
     }
 
     public string? LastErrorCode { get; private set; }
@@ -1177,15 +1216,53 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost
 
     public void Stop()
     {
-        if (_hook == IntPtr.Zero)
+        if (_hook != IntPtr.Zero)
         {
-            return;
+            NativeMethods.UnhookWindowsHookEx(_hook);
+            _hook = IntPtr.Zero;
         }
 
-        NativeMethods.UnhookWindowsHookEx(_hook);
-        _hook = IntPtr.Zero;
+        if (_mouseHook != IntPtr.Zero)
+        {
+            NativeMethods.UnhookWindowsHookEx(_mouseHook);
+            _mouseHook = IntPtr.Zero;
+        }
+
         _classify = null;
         _onSuppressedSubmit = null;
+        _classifyPointer = null;
+        _onSuppressedPointerSubmit = null;
+    }
+
+    public bool StartPointer(
+        Func<NativePointerGesture, NativeSubmitInterceptionResult> classify,
+        Action<NativePointerGesture> onSuppressedSubmit)
+    {
+        ArgumentNullException.ThrowIfNull(classify);
+        ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
+        if (!OperatingSystem.IsWindows())
+        {
+            LastErrorCode = OsInteractionStatusIds.UnsupportedPlatform;
+            return false;
+        }
+
+        _classifyPointer = classify;
+        _onSuppressedPointerSubmit = onSuppressedSubmit;
+        if (_mouseHook != IntPtr.Zero)
+        {
+            return true;
+        }
+
+        _mouseHook = NativeMethods.SetWindowsMouseHookEx(WhMouseLl, _mouseCallback, NativeMethods.GetModuleHandle(null), 0);
+        if (_mouseHook == IntPtr.Zero)
+        {
+            LastErrorCode = "native_send_control_hook_register_failed";
+            _classifyPointer = null;
+            _onSuppressedPointerSubmit = null;
+            return false;
+        }
+
+        return true;
     }
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
@@ -1236,6 +1313,39 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost
         return new IntPtr(1);
     }
 
+    private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode < 0 || _classifyPointer is null || _onSuppressedPointerSubmit is null || wParam.ToInt32() != WmLButtonDown)
+        {
+            return NativeMethods.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
+        }
+
+        var data = Marshal.PtrToStructure<NativeMethods.MsLlHookStruct>(lParam);
+        var gesture = new NativePointerGesture(data.pt.x, data.pt.y, "left");
+        NativeSubmitInterceptionResult result;
+        try
+        {
+            result = _classifyPointer(gesture);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or COMException)
+        {
+            LastErrorCode = "native_send_control_hook_callback_failed";
+            return NativeMethods.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
+        }
+
+        if (!result.SuppressOriginalInput)
+        {
+            return NativeMethods.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
+        }
+
+        if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
+        {
+            ThreadPool.QueueUserWorkItem(_ => _onSuppressedPointerSubmit(gesture));
+        }
+
+        return new IntPtr(1);
+    }
+
     private static bool IsKeyDown(int virtualKey)
     {
         return (NativeMethods.GetKeyState(virtualKey) & 0x8000) != 0;
@@ -1264,9 +1374,13 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost
     private static class NativeMethods
     {
         public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+        public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SetWindowsMouseHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool UnhookWindowsHookEx(IntPtr hhk);
@@ -1285,6 +1399,23 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost
         {
             public uint vkCode;
             public uint scanCode;
+            public uint flags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct Point
+        {
+            public int x;
+            public int y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MsLlHookStruct
+        {
+            public Point pt;
+            public uint mouseData;
             public uint flags;
             public uint time;
             public IntPtr dwExtraInfo;

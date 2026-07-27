@@ -1393,6 +1393,21 @@ public partial class SanitizerTests
 public class HandleButtonClickTests : SanitizerTests
 {
     [Test]
+    public void HandleIdentifiedSendControl_FailsClosedWhenComposerCannotBeVerified()
+    {
+        var controller = new NativeSubmitInterceptionController(
+            CreateProtectedProfile(),
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
+
+        var result = controller.HandleIdentifiedSendControl(
+            TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer, new Dictionary<string, string>()));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+        Assert.That(result.Submitted, Is.False);
+    }
+
+    [Test]
     public void HandleButtonClick_MatchesProfileAndAllowsSubmit()
     {
         var profile = CreateProtectedProfile();

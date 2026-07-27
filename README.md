@@ -131,6 +131,10 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --aut
 
 The hotkey above is only a secondary `manual scan/apply` feature. It is not proof that native submit interception is protecting the selected AI app.
 
+The installed tray app normally enforces one resident instance for the current Windows user. For an elevated, multi-user deployment only, start it with `--tray-app --global`; this uses a `Global\` mutex and does not grant cross-session UI control.
+
+Second-launch notifications can be configured under `HKCU\Software\CodexRedactionGate\SingleInstance`: set `DisableNotification` to a non-zero DWORD to suppress them, or set `NotificationType` to `balloon`, `toast`, `messagebox`, or `none`. `toast` uses the native balloon fallback in this Windows Forms release.
+
 ## Windows Desktop Flow
 
 Supported v1 targets are Codex Desktop and ChatGPT Desktop on Windows.

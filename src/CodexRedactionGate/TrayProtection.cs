@@ -54,6 +54,7 @@ internal sealed class TrayProtectionController
     private NativeSubmitInterceptionController? _nativeSubmitController;
     private Func<OsInteractionResult>? _nativeSubmitRunner;
     private SubmitBindingProfile? _nativeProfile;
+    private readonly ISendControlDiscovery? _sendControlDiscovery;
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
     private readonly DefaultStorageLayout _storageLayout;
     private int _nativeSubmitFlowInProgress;
@@ -71,7 +72,8 @@ internal sealed class TrayProtectionController
         Func<OsInteractionResult>? nativeSubmitRunner,
         SubmitBindingProfile? nativeProfile = null,
         NativeSubmitEnterprisePolicy? enterprisePolicy = null,
-        DefaultStorageLayout? storageLayout = null)
+        DefaultStorageLayout? storageLayout = null,
+        ISendControlDiscovery? sendControlDiscovery = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
@@ -81,6 +83,7 @@ internal sealed class TrayProtectionController
         _nativeProfile = nativeProfile;
         _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         _storageLayout = storageLayout ?? DefaultStorageLayout.CreateDefault();
+        _sendControlDiscovery = sendControlDiscovery;
         State = CreateState(enabled: false, lastStatus: "disabled");
     }
 
@@ -240,9 +243,90 @@ internal sealed class TrayProtectionController
             return false;
         }
 
-        return _nativeSubmitHookHost.Start(
+        var keyboardStarted = _nativeSubmitHookHost.Start(
             gesture => _nativeSubmitController.HandleGesture(gesture),
             RunNativeSubmitOnce);
+        if (!keyboardStarted)
+        {
+            return false;
+        }
+
+        if (_nativeSubmitHookHost is INativeSubmitPointerHookHost pointerHook
+            && _sendControlDiscovery is not null)
+        {
+            if (!pointerHook.StartPointer(
+                ClassifySendControl,
+                RunNativeSendControlOnce))
+            {
+                _nativeSubmitHookHost.Stop();
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private NativeSubmitInterceptionResult ClassifySendControl(NativePointerGesture gesture)
+    {
+        if (_sendControlDiscovery is null || _nativeSubmitController is null)
+        {
+            return PassThroughPointer();
+        }
+
+        var discovery = _sendControlDiscovery.Discover(gesture);
+        return discovery.Identified
+            ? _nativeSubmitController.HandleIdentifiedSendControl(discovery.ComposerDiscovery)
+            : PassThroughPointer();
+    }
+
+    private void RunNativeSendControlOnce(NativePointerGesture gesture)
+    {
+        if (_sendControlDiscovery is null || _nativeSubmitController is null || _nativeSubmitRunner is null)
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _nativeSubmitFlowInProgress, 1) == 1)
+        {
+            PublishNativeSubmitState(
+                OsInteractionStatusIds.NativeSubmitInProgress,
+                OsInteractionStatusIds.Protected,
+                _nativeProfile?.ProfileId,
+                applied: false,
+                submitted: false);
+            return;
+        }
+
+        try
+        {
+            var discovery = _sendControlDiscovery.Discover(gesture);
+            if (!discovery.Identified)
+            {
+                return;
+            }
+
+            var result = _nativeSubmitController.HandleIdentifiedSendControl(discovery.ComposerDiscovery, _nativeSubmitRunner);
+            PublishNativeSubmitState(
+                result.Status,
+                NativeSubmitReadinessStatusAfterFlow(result.Status),
+                _nativeProfile?.ProfileId,
+                result.Applied,
+                result.Submitted);
+        }
+        finally
+        {
+            Volatile.Write(ref _nativeSubmitFlowInProgress, 0);
+        }
+    }
+
+    private static NativeSubmitInterceptionResult PassThroughPointer()
+    {
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitPassThrough,
+            SuppressOriginalInput: false,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>());
     }
 
     private void RunNativeSubmitOnce(NativeKeyGesture gesture)
