@@ -228,6 +228,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 **Blocked by:** 253.
 
 - [ ] A selected Send candidate is never passed through because UIA discovery failed or its localized label changed.
+- [ ] Keyboard and mouse callback exceptions after a selected Send candidate fail closed rather than calling through to the original input.
 - [ ] UIA work is bounded outside the low-level hook callback and hook-loss is surfaced as a raw-free degraded state.
 - [ ] Tests cover localized evidence, transient UIA failure, and non-Send controls.
 
@@ -238,6 +239,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 **Blocked by:** 254.
 
 - [ ] No interactive failure dialog includes an arbitrary exception message, path, prompt, title, or rule value.
+- [ ] DPAPI and other storage exceptions use stable public status codes; raw causes remain only as local inner exceptions.
 - [ ] Tests inject synthetic sensitive values and prove UI output remains raw-free.
 
 ## 269. Exercise installed resident runtime paths in release smoke
@@ -257,3 +259,23 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 - [ ] A second launch produces a visible user outcome without stealing focus to an invisible form.
 - [ ] Tests cover activation success and notification fallback.
+
+## 271. Centralize crash bootstrap and local crash-directory resolution
+
+**What to build:** Remove duplicated creation of the crash diagnostics directory/writer from CLI and UI startup so every crash boundary uses the same raw-free initialization path.
+
+**Blocked by:** 254.
+
+- [ ] CLI, UI-thread, and readiness crash capture call one shared initialization path.
+- [ ] A capture failure never changes the protected-send decision or prints raw exception text.
+- [ ] Focused tests cover the shared bootstrap path.
+
+## 272. Replace setup-form control discovery with typed profile-card state
+
+**What to build:** Make binding selection and verification status independent of label text and nested WinForms control traversal, so localization and layout changes cannot update the wrong profile.
+
+**Blocked by:** 251.
+
+- [ ] Each visible profile has a typed state/control reference rather than label-text lookup.
+- [ ] Binding selection and verification status update the intended profile without string matching.
+- [ ] Tests cover both desktop profiles and a localized display label.
