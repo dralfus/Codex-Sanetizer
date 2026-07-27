@@ -29,11 +29,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Leave the mutex as test-only code, kill the existing protection process without explicit user confirmation, create a second hook as a fallback, or rely on installer shutdown behavior as normal runtime single-instance protection.
 
-- [ ] Starting `CodexRedactionGate.Tray.exe` twice leaves one hook-owning process and one tray icon.
-- [ ] The second launch signals/foregrounds the existing resident instance or exits cleanly with a raw-free result.
-- [ ] The mutex lifetime covers the actual tray message loop and is released safely on normal exit, startup failure, and abandoned-instance recovery.
-- [ ] Installer upgrade and explicit Exit remain compatible with the single-instance boundary.
-- [ ] Tests exercise the production entry-point integration, not only the helper class.
+- [x] Starting `CodexRedactionGate.Tray.exe` twice leaves one hook-owning process and one tray icon.
+- [x] The second launch signals/foregrounds the existing resident instance or exits cleanly with a raw-free result.
+- [x] The mutex lifetime covers the actual tray message loop and is released safely on normal exit, startup failure, and abandoned-instance recovery.
+- [x] Installer upgrade and explicit Exit remain compatible with the single-instance boundary.
+- [x] Tests exercise the production entry-point integration, not only the helper class.
 
 ## 253. Connect selected-app Send controls to native interception without blocking other controls
 
