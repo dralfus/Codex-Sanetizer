@@ -8,16 +8,19 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 ## 273. Publish atomic resident protection snapshots
 
-**What to build:** Make the resident native adapter publish one immutable, versioned protection snapshot rather than exposing separately mutable profile, binding, hook, controller, runner, and reload state. A callback must make its full decision from one snapshot generation.
+**What to build:** Make the resident native adapter execute every interception event from one immutable, versioned protection snapshot rather than separately mutable profile, binding, hook, controller, runner, and reload fields. The snapshot is the only runtime source for classification and guarded completion; display state remains derived from that runtime state rather than a competing copy.
 
 **Blocked by:** 250. Restore verified composer identity after SurfaceMetadata migration.
 
-**Do not:** Publish profile data before its guarding hook/controller is ready, replace fields one by one during reload, let a failed candidate remove working protection, or use locking that can block a low-level input callback on UI Automation or sanitization work.
+**Do not:** Publish profile data before its guarding hook/controller is ready, replace fields one by one during reload, let a failed candidate remove working protection, let concurrent reloads restore each other's stale state, let a callback fall back to mutable runtime fields after reading a snapshot, or use locking that can block a low-level input callback on UI Automation or sanitization work.
 
 - [ ] The published snapshot contains all data needed to classify and guard a selected-profile submit, including generation, selected profiles/bindings, hook readiness, guarded submit flow, and target-identity contract.
-- [ ] A reload builds and validates a candidate before one atomic publication; an activation or validation failure retains the previous complete snapshot.
-- [ ] Every native callback reads one snapshot generation and cannot observe a mixed old/new profile, binding, controller, runner, or hook state.
-- [ ] Tests simulate reload, rollback, and concurrent event classification without relying on timing sleeps or a live cloud submission.
+- [ ] Keyboard and pointer hook callbacks take one memory-safe snapshot read at their entry boundary; all classification, runtime lookup, guarded completion, and status publication for that event use only that captured generation.
+- [ ] A reload validates the complete candidate, starts its required hook resources, and publishes it through one memory-safe operation only after successful activation. The previous hook/runtime remains usable until this publication.
+- [ ] Candidate validation and activation failure stop only candidate resources and retain the previous complete snapshot, hook, controller, runner, profiles, bindings, and status without any mixed or stale displayed state.
+- [ ] Reload operations are serialized or otherwise made linearizable: two concurrent reloads cannot interleave publication, rollback, or hook stop/start operations.
+- [ ] Snapshot composition avoids manually duplicated mutable UI/runtime fields; the resident status exposed to the tray agrees with the published generation.
+- [ ] Tests simulate successful reload, activation failure/rollback, concurrent event classification during reload, and concurrent reload requests without timing sleeps or a live cloud submission. The tests assert that every event used one generation and that no raw submission path is released.
 
 ## 274. Make selected-client uncertainty and target identity explicit
 
