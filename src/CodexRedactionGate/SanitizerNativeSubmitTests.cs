@@ -2399,6 +2399,74 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_KeepsVerifiedChatGptGuardedWhenCodexSetupIsIncomplete()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var codexProfile = CreateProtectedProfile() with
+        {
+            ProfileId = "codex-desktop",
+            BindingSource = "not_verified",
+            CapabilityStatus = OsInteractionStatusIds.BindingUnknown
+        };
+        var chatGptProfile = CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" };
+        var chatGptCalls = 0;
+        var runtimes = new[]
+        {
+            new NativeSubmitRuntime(
+                hook,
+                new NativeSubmitInterceptionController(codexProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () => CreateSubmittedResult("codex-desktop"),
+                codexProfile),
+            new NativeSubmitRuntime(
+                hook,
+                new NativeSubmitInterceptionController(chatGptProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () =>
+                {
+                    chatGptCalls++;
+                    return CreateSubmittedResult("chatgpt-desktop");
+                },
+                chatGptProfile)
+        };
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            runtimes[0].Controller,
+            runtimes[0].Runner,
+            runtimes[0].Profile,
+            nativeSubmitRuntimes: runtimes,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
+
+        Assert.That(controller.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(chatGptCalls, Is.EqualTo(1));
+        Assert.That(controller.State.LastProfileId, Is.EqualTo("chatgpt-desktop"));
+    }
+
+    [Test]
+    public void WindowsTrayApp_ResolvesEveryEnabledPersistedProfileForNativeProtection()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var codexProfile = CreateProtectedProfile() with { ProfileId = "codex-desktop" };
+            var chatGptProfile = CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" };
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { codexProfile, chatGptProfile }).Succeeded, Is.True);
+
+            var profiles = WindowsTrayApp.ResolveNativeProfilesForProtection(layout);
+
+            Assert.That(profiles.Select(profile => profile.ProfileId), Is.EquivalentTo(new[] { "codex-desktop", "chatgpt-desktop" }));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
     public void TrayProtectionController_ReloadKeepsUsingPublishedSnapshotUntilCandidateIsPublished()
     {
         var oldHook = new FakeNativeSubmitHookHost();

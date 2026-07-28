@@ -236,12 +236,12 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 251. Make selected-profile setup and binding changes fail closed in the resident hook; 273. Publish atomic resident protection snapshots; 274. Make selected-client uncertainty and target identity explicit.
 
-- [ ] The resident controller dispatches by the active selected profile.
-- [ ] Each enabled profile owns its verified binding and a failure for one does not unprotect another.
-- [ ] The profile selected during interception is carried into the deferred sanitize/send flow; a focus change cannot redirect the flow to a different composer.
-- [ ] Hook callbacks read one atomically published runtime snapshot; reload and rollback cannot expose a mixed controller/profile/runner state.
-- [ ] The deferred flow uses the captured composer/window identity, not a later focused-window lookup, and aborts raw-free if that target is no longer valid.
-- [ ] Tests cover both profiles in one persisted store.
+- [x] The resident controller dispatches by the active selected profile.
+- [x] Each enabled profile owns its verified binding and a failure for one does not unprotect another.
+- [x] The profile selected during interception is carried into the deferred sanitize/send flow; a focus change cannot redirect the flow to a different composer.
+- [x] Hook callbacks read one atomically published runtime snapshot; reload and rollback cannot expose a mixed controller/profile/runner state.
+- [x] The deferred flow uses the captured composer/window identity, not a later focused-window lookup, and aborts raw-free if that target is no longer valid.
+- [x] Tests cover both profiles in one persisted store.
 
 ## 267. Make selected Send-control classification fail closed and bounded
 
