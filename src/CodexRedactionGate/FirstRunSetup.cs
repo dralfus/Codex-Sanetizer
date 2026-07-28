@@ -597,7 +597,7 @@ internal sealed class FirstRunSetupForm : Form
             Width = 160,
             Margin = new Padding(0, 0, 8, 0)
         };
-        _verifyCodexButton.Click += (_, _) => OnVerifyProfile("codex-desktop");
+        _verifyCodexButton.Click += (_, _) => OnVerifyProfile(GetProfileCard("codex-desktop"));
 
         _verifyChatGptButton = new Button
         {
@@ -605,7 +605,7 @@ internal sealed class FirstRunSetupForm : Form
             Width = 160,
             Margin = new Padding(0, 0, 8, 0)
         };
-        _verifyChatGptButton.Click += (_, _) => OnVerifyProfile("chatgpt-desktop");
+        _verifyChatGptButton.Click += (_, _) => OnVerifyProfile(GetProfileCard("chatgpt-desktop"));
 
         _skipButton = new Button
         {
@@ -708,16 +708,23 @@ internal sealed class FirstRunSetupForm : Form
         card.Controls.Add(statusLabel);
         card.Controls.Add(detailsLabel);
 
-        return new ProfileCardState(card, statusLabel, detailsLabel);
+        return new ProfileCardState(profile, card, statusLabel, detailsLabel);
     }
 
-    private void OnVerifyProfile(string profileId)
+    private ProfileCardState? GetProfileCard(string profileId)
     {
-        var updatedProfile = _profiles
-            .FirstOrDefault(p => string.Equals(p.ProfileId, profileId, StringComparison.Ordinal));
+        return _profileCards.TryGetValue(profileId, out var card) ? card : null;
+    }
 
-        if (updatedProfile is not null)
+    private void OnVerifyProfile(ProfileCardState? card)
+    {
+        if (card is null)
         {
+            return;
+        }
+
+        var updatedProfile = card.Profile;
+        var profileId = updatedProfile.ProfileId;
             // Update profile with selected binding pair
             var (selectedSubmit, selectedNewline) = GetSelectedBindingPair();
             if (string.IsNullOrEmpty(selectedSubmit) || string.IsNullOrEmpty(selectedNewline))
@@ -740,14 +747,10 @@ internal sealed class FirstRunSetupForm : Form
             };
 
             // Update UI to show verification in progress
-            _profileCards.TryGetValue(profileId, out var card);
-            if (card is not null)
-            {
-                card.StatusLabel.Text = "⟳ Verifying...";
-                card.StatusLabel.ForeColor = Color.Orange;
-                card.DetailsLabel.Text = $"Submit: {selectedSubmit} | Newline: {selectedNewline}";
-                card.DetailsLabel.ForeColor = Color.Black;
-            }
+            card.StatusLabel.Text = "⟳ Verifying...";
+            card.StatusLabel.ForeColor = Color.Orange;
+            card.DetailsLabel.Text = $"Submit: {selectedSubmit} | Newline: {selectedNewline}";
+            card.DetailsLabel.ForeColor = Color.Black;
 
             TopMost = false;
             WindowState = FormWindowState.Minimized;
@@ -777,11 +780,8 @@ internal sealed class FirstRunSetupForm : Form
             TopMost = true;
             Activate();
 
-            if (card is not null)
-            {
-                card.StatusLabel.Text = result.Succeeded ? "✓ Protected" : "○ Not verified";
-                card.StatusLabel.ForeColor = result.Succeeded ? Color.Green : Color.Gray;
-            }
+            card.StatusLabel.Text = result.Succeeded ? "✓ Protected" : "○ Not verified";
+            card.StatusLabel.ForeColor = result.Succeeded ? Color.Green : Color.Gray;
 
             if (!result.Succeeded)
             {
@@ -798,10 +798,13 @@ internal sealed class FirstRunSetupForm : Form
                 _setupCompleted = true;
                 Close();
             }
-        }
     }
 
-    private sealed record ProfileCardState(Panel Container, Label StatusLabel, Label DetailsLabel);
+    private sealed record ProfileCardState(
+        SubmitBindingProfile Profile,
+        Panel Container,
+        Label StatusLabel,
+        Label DetailsLabel);
 
     private void OnSkipSetup()
     {

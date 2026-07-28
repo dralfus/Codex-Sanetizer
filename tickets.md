@@ -302,9 +302,9 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 251.
 
-- [ ] Each visible profile has a typed state/control reference rather than label-text lookup.
-- [ ] Binding selection and verification status update the intended profile without string matching.
-- [ ] Tests cover both desktop profiles and a localized display label.
+- [x] Each visible profile has a typed state/control reference rather than label-text lookup.
+- [x] Binding selection and verification status update the intended profile without label-text matching.
+- [x] Tests cover both desktop profiles and a localized display label.
 
 ## 275. Establish a pre-action enforcement boundary for programmatic UI Automation Send
 

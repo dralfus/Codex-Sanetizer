@@ -973,6 +973,16 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void FirstRunSetupForm_BindsVerificationToTypedProfileCardState()
+    {
+        var source = ProductSourceText("FirstRunSetup.cs");
+
+        Assert.That(source, Does.Contain("ProfileCardState(\n        SubmitBindingProfile Profile"));
+        Assert.That(source, Does.Contain("OnVerifyProfile(GetProfileCard(\"codex-desktop\"))"));
+        Assert.That(source, Does.Not.Contain("_profiles\n            .FirstOrDefault"));
+    }
+
+    [Test]
     public void Program_NativeSubmitSmoke_PrintsRawFreeNativeSubmitStatus()
     {
         var (exitCode, stdout, stderr) = CaptureProgramOutput(() =>
