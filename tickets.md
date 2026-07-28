@@ -44,13 +44,13 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Pass through because the startup/default profile is disabled, treat one protected profile as setup completion for a different selected unprotected profile, retain `protected` while a new pair is awaiting verification, silently default to `Enter`, or swallow setup failures without a visible raw-free fail-closed status.
 
-- [ ] A selected but unconfigured profile suppresses its matching Send gesture with `setup_required`; unrelated apps and non-Send input continue to pass through.
-- [ ] Setup completion is evaluated for the selected profile set, not merely because any profile is protected.
-- [ ] Selecting a new Send/newline pair immediately invalidates the old protected profile; only the successfully verified pair becomes protected.
-- [ ] The tray replaces/restarts the live native controller and hook with the newly verified profile, and tray status reports the same active pair.
-- [ ] The previous resident hook remains active until a replacement hook has started successfully; a replacement failure restores the prior protected runtime.
-- [ ] Cancellation, timeout, storage failure, and unexpected setup exception leave the app fail-closed with raw-free diagnostics.
-- [ ] Tests cover empty store, two selected profiles, binding change from protected state, resident reload, setup cancel/failure, and no raw submission.
+- [x] A selected but unconfigured profile suppresses its matching Send gesture with `setup_required`; unrelated apps and non-Send input continue to pass through.
+- [x] Setup completion is evaluated for the selected profile set, not merely because any profile is protected.
+- [x] Selecting a new Send/newline pair immediately invalidates the old protected profile; only the successfully verified pair becomes protected.
+- [x] The tray replaces/restarts the live native controller and hook with the newly verified profile, and tray status reports the same active pair.
+- [x] The previous resident hook remains active until a replacement hook has started successfully; a replacement failure restores the prior protected runtime.
+- [x] Cancellation, timeout, storage failure, and unexpected setup exception leave the app fail-closed with raw-free diagnostics.
+- [x] Tests cover empty store, two selected profiles, binding change from protected state, resident reload, setup cancel/failure, and no raw submission.
 
 ## 252. Wire per-user single-instance enforcement into the installed tray entry point
 

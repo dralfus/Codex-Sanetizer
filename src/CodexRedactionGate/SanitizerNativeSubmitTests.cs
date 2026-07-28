@@ -1080,6 +1080,8 @@ public partial class SanitizerTests
 
         public string? LastErrorCode { get; private set; }
 
+        public NativeSubmitInterceptionResult? LastClassification { get; private set; }
+
         public bool Start(
             Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
             Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
@@ -1105,6 +1107,7 @@ public partial class SanitizerTests
         public void Trigger(NativeKeyGesture gesture)
         {
             var result = _classify!(gesture);
+            LastClassification = result;
             if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
             {
                 _onSuppressedSubmit!(gesture, result);
@@ -1405,6 +1408,54 @@ public partial class SanitizerTests
 public class HandleButtonClickTests : SanitizerTests
 {
     [Test]
+    public void NativeSubmitInterception_SetupStatusExceptionSuppressesSelectedSend()
+    {
+        var controller = new NativeSubmitInterceptionController(
+            CreateProtectedProfile(),
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            firstRunSetupController: new ThrowingSetupStatusController());
+
+        var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+        Assert.That(result.Diagnostics["setup_status_error"], Is.EqualTo("true"));
+    }
+
+    [Test]
+    public void FirstRunSetupController_VerificationExceptionKeepsSelectedProfileUnprotected()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var pendingProfile = CreateProtectedProfile() with
+            {
+                BindingSource = "not_verified",
+                CapabilityStatus = OsInteractionStatusIds.BindingUnknown
+            };
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { pendingProfile }).Succeeded, Is.True);
+            var setup = new FirstRunSetupController(
+                new ThrowingFirstRunProfileVerifier(),
+                (_, _, _) => throw new InvalidOperationException("Setup window should not be shown."));
+
+            var result = setup.VerifyProfile("codex-desktop", layout);
+            var stored = SubmitBindingProfileStore.Load(layout).Profiles.Single();
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo("verification_failed"));
+            Assert.That(result.Diagnostics["verification_exception"], Is.EqualTo("true"));
+            Assert.That(stored.IsProtected, Is.False);
+            Assert.That(System.Text.Json.JsonSerializer.Serialize(result), Does.Not.Contain("synthetic prompt"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
     public void HandleIdentifiedSendControl_FailsClosedWhenComposerCannotBeVerified()
     {
         var controller = new NativeSubmitInterceptionController(
@@ -1419,6 +1470,25 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(result.Submitted, Is.False);
     }
 
+    private sealed class ThrowingFirstRunProfileVerifier : IFirstRunProfileVerifier
+    {
+        public SubmitBindingProfile Verify(SubmitBindingProfile profile)
+        {
+            throw new InvalidOperationException("synthetic prompt must not be persisted");
+        }
+    }
+
+    private sealed class ThrowingSetupStatusController : IFirstRunSetupController
+    {
+        public FirstRunSetupResult EnsureSetup(DefaultStorageLayout layout) => throw new InvalidOperationException();
+
+        public FirstRunSetupResult GetSetupStatus(DefaultStorageLayout layout, string? profileId = null) => throw new InvalidOperationException();
+
+        public FirstRunSetupResult VerifyProfile(string profileId, DefaultStorageLayout layout) => throw new InvalidOperationException();
+
+        public bool IsSetupComplete(DefaultStorageLayout layout) => false;
+    }
+
     [Test]
     public void NativeSubmitInterception_BindingChangeBlocksNewSubmitBeforeRuntimeReload()
     {
@@ -1426,7 +1496,11 @@ public class HandleButtonClickTests : SanitizerTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            var oldProfile = CreateProtectedProfile();
+            var oldProfile = CreateProtectedProfile() with
+            {
+                SubmitBinding = SubmitKeyBinding.Parse("Enter").Binding,
+                NewlineBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding
+            };
             var changedProfile = oldProfile with
             {
                 BindingSource = "not_verified",
@@ -1442,10 +1516,101 @@ public class HandleButtonClickTests : SanitizerTests
                 firstRunSetupController: new FirstRunSetupController(),
                 setupLayout: layout);
 
+            // Ctrl+Enter was the old newline key but is the newly selected Send
+            // key. It must remain blocked until the new pair is verified and
+            // atomically loaded into the resident runtime.
             var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
 
             Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
             Assert.That(result.SuppressOriginalInput, Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void TrayProtectionController_ReloadsOnlyTheVerifiedBindingAfterPendingBindingChange()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var oldProfile = CreateProtectedProfile() with
+            {
+                SubmitBinding = SubmitKeyBinding.Parse("Enter").Binding,
+                NewlineBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding
+            };
+            var pendingProfile = oldProfile with
+            {
+                BindingSource = "not_verified",
+                CapabilityStatus = OsInteractionStatusIds.BindingUnknown,
+                SubmitBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+                NewlineBinding = SubmitKeyBinding.Parse("Enter").Binding
+            };
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { pendingProfile }).Succeeded, Is.True);
+
+            var oldHook = new FakeNativeSubmitHookHost();
+            var oldSubmitCalls = 0;
+            var oldRuntime = new NativeSubmitRuntime(
+                oldHook,
+                new NativeSubmitInterceptionController(
+                    oldProfile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                    activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+                    firstRunSetupController: new FirstRunSetupController(),
+                    setupLayout: layout),
+                () =>
+                {
+                    oldSubmitCalls++;
+                    return CreateSubmittedResult("codex-desktop");
+                },
+                oldProfile);
+            var tray = new TrayProtectionController(
+                new FakeTrayHotkeyHost(),
+                () => throw new InvalidOperationException("Manual scan should not run."),
+                oldHook,
+                oldRuntime.Controller,
+                oldRuntime.Runner,
+                oldProfile,
+                storageLayout: layout);
+
+            Assert.That(tray.Start(), Is.True);
+            oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+            Assert.That(oldHook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
+            Assert.That(oldSubmitCalls, Is.EqualTo(0));
+
+            var verifiedProfile = pendingProfile with
+            {
+                BindingSource = "user_verified",
+                CapabilityStatus = OsInteractionStatusIds.Protected
+            };
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { verifiedProfile }).Succeeded, Is.True);
+
+            var verifiedHook = new FakeNativeSubmitHookHost();
+            var verifiedSubmitCalls = 0;
+            var verifiedRuntime = new NativeSubmitRuntime(
+                verifiedHook,
+                new NativeSubmitInterceptionController(
+                    verifiedProfile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                    activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+                    firstRunSetupController: new FirstRunSetupController(),
+                    setupLayout: layout),
+                () =>
+                {
+                    verifiedSubmitCalls++;
+                    return CreateSubmittedResult("codex-desktop");
+                },
+                verifiedProfile);
+
+            Assert.That(tray.ReloadNativeSubmit(verifiedRuntime), Is.True);
+            verifiedHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+            Assert.That(verifiedHook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+            Assert.That(verifiedSubmitCalls, Is.EqualTo(1));
+            Assert.That(tray.State.ProtectedSendBinding, Is.EqualTo("Ctrl+Enter"));
         }
         finally
         {

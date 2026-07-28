@@ -143,6 +143,13 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
                 Diagnostics: initialStatus.Diagnostics);
         }
 
+        // Do not launch a setup window that could overwrite an unreadable
+        // profile store. The resident hook stays fail-closed until it recovers.
+        if (!initialStatus.Succeeded)
+        {
+            return initialStatus;
+        }
+
         if (!OperatingSystem.IsWindows())
         {
             return new FirstRunSetupResult(
@@ -233,6 +240,19 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         ArgumentNullException.ThrowIfNull(layout);
 
         var storeResult = SubmitBindingProfileStore.Load(layout);
+        if (!storeResult.Succeeded)
+        {
+            return new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "profiles_load_failed",
+                State: CreateSetupState(storeResult.Profiles, profileId),
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = profileId,
+                    ["profiles_load_status"] = storeResult.Code
+                });
+        }
+
         var visibleProfiles = SetupVisibleProfiles(storeResult.Profiles);
         var profile = visibleProfiles
             .FirstOrDefault(p => string.Equals(p.ProfileId, profileId, StringComparison.Ordinal));
@@ -249,7 +269,23 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
                 });
         }
 
-        var verifiedProfile = _profileVerifier.Verify(profile);
+        SubmitBindingProfile verifiedProfile;
+        try
+        {
+            verifiedProfile = _profileVerifier.Verify(profile);
+        }
+        catch (Exception)
+        {
+            return new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "verification_failed",
+                State: CreateSetupState(visibleProfiles, profileId),
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = profileId,
+                    ["verification_exception"] = "true"
+                });
+        }
         var updatedProfiles = visibleProfiles
             .Where(p => !string.Equals(p.ProfileId, profileId, StringComparison.Ordinal))
             .Append(verifiedProfile)

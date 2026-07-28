@@ -771,7 +771,8 @@ public sealed class NativeSubmitInterceptionController
         // A binding change is persisted before it is verified. Consult the store
         // on the guarded path so the old in-memory binding cannot become a raw
         // submission bypass while the tray is waiting to reload its runtime.
-        var setupCandidateGesture = IsProfileSetupRequired() && IsSetupCandidateGesture(gesture);
+        var setupCandidateGesture = IsProfileSetupRequired()
+            && IsSetupPendingSubmitGesture(gesture);
         if (_profile.NewlineBinding?.Matches(gesture) == true && !setupCandidateGesture)
         {
             diagnostics["pass_through_reason"] = "newline_binding";
@@ -1041,7 +1042,23 @@ public sealed class NativeSubmitInterceptionController
         }
 
         var setupLayout = _setupLayout ?? DefaultStorageLayout.CreateDefault();
-        var setupResult = _firstRunSetupController.GetSetupStatus(setupLayout, _profile.ProfileId);
+        FirstRunSetupResult setupResult;
+        try
+        {
+            setupResult = _firstRunSetupController.GetSetupStatus(setupLayout, _profile.ProfileId);
+        }
+        catch (Exception)
+        {
+            diagnostics["setup_required"] = "true";
+            diagnostics["setup_status_error"] = "true";
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.NativeSubmitSetupRequired,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: diagnostics);
+        }
+
         if (setupResult.Succeeded && !setupResult.State.Required)
         {
             return null;
@@ -1069,6 +1086,41 @@ public sealed class NativeSubmitInterceptionController
             && !gesture.Shift;
     }
 
+    private bool IsSetupPendingSubmitGesture(NativeKeyGesture gesture)
+    {
+        // A setup flow persists the newly selected pair before it is verified
+        // and before the resident runtime is replaced. Guard the old Send key
+        // and the persisted pending Send key; otherwise the latter can be
+        // mistaken for the old newline key and escape the gate.
+        if (_profile.SubmitBinding?.Matches(gesture) == true)
+        {
+            return true;
+        }
+
+        if (_firstRunSetupController is null)
+        {
+            return IsSetupCandidateGesture(gesture);
+        }
+
+        try
+        {
+            var setupLayout = _setupLayout ?? DefaultStorageLayout.CreateDefault();
+            var storedProfile = SubmitBindingProfileStore.Load(setupLayout).Profiles
+                .FirstOrDefault(profile => string.Equals(
+                    profile.ProfileId,
+                    _profile.ProfileId,
+                    StringComparison.Ordinal));
+            return storedProfile?.SubmitBinding?.Matches(gesture) == true
+                || (storedProfile?.SubmitBinding is null && IsSetupCandidateGesture(gesture));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // The previous verified Send key remains guarded above. Retain the
+            // conservative default while a pending profile cannot be read.
+            return IsSetupCandidateGesture(gesture);
+        }
+    }
+
     private bool IsProfileSetupRequired()
     {
         if (_firstRunSetupController is null)
@@ -1077,8 +1129,15 @@ public sealed class NativeSubmitInterceptionController
         }
 
         var setupLayout = _setupLayout ?? DefaultStorageLayout.CreateDefault();
-        var result = _firstRunSetupController.GetSetupStatus(setupLayout, _profile.ProfileId);
-        return !result.Succeeded || result.State.Required;
+        try
+        {
+            var result = _firstRunSetupController.GetSetupStatus(setupLayout, _profile.ProfileId);
+            return !result.Succeeded || result.State.Required;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
     }
 
     private static IReadOnlyDictionary<string, string> Merge(

@@ -397,10 +397,26 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     {
         if (result?.Succeeded == true && !result.State.Required)
         {
-            var runtimeSet = _nativeSubmitRuntimeFactory?.Invoke();
-            if (runtimeSet is not null)
+            try
             {
-                _controller.ReloadNativeSubmit(runtimeSet);
+                var runtimeSet = _nativeSubmitRuntimeFactory?.Invoke();
+                if (runtimeSet is null || !_controller.ReloadNativeSubmit(runtimeSet))
+                {
+                    MessageBox.Show(
+                        "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.",
+                        "Codex Redaction Gate - Setup required",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception exception)
+            {
+                LocalCrashDiagnostics.CaptureDefault(exception, "first_run_setup", "runtime_reload_failed");
+                MessageBox.Show(
+                    "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.",
+                    "Codex Redaction Gate - Setup required",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
             }
         }
         else if (result is null || result.Code != "setup_cancelled")
