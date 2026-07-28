@@ -266,6 +266,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly SingleInstanceEnforcement? _singleInstanceEnforcement;
     private readonly Func<NativeSubmitRuntimeSet?>? _nativeSubmitRuntimeFactory;
     private readonly Func<IFirstRunSetupController> _firstRunSetupControllerFactory;
+    private readonly Action<FirstRunSetupResult?>? _firstRunSetupCompleted;
     private int _firstRunSetupScheduled;
 
     public WindowsTrayApplicationContext(TrayProtectionController controller)
@@ -295,7 +296,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         ITrayProtectionDisableConfirmation disableConfirmation,
         SingleInstanceEnforcement? singleInstanceEnforcement = null,
         Func<NativeSubmitRuntimeSet?>? nativeSubmitRuntimeFactory = null,
-        Func<IFirstRunSetupController>? firstRunSetupControllerFactory = null)
+        Func<IFirstRunSetupController>? firstRunSetupControllerFactory = null,
+        Action<FirstRunSetupResult?>? firstRunSetupCompleted = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
@@ -306,6 +308,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _singleInstanceEnforcement = singleInstanceEnforcement;
         _nativeSubmitRuntimeFactory = nativeSubmitRuntimeFactory;
         _firstRunSetupControllerFactory = firstRunSetupControllerFactory ?? (() => new FirstRunSetupController());
+        _firstRunSetupCompleted = firstRunSetupCompleted;
 
         _activationWindow = new Form
         {
@@ -432,6 +435,14 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
 
         RefreshStatus();
+        try
+        {
+            _firstRunSetupCompleted?.Invoke(result);
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "first_run_setup", "completion_callback_failed");
+        }
     }
 
     protected override void Dispose(bool disposing)

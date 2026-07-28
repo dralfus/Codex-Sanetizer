@@ -7018,6 +7018,102 @@ public class ResidentFirstRunSetupLaunchTests
         }
     }
 
+    [Test]
+    [CancelAfter(10000)]
+    public void WindowsTrayApplicationContext_StartsNativeHookBeforeFirstRunSetupOnMessageLoop()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Save(layout, new[] { CreatePendingSetupProfile() });
+            using var setupStarted = new ManualResetEventSlim(false);
+            using var setupCompleted = new ManualResetEventSlim(false);
+            Exception? threadFailure = null;
+            var hookWasStartedBeforeSetup = 0;
+            var hookStayedStartedAfterSetup = 0;
+
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var hook = new SanitizerTests.FakeNativeSubmitHookHost();
+                    var profile = CreatePendingSetupProfile();
+                    var protection = new TrayProtectionController(
+                        new SanitizerTests.FakeTrayHotkeyHost(),
+                        () => throw new AssertionException("Manual scan should not run."),
+                        hook,
+                        new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                        () => throw new AssertionException("Cloud submission should not run."),
+                        profile,
+                        storageLayout: layout,
+                        activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
+                            OsInteractionStatusIds.NotComposer,
+                            new Dictionary<string, string>()));
+                    var setup = new TestSetupController(_ =>
+                    {
+                        if (hook.Started)
+                        {
+                            Interlocked.Exchange(ref hookWasStartedBeforeSetup, 1);
+                        }
+
+                        setupStarted.Set();
+                        return SetupCancelledResult();
+                    });
+
+                    using var context = new WindowsTrayApplicationContext(
+                        protection,
+                        layout,
+                        new NoOpTrayLocalCommandLauncher(),
+                        new NoOpTrayProtectionDisableConfirmation(),
+                        firstRunSetupControllerFactory: () => setup,
+                        firstRunSetupCompleted: _ => setupCompleted.Set());
+                    if (setupStarted.IsSet)
+                    {
+                        throw new AssertionException("Setup started before the tray message loop.");
+                    }
+
+                    using var timeoutTimer = new System.Windows.Forms.Timer { Interval = 25 };
+                    var ticks = 0;
+                    timeoutTimer.Tick += (_, _) =>
+                    {
+                        if (setupCompleted.IsSet || ++ticks > 120)
+                        {
+                            if (hook.Started)
+                            {
+                                Interlocked.Exchange(ref hookStayedStartedAfterSetup, 1);
+                            }
+
+                            timeoutTimer.Stop();
+                            context.ExitThread();
+                        }
+                    };
+                    timeoutTimer.Start();
+                    System.Windows.Forms.Application.Run(context);
+                }
+                catch (Exception exception)
+                {
+                    threadFailure = exception;
+                }
+            })
+            {
+                IsBackground = true
+            };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            Assert.That(thread.Join(TimeSpan.FromSeconds(8)), Is.True, "Tray message loop did not exit.");
+            Assert.That(threadFailure, Is.Null);
+            Assert.That(setupStarted.IsSet, Is.True);
+            Assert.That(setupCompleted.IsSet, Is.True);
+            Assert.That(Volatile.Read(ref hookWasStartedBeforeSetup), Is.EqualTo(1));
+            Assert.That(Volatile.Read(ref hookStayedStartedAfterSetup), Is.EqualTo(1));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
     private static void LaunchFirstRunSetupIfRequiredWithController(DefaultStorageLayout layout, IFirstRunSetupController setupController)
     {
         FirstRunSetupBackgroundRunner.Run(layout, () => setupController, _ => { });
@@ -7034,6 +7130,33 @@ public class ResidentFirstRunSetupLaunchTests
             CapabilityStatus: OsInteractionStatusIds.BindingUnknown,
             CompatibilityEvidence: null,
             Diagnostics: new Dictionary<string, string>());
+    }
+
+    private static FirstRunSetupResult SetupCancelledResult()
+    {
+        return new FirstRunSetupResult(
+            Succeeded: false,
+            Code: "setup_cancelled",
+            State: new FirstRunSetupState(
+                Required: true,
+                UnprotectedProfileIds: new[] { "codex-desktop" },
+                Status: "cancelled",
+                VerifiedCodex: false,
+                VerifiedChatGpt: false),
+            Diagnostics: new Dictionary<string, string>());
+    }
+
+    private sealed class NoOpTrayLocalCommandLauncher : ITrayLocalCommandLauncher
+    {
+        public void Open(TrayLocalCommand command)
+        {
+            throw new AssertionException("Local command should not run.");
+        }
+    }
+
+    private sealed class NoOpTrayProtectionDisableConfirmation : ITrayProtectionDisableConfirmation
+    {
+        public bool Confirm(string action, TrayProtectionState state) => true;
     }
 
     private sealed class TestSetupController : IFirstRunSetupController

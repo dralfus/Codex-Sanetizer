@@ -306,6 +306,30 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Binding selection and verification status update the intended profile without string matching.
 - [ ] Tests cover both desktop profiles and a localized display label.
 
+## 275. Establish a pre-action enforcement boundary for programmatic UI Automation Send
+
+**What to build:** Ensure the product never represents non-cancellable UI Automation observations as a protected Send interception path. UIA providers can raise `InvokedEvent` at provider-dependent times, but the external client API cannot cancel a third-party application's `Invoke()` action. Define and implement a supported pre-action enforcement boundary for programmatic `Invoke()` activation, either inside the selected client or at its cloud-egress boundary, before claiming this path is protected.
+
+**Blocked by:** Product decision on the supported enforcement boundary. The external Windows UI Automation client API exposes `InvokedEvent` as non-cancellable observation and cannot cancel a third-party application's `Invoke()` action.
+
+**Do not:** Treat `InvokedEvent` observation as prevention, report a raw Send as protected after it has happened, or silently broaden low-level keyboard/mouse hooks to unrelated applications.
+
+- [ ] The supported pre-action boundary prevents a programmatic Send before cloud submission, or the profile is explicitly reported as unsupported for that path.
+- [ ] Protected status and diagnostics distinguish pre-action enforcement from post-action observation using raw-free statuses.
+- [ ] Tests prove a programmatic activation cannot be reported as successfully protected when no pre-action boundary is active.
+- [ ] Documentation records the Windows UIA limitation and the selected enforcement design.
+
+## 276. Test the live tray message-loop onboarding lifecycle
+
+**What to build:** Exercise the actual Windows tray application context on an STA message loop and prove that native interception is registered before first-run setup work begins, with no cloud submission.
+
+**Blocked by:** 265. Keep first-run fail-closed protection active while onboarding is displayed.
+
+- [x] The test creates the real tray application context on an STA thread and runs its message loop.
+- [x] The test proves native hook startup occurs before setup work and setup is dispatched only after the loop accepts posted work.
+- [x] A cancelled setup leaves the native hook registered and completes without a live cloud submission or blocking dialog; failed setup continues to use the visible raw-free retry path from ticket 265.
+- [x] The test has a bounded timeout and cleans up its notification icon, activation window, and temporary storage.
+
 ## 255. Make release smoke exercise the real protected-send invariants and remove committed test run artifacts
 
 **What to build:** Make the final release smoke consume the real resident-lifecycle evidence from the protected-send harness, then verify package hygiene and raw-free release output. This is the only ticket that can declare the current native-protection frontier release-ready.
