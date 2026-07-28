@@ -275,6 +275,18 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Smoke fails when any listed resident boundary is disconnected or pass-through.
 - [ ] The smoke result contains only raw-free evidence.
 - [ ] Smoke launches the actual application context and proves hook registration, setup gating, runtime reload, selected Send failure handling, and second-instance behavior without a cloud submission.
+- [ ] Smoke does not treat a fake hook host, a constant, or application-file presence as proof that a resident hook/lifecycle boundary worked.
+
+## 278. Fail closed when the bounded native callback fallback itself faults
+
+**What to build:** Ensure that an exception in the low-level hook's bounded selected-target fallback cannot turn a previously selected Send candidate into pass-through. The fallback must preserve normal input for a known unrelated target while emitting a raw-free failure result for a selected target.
+
+**Blocked by:** 277. Bind native Send decisions to the captured target before callback timeout.
+
+- [ ] A selected cached target remains suppressed when its bounded fallback throws.
+- [ ] An unrelated cached target continues normally when the fallback throws or has no identity.
+- [ ] The callback records only a stable raw-free status; it does not expose exception text.
+- [ ] Tests inject the failure at the hook-host boundary for both keyboard and pointer input.
 
 ## 270. Make second-instance activation visibly useful
 
@@ -327,11 +339,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Re-read the foreground window as proof for an earlier key/click, pass through when selected-identity resolution throws, block unrelated input merely because identity is unavailable, or report programmatic UIA `Invoke()` as protected.
 
-- [ ] Focused Send discovery receives and verifies the hook-captured target; identity mismatch suppresses the original Send raw-free.
-- [ ] Timeout and exception fallback use only bounded captured/precomputed identity, without UIA or foreground re-discovery on the hook callback thread.
-- [ ] A captured selected submit remains suppressed when the resolver fails; an unrelated captured window passes through.
-- [ ] First-run focused Send activation returns `setup_required` rather than `binding_unknown`.
-- [ ] Tests cover focus switching during classification, resolver failure, selected/unselected profiles, and focused Enter/Space during onboarding.
+- [x] Focused Send discovery receives and verifies the hook-captured target; identity mismatch suppresses the original Send raw-free.
+- [x] Timeout and exception fallback use only bounded captured/precomputed identity, without UIA or foreground re-discovery on the hook callback thread.
+- [x] A captured selected submit remains suppressed when the resolver fails; an unrelated captured window passes through.
+- [x] First-run focused Send activation returns `setup_required` rather than `binding_unknown`.
+- [x] Tests cover focus switching during classification, resolver failure, selected/unselected profiles, and focused Enter/Space during onboarding.
 
 ## 276. Test the live tray message-loop onboarding lifecycle
 
