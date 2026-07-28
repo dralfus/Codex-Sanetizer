@@ -62,14 +62,15 @@ public sealed class WindowsActiveSurfaceDiscovery : IActiveTextSurfaceDiscovery
         }
 
         var surface = new TextSurfaceDescriptor(
-            SurfaceId: $"foreground:{match.Profile.ProfileId}",
+            SurfaceId: $"foreground:{match.Profile.ProfileId}:{snapshot.WindowHandle.ToInt64():X}",
             ProfileId: match.Profile.ProfileId,
             DisplayName: match.Profile.DisplayName,
             Supported: true,
             CanCaptureText: true,
             CanReplaceText: true,
             CanSubmit: true,
-            Metadata: new SurfaceMetadata());
+            Metadata: new SurfaceMetadata(
+                WindowHandle: snapshot.WindowHandle.ToInt64().ToString("X")));
 
         return TextSurfaceDiscoveryResult.Success(surface, match.Diagnostics);
     }

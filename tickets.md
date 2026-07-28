@@ -30,11 +30,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Treat an unrecognized selected AI control as unrelated, re-read the foreground window after suppression to choose a replay target, pass through a selected-client Send because UI Automation or hook status is uncertain, or suppress ordinary input in an unrelated application.
 
-- [ ] Selected verified Send suppresses and enters the protected flow; selected verified non-Send/newline passes through.
-- [ ] Uncertain composer, Send-control identity, UI Automation, hook health, setup, or target validity inside a selected AI client suppresses with a raw-free status.
-- [ ] Uncertain input outside selected AI clients continues normally.
-- [ ] The deferred flow carries snapshot generation and captured composer/window identity; an invalid or changed target aborts raw-free and cannot submit or redirect to the current foreground window.
-- [ ] Tests cover the complete matrix, focus change after suppression, classifier exceptions, and repeated events after cancellation.
+- [x] Selected verified Send suppresses and enters the protected flow; selected verified non-Send/newline passes through.
+- [x] Uncertain composer, Send-control identity, UI Automation, hook health, setup, or target validity inside a selected AI client suppresses with a raw-free status.
+- [x] Uncertain input outside selected AI clients continues normally.
+- [x] The deferred flow carries snapshot generation and captured composer/window identity; an invalid or changed target aborts raw-free and cannot submit or redirect to the current foreground window.
+- [x] Tests cover the complete matrix, focus change after suppression, classifier exceptions, and repeated events after cancellation.
 
 ## 251. Make selected-profile setup and binding changes fail closed in the resident hook
 

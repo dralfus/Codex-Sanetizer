@@ -291,7 +291,8 @@ public partial class SanitizerTests
         Assert.That(disabled.SuppressOriginalInput, Is.True);
         Assert.That(afterDisable.Status, Is.EqualTo(OsInteractionStatusIds.DegradedHotkeyOnly));
         Assert.That(afterDisable.SuppressOriginalInput, Is.False);
-        Assert.That(unhealthy.Status, Is.EqualTo(OsInteractionStatusIds.DegradedHotkeyOnly));
+        Assert.That(unhealthy.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+        Assert.That(unhealthy.SuppressOriginalInput, Is.True);
         Assert.That(serialized, Does.Not.Contain("192.168.10.25"));
     }
 
@@ -1408,6 +1409,146 @@ public partial class SanitizerTests
 public class HandleButtonClickTests : SanitizerTests
 {
     [Test]
+    public void TrayProtectionController_SuppressesSelectedClientClassifierUncertainty()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var runtime = new NativeSubmitRuntime(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("Guarded flow must not run."),
+            profile);
+        var tray = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            runtime.Controller,
+            runtime.Runner,
+            profile,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.SurfaceUnverified,
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.True);
+    }
+
+    [Test]
+    public void TrayProtectionController_PassesThroughClassifierUncertaintyOutsideSelectedClient()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var runtime = new NativeSubmitRuntime(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("Guarded flow must not run."),
+            profile);
+        var tray = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            runtime.Controller,
+            runtime.Runner,
+            profile,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.SurfaceUnverified,
+                new Dictionary<string, string> { ["profile_id"] = "unrelated-app" }));
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_ClassifierExceptionKeepsSelectedSendGuarded()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var runnerCalls = 0;
+        var runtime = new NativeSubmitRuntime(
+            hook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop"))),
+            () =>
+            {
+                runnerCalls++;
+                return CreateSubmittedResult("codex-desktop");
+            },
+            profile);
+        var tray = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            runtime.Controller,
+            runtime.Runner,
+            profile,
+            activeSurfaceDiscovery: () => throw new InvalidOperationException());
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.True);
+        Assert.That(runnerCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TrayProtectionController_AbortsDeferredFlowWhenCapturedTargetChanges()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var capturedSurface = CreateNativeSurfaceWithWindow("codex-desktop", "1");
+        var changedSurface = CreateNativeSurfaceWithWindow("codex-desktop", "2");
+        var targetRunnerCalls = 0;
+        NativeSubmitTargetIdentity? capturedTarget = null;
+        var runtime = new NativeSubmitRuntime(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("Untargeted runner must not be used."),
+            profile,
+            target =>
+            {
+                targetRunnerCalls++;
+                capturedTarget = target;
+                var rediscovery = new CapturedTargetSurfaceDiscovery(
+                    new FixedSurfaceDiscovery(changedSurface),
+                    target).DiscoverActiveSurface();
+                return new OsInteractionResult(
+                    rediscovery.Status,
+                    rediscovery.Surface,
+                    null,
+                    null,
+                    Applied: false,
+                    Submitted: false,
+                    rediscovery.Diagnostics);
+            });
+        var tray = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            runtime.Controller,
+            runtime.Runner,
+            profile,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(capturedSurface),
+            nativeSubmitRuntimes: new[] { runtime });
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(targetRunnerCalls, Is.EqualTo(1));
+        Assert.That(capturedTarget?.SnapshotGeneration, Is.EqualTo(tray.GetCurrentSnapshot().Generation));
+        Assert.That(tray.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.StaleComposer));
+        Assert.That(tray.State.LastSubmitted, Is.False);
+    }
+
+    [Test]
     public void NativeSubmitInterception_SetupStatusExceptionSuppressesSelectedSend()
     {
         var controller = new NativeSubmitInterceptionController(
@@ -1487,6 +1628,27 @@ public class HandleButtonClickTests : SanitizerTests
         public FirstRunSetupResult VerifyProfile(string profileId, DefaultStorageLayout layout) => throw new InvalidOperationException();
 
         public bool IsSetupComplete(DefaultStorageLayout layout) => false;
+    }
+
+    private sealed class FixedSurfaceDiscovery : IActiveTextSurfaceDiscovery
+    {
+        private readonly TextSurfaceDescriptor _surface;
+
+        public FixedSurfaceDiscovery(TextSurfaceDescriptor surface)
+        {
+            _surface = surface;
+        }
+
+        public TextSurfaceDiscoveryResult DiscoverActiveSurface() => TextSurfaceDiscoveryResult.Success(_surface);
+    }
+
+    private static TextSurfaceDescriptor CreateNativeSurfaceWithWindow(string profileId, string windowHandle)
+    {
+        var surface = CreateNativeSubmitSurface(profileId);
+        return surface with
+        {
+            Metadata = surface.Metadata with { WindowHandle = windowHandle }
+        };
     }
 
     [Test]
@@ -1574,7 +1736,8 @@ public class HandleButtonClickTests : SanitizerTests
                 oldRuntime.Controller,
                 oldRuntime.Runner,
                 oldProfile,
-                storageLayout: layout);
+                storageLayout: layout,
+                activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
 
             Assert.That(tray.Start(), Is.True);
             oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));

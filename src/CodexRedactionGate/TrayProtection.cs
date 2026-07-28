@@ -19,6 +19,10 @@ internal sealed record ProtectionSnapshot(
     ISendControlDiscovery? SendControlDiscovery,
     Func<TextSurfaceDiscoveryResult> ActiveSurfaceDiscovery);
 
+internal sealed record NativeSubmitExecutionContext(
+    ProtectionSnapshot Snapshot,
+    NativeSubmitTargetIdentity? Target);
+
 public sealed record TrayProtectionState(
     bool Enabled,
     string Mode,
@@ -65,7 +69,7 @@ internal sealed class TrayProtectionController
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
     private readonly DefaultStorageLayout _storageLayout;
     private readonly object _reloadGate = new();
-    private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, ProtectionSnapshot> _classificationSnapshots = new();
+    private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
     private int _nativeSubmitFlowInProgress;
     private ProtectionSnapshot _currentSnapshot;
 
@@ -369,7 +373,7 @@ internal sealed class TrayProtectionController
         var snapshot = ReadSnapshot();
         if (snapshot.SendControlDiscovery is null || snapshot.RuntimeSet is null)
         {
-            return RememberSnapshot(snapshot, PassThroughPointer());
+            return RememberSnapshot(snapshot, PassThroughPointer(), target: null);
         }
 
         var discovery = snapshot.SendControlDiscovery.Discover(gesture);
@@ -377,15 +381,20 @@ internal sealed class TrayProtectionController
         var result = discovery.Identified && runtime is not null
             ? runtime.Controller.HandleIdentifiedSendControl(discovery.ComposerDiscovery)
             : PassThroughPointer();
-        return RememberSnapshot(snapshot, result);
+        return RememberSnapshot(
+            snapshot,
+            result,
+            NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, discovery.ComposerDiscovery.Surface));
     }
 
     private void RunNativeSendControlOnce(NativePointerGesture gesture, NativeSubmitInterceptionResult classification)
     {
-        if (!TryTakeSnapshot(classification, out var snapshot))
+        if (!TryTakeExecutionContext(classification, out var execution))
         {
             return;
         }
+
+        var snapshot = execution.Snapshot;
 
         var runtime = ResolveClassifiedRuntime(snapshot, classification);
         if (runtime is null)
@@ -406,7 +415,9 @@ internal sealed class TrayProtectionController
 
         try
         {
-            var result = runtime.Controller.CompleteGuardedSubmit(classification, runtime.Runner);
+            var result = runtime.Controller.CompleteGuardedSubmit(
+                classification,
+                () => RunNativeSubmitFlow(runtime, execution.Target));
             PublishNativeSubmitState(snapshot,
                 result.Status,
                 NativeSubmitReadinessStatusAfterFlow(result.Status),
@@ -432,10 +443,12 @@ internal sealed class TrayProtectionController
 
     private void RunNativeSubmitOnce(NativeKeyGesture gesture, NativeSubmitInterceptionResult classification)
     {
-        if (!TryTakeSnapshot(classification, out var snapshot))
+        if (!TryTakeExecutionContext(classification, out var execution))
         {
             return;
         }
+
+        var snapshot = execution.Snapshot;
 
         var runtime = ResolveClassifiedRuntime(snapshot, classification);
         if (runtime is null)
@@ -456,7 +469,9 @@ internal sealed class TrayProtectionController
 
         try
         {
-            var result = runtime.Controller.CompleteGuardedSubmit(classification, runtime.Runner);
+            var result = runtime.Controller.CompleteGuardedSubmit(
+                classification,
+                () => RunNativeSubmitFlow(runtime, execution.Target));
 
             var readinessStatus = NativeSubmitReadinessStatusAfterFlow(result.Status);
             var setupRequired = readinessStatus == OsInteractionStatusIds.NativeSubmitSetupRequired;
@@ -637,13 +652,37 @@ internal sealed class TrayProtectionController
     private NativeSubmitInterceptionResult ClassifyNativeGesture(NativeKeyGesture gesture)
     {
         var snapshot = ReadSnapshot();
-        var runtime = ResolveRuntime(snapshot);
+        var discovery = DiscoverActiveSurface(snapshot);
+        var runtime = ResolveRuntime(snapshot, discovery);
+        var knownDiscovery = discovery.Succeeded || HasProfileIdentity(discovery)
+            ? discovery
+            : null;
+        runtime ??= ResolveRuntimeByProfileIdentity(snapshot, discovery);
         var result = runtime is null
             ? (snapshot.RuntimeSet?.Runtimes.Count > 1
                 ? PassThroughPointer()
-                : snapshot.RuntimeSet?.Runtimes.FirstOrDefault()?.Controller.HandleGesture(gesture) ?? PassThroughPointer())
-            : runtime.Controller.HandleGesture(gesture);
-        return RememberSnapshot(snapshot, result);
+                : snapshot.RuntimeSet?.Runtimes.FirstOrDefault()?.Controller.HandleGesture(
+                    gesture,
+                    activeSurfaceDiscovery: knownDiscovery) ?? PassThroughPointer())
+            : runtime.Controller.HandleGesture(gesture, activeSurfaceDiscovery: knownDiscovery);
+        return RememberSnapshot(
+            snapshot,
+            result,
+            NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, discovery.Surface));
+    }
+
+    private static TextSurfaceDiscoveryResult DiscoverActiveSurface(ProtectionSnapshot snapshot)
+    {
+        try
+        {
+            return snapshot.ActiveSurfaceDiscovery();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            return TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.SurfaceUnverified,
+                new Dictionary<string, string>());
+        }
     }
 
     private NativeSubmitRuntime? ResolveRuntime(
@@ -681,6 +720,30 @@ internal sealed class TrayProtectionController
             StringComparison.Ordinal));
     }
 
+    private static NativeSubmitRuntime? ResolveRuntimeByProfileIdentity(
+        ProtectionSnapshot snapshot,
+        TextSurfaceDiscoveryResult discovery)
+    {
+        var profileId = discovery.Surface?.ProfileId;
+        if (string.IsNullOrWhiteSpace(profileId))
+        {
+            discovery.Diagnostics.TryGetValue("profile_id", out profileId);
+        }
+
+        return string.IsNullOrWhiteSpace(profileId)
+            ? null
+            : snapshot.RuntimeSet?.Runtimes.FirstOrDefault(runtime => string.Equals(
+                runtime.Profile.ProfileId,
+                profileId,
+                StringComparison.Ordinal));
+    }
+
+    private static bool HasProfileIdentity(TextSurfaceDiscoveryResult discovery)
+    {
+        return !string.IsNullOrWhiteSpace(discovery.Surface?.ProfileId)
+            || discovery.Diagnostics.ContainsKey("profile_id");
+    }
+
     private static NativeSubmitRuntime? ResolveClassifiedRuntime(
         ProtectionSnapshot snapshot,
         NativeSubmitInterceptionResult classification)
@@ -716,24 +779,52 @@ internal sealed class TrayProtectionController
 
     private NativeSubmitInterceptionResult RememberSnapshot(
         ProtectionSnapshot snapshot,
-        NativeSubmitInterceptionResult classification)
+        NativeSubmitInterceptionResult classification,
+        NativeSubmitTargetIdentity? target = null)
     {
-        _classificationSnapshots.Add(classification, snapshot);
+        _classificationSnapshots.Add(classification, new NativeSubmitExecutionContext(snapshot, target));
         return classification;
     }
 
-    private bool TryTakeSnapshot(
+    private bool TryTakeExecutionContext(
         NativeSubmitInterceptionResult classification,
-        out ProtectionSnapshot snapshot)
+        out NativeSubmitExecutionContext execution)
     {
-        if (_classificationSnapshots.TryGetValue(classification, out snapshot!))
+        if (_classificationSnapshots.TryGetValue(classification, out execution!))
         {
             _classificationSnapshots.Remove(classification);
             return true;
         }
 
-        snapshot = null!;
+        execution = null!;
         return false;
+    }
+
+    private static OsInteractionResult RunNativeSubmitFlow(
+        NativeSubmitRuntime runtime,
+        NativeSubmitTargetIdentity? target)
+    {
+        if (runtime.TargetRunner is null)
+        {
+            return runtime.Runner();
+        }
+
+        if (target is null || !string.Equals(target.ProfileId, runtime.Profile.ProfileId, StringComparison.Ordinal))
+        {
+            return new OsInteractionResult(
+                OsInteractionStatusIds.StaleComposer,
+                Surface: null,
+                SanitizationResult: null,
+                ConfirmationModel: null,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["target_identity"] = "unavailable"
+                });
+        }
+
+        return runtime.TargetRunner(target);
     }
 
     private static IReadOnlyList<NativeSubmitRuntime> CreateSingleRuntimeList(
@@ -752,7 +843,8 @@ internal sealed record NativeSubmitRuntime(
     INativeSubmitHookHost HookHost,
     NativeSubmitInterceptionController Controller,
     Func<OsInteractionResult> Runner,
-    SubmitBindingProfile Profile);
+    SubmitBindingProfile Profile,
+    Func<NativeSubmitTargetIdentity, OsInteractionResult>? TargetRunner = null);
 
 internal sealed record NativeSubmitRuntimeSet(
     INativeSubmitHookHost HookHost,

@@ -736,7 +736,8 @@ public sealed class NativeSubmitInterceptionController
     public NativeSubmitInterceptionResult HandleGesture(
         NativeKeyGesture gesture,
         Func<OsInteractionResult>? submitFlow = null,
-        bool hookHealthy = true)
+        bool hookHealthy = true,
+        TextSurfaceDiscoveryResult? activeSurfaceDiscovery = null)
     {
         ArgumentNullException.ThrowIfNull(gesture);
         var diagnostics = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -785,7 +786,7 @@ public sealed class NativeSubmitInterceptionController
             return PassThrough(diagnostics);
         }
 
-        var activeTargetGate = PassThroughIfActiveSurfaceIsNotSelectedProfile(diagnostics);
+        var activeTargetGate = PassThroughIfActiveSurfaceIsNotSelectedProfile(diagnostics, activeSurfaceDiscovery);
         if (activeTargetGate is not null)
         {
             return activeTargetGate;
@@ -816,8 +817,8 @@ public sealed class NativeSubmitInterceptionController
         {
             diagnostics["hook_health"] = "failed";
             return new NativeSubmitInterceptionResult(
-                OsInteractionStatusIds.DegradedHotkeyOnly,
-                SuppressOriginalInput: false,
+                OsInteractionStatusIds.FailedClosed,
+                SuppressOriginalInput: true,
                 Applied: false,
                 Submitted: false,
                 Diagnostics: diagnostics);
@@ -958,27 +959,36 @@ public sealed class NativeSubmitInterceptionController
     }
 
     private NativeSubmitInterceptionResult? PassThroughIfActiveSurfaceIsNotSelectedProfile(
-        Dictionary<string, string> diagnostics)
+        Dictionary<string, string> diagnostics,
+        TextSurfaceDiscoveryResult? knownDiscovery)
     {
-        if (_activeSurfaceDiscovery is null)
+        var activeSurfaceDiscovery = _activeSurfaceDiscovery;
+        if (activeSurfaceDiscovery is null && knownDiscovery is null)
         {
             return null;
         }
 
         TextSurfaceDiscoveryResult discovery;
-        try
+        if (knownDiscovery is not null)
         {
-            discovery = _activeSurfaceDiscovery();
+            discovery = knownDiscovery;
         }
-        catch (InvalidOperationException)
+        else
         {
-            diagnostics["pass_through_reason"] = "active_surface_discovery_failed";
-            return PassThrough(diagnostics);
-        }
-        catch (ArgumentException)
-        {
-            diagnostics["pass_through_reason"] = "active_surface_discovery_failed";
-            return PassThrough(diagnostics);
+            try
+            {
+                discovery = activeSurfaceDiscovery!();
+            }
+            catch (InvalidOperationException)
+            {
+                diagnostics["pass_through_reason"] = "active_surface_discovery_failed";
+                return PassThrough(diagnostics);
+            }
+            catch (ArgumentException)
+            {
+                diagnostics["pass_through_reason"] = "active_surface_discovery_failed";
+                return PassThrough(diagnostics);
+            }
         }
 
         diagnostics["active_surface_status"] = discovery.Status;

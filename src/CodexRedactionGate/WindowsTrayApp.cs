@@ -172,22 +172,30 @@ public static class WindowsTrayApp
                 activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
                 firstRunSetupController: new FirstRunSetupController(),
                 setupLayout: layout);
+            OsInteractionResult RunConfirmAndSend(NativeSubmitTargetIdentity? target)
+            {
+                var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
+                IActiveTextSurfaceDiscovery composerDiscovery = target is null
+                    ? WindowsFocusedComposerDiscovery.CreateDefault()
+                    : new CapturedTargetSurfaceDiscovery(
+                        WindowsFocusedComposerDiscovery.CreateDefault(),
+                        target);
+                var nativeSubmitOrchestrator = new OsInteractionOrchestrator(
+                    sanitizer,
+                    composerDiscovery,
+                    nativeSubmitAdapter,
+                    nativeSubmitAdapter,
+                    new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
+                    new WindowsConfirmationOverlay());
+                return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
+            }
+
             return new NativeSubmitRuntime(
                 hookHost,
                 controller,
-                () =>
-                {
-                    var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
-                    var nativeSubmitOrchestrator = new OsInteractionOrchestrator(
-                        sanitizer,
-                        WindowsFocusedComposerDiscovery.CreateDefault(),
-                        nativeSubmitAdapter,
-                        nativeSubmitAdapter,
-                        new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
-                        new WindowsConfirmationOverlay());
-                    return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
-                },
-                nativeProfile);
+                () => RunConfirmAndSend(target: null),
+                nativeProfile,
+                target => RunConfirmAndSend(target));
         }).ToArray();
         return new NativeSubmitRuntimeSet(hookHost, runtimes);
     }
