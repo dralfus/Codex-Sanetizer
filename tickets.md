@@ -68,18 +68,18 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 ## 253. Connect selected-app Send controls to native interception without blocking other controls
 
-**What to build:** Integrate production UI-control identification and Send-button activation with native interception. CS must guard the identifiable Send button for a selected protected AI profile, including mouse/UI Automation activation, while skill pickers and other non-Send controls retain normal keyboard behavior.
+**What to build:** Integrate production UI-control identification and native Send-button activation with native interception. CS must guard the identifiable Send button for a selected protected AI profile while skill pickers and other non-Send controls retain normal keyboard behavior. Programmatic UI Automation `Invoke()` is explicitly out of this ticket's scope and is addressed by ticket 275.
 
 **Blocked by:** 251. Make selected-profile setup and binding changes fail closed in the resident hook; 274. Make selected-client uncertainty and target identity explicit.
 
 **Do not:** Classify every foreground window as a composer or Send control, suppress ordinary `Enter` in a skill picker, leave mouse Send unguarded, or permit a raw fallback when control identity is unavailable.
 
-- [ ] Focused-control discovery distinguishes verified composer, identifiable selected-app Send control, and non-Send controls using raw-free UI Automation evidence.
-- [ ] Keyboard activation of an identifiable Send control and mouse/UI Automation Send activation enter the same suppress-first protected flow.
-- [ ] Non-Send controls and the configured newline shortcut pass through unchanged.
+- [x] Focused-control discovery distinguishes verified composer, identifiable selected-app Send control, and non-Send controls using raw-free UI Automation evidence.
+- [ ] Keyboard activation of an identifiable Send control and native mouse Send activation enter the same suppress-first protected flow. Programmatic UI Automation `Invoke()` remains explicitly unsupported until ticket 275 supplies a pre-action boundary.
+- [x] Non-Send controls and the configured newline shortcut pass through unchanged.
 - [ ] Unknown control identity on a selected protected Send path fails closed without exposing prompt/window/control text.
-- [ ] Once the foreground window is identified as a selected AI client, an unrecognized or transiently unavailable Send-control identity cannot release the original click.
-- [ ] Tests cover composer, skill picker, Send button, mouse activation, selected versus unselected apps, and overlay-originated replay.
+- [x] Once the foreground window is identified as a selected AI client, an unrecognized or transiently unavailable Send-control identity cannot release the original click.
+- [x] Tests cover composer, skill picker, Send button, mouse activation, selected versus unselected apps, and overlay-originated replay.
 
 ## 254. Make crash and failure diagnostics structurally raw-free
 
@@ -225,10 +225,10 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 251. Make selected-profile setup and binding changes fail closed in the resident hook; 274. Make selected-client uncertainty and target identity explicit.
 
-- [ ] Setup is scheduled after the tray message loop begins and does not block hook dispatch.
-- [ ] A selected Send during setup is suppressed with a raw-free `setup_required` result.
-- [ ] An unexpected setup-worker failure produces a visible raw-free retry path while protection remains blocked.
-- [ ] Regression test covers the real application-context lifecycle without a live cloud submission.
+- [x] Setup is scheduled after the tray message loop begins and does not block hook dispatch.
+- [x] A selected Send during setup is suppressed with a raw-free `setup_required` result.
+- [x] An unexpected setup-worker failure produces a visible raw-free retry path while protection remains blocked.
+- [x] Regression test covers the real application-context lifecycle without a live cloud submission.
 
 ## 266. Route resident interception across every selected verified profile
 
@@ -254,7 +254,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] UIA work is bounded outside the low-level hook callback and hook-loss is surfaced as a raw-free degraded state.
 - [ ] An unproven callback failure in an unrelated application does not suppress ordinary keyboard or mouse input.
 - [ ] Candidate classification distinguishes selected-app uncertainty from unrelated input: selected-app uncertainty blocks Send, unrelated input continues normally.
-- [ ] Tests cover localized evidence, transient UIA failure, and non-Send controls.
+- [x] Tests cover localized evidence, transient UIA failure, and non-Send controls.
 
 ## 268. Remove raw exception messages from all interactive UI failure paths
 
@@ -318,6 +318,20 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Protected status and diagnostics distinguish pre-action enforcement from post-action observation using raw-free statuses.
 - [ ] Tests prove a programmatic activation cannot be reported as successfully protected when no pre-action boundary is active.
 - [ ] Documentation records the Windows UIA limitation and the selected enforcement design.
+
+## 277. Bind native Send decisions to the captured target before callback timeout
+
+**What to build:** Carry the low-level hook's captured window identity through focused Send discovery and the bounded callback fallback. A focus change must fail closed for the original selected Send path, while unrelated windows keep their normal input. The fallback must use a precomputed raw-free selected-profile identity and must not perform UIA or unbounded process/window discovery on the hook callback thread.
+
+**Blocked by:** 253. Connect selected-app Send controls to native interception without blocking other controls; 267. Make selected Send-control classification fail closed and bounded.
+
+**Do not:** Re-read the foreground window as proof for an earlier key/click, pass through when selected-identity resolution throws, block unrelated input merely because identity is unavailable, or report programmatic UIA `Invoke()` as protected.
+
+- [ ] Focused Send discovery receives and verifies the hook-captured target; identity mismatch suppresses the original Send raw-free.
+- [ ] Timeout and exception fallback use only bounded captured/precomputed identity, without UIA or foreground re-discovery on the hook callback thread.
+- [ ] A captured selected submit remains suppressed when the resolver fails; an unrelated captured window passes through.
+- [ ] First-run focused Send activation returns `setup_required` rather than `binding_unknown`.
+- [ ] Tests cover focus switching during classification, resolver failure, selected/unselected profiles, and focused Enter/Space during onboarding.
 
 ## 276. Test the live tray message-loop onboarding lifecycle
 

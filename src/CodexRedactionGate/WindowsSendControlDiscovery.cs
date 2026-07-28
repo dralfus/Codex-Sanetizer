@@ -27,6 +27,8 @@ internal sealed record SendControlDiscoveryResult(
 internal interface ISendControlDiscovery
 {
     SendControlDiscoveryResult Discover(NativePointerGesture gesture);
+
+    SendControlDiscoveryResult DiscoverFocusedControl();
 }
 
 internal static class SendControlEvidence
@@ -125,62 +127,118 @@ internal sealed class WindowsSendControlDiscovery : ISendControlDiscovery
                 return Unrelated();
             }
 
-            var window = FindOwningWindow(element);
-            if (window == IntPtr.Zero)
-            {
-                window = RootWindow(gesture.TargetWindow);
-            }
-            if (window == IntPtr.Zero)
-            {
-                return Unrelated();
-            }
-
-            var match = _profiles.Match(GetWindowText(window), GetProcessName(window));
-            if (!match.Matched || match.Profile is null)
-            {
-                return Unrelated();
-            }
-
-            if (element.Current.ControlType != ControlType.Button)
-            {
-                return NonSendControl(match.Profile.ProfileId);
-            }
-
-            if (!IsSendControl(match.Profile, element))
-            {
-                return NonSendControl(match.Profile.ProfileId);
-            }
-
-            var composer = _composerDiscovery.DiscoverActiveSurface();
-            if (composer.Surface is not null
-                && !string.Equals(composer.Surface.ProfileId, match.Profile.ProfileId, StringComparison.Ordinal))
-            {
-                composer = TextSurfaceDiscoveryResult.Failure(
-                    OsInteractionStatusIds.SurfaceUnverified,
-                    new Dictionary<string, string>
-                    {
-                        ["send_control_profile_match"] = "false"
-                    });
-            }
-
-            return new SendControlDiscoveryResult(SendControlClassification.IdentifiedSend, composer);
+            return DiscoverElement(element, gesture.TargetWindow, classifyPotentialComposerAsUncertain: false);
         }
         catch (ElementNotAvailableException)
         {
-            return SelectedClientUncertain(gesture);
+            return SelectedClientUncertain(gesture.TargetWindow);
         }
         catch (InvalidOperationException)
         {
-            return SelectedClientUncertain(gesture);
+            return SelectedClientUncertain(gesture.TargetWindow);
         }
         catch (COMException)
         {
-            return SelectedClientUncertain(gesture);
+            return SelectedClientUncertain(gesture.TargetWindow);
         }
         catch (Exception)
         {
-            return SelectedClientUncertain(gesture);
+            return SelectedClientUncertain(gesture.TargetWindow);
         }
+    }
+
+    public SendControlDiscoveryResult DiscoverFocusedControl()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return Unrelated();
+        }
+
+        var targetWindow = NativeMethods.GetForegroundWindow();
+        try
+        {
+            var element = AutomationElement.FocusedElement;
+            return element is null
+                ? SelectedClientUncertain(targetWindow)
+                : DiscoverElement(element, targetWindow, classifyPotentialComposerAsUncertain: true);
+        }
+        catch (ElementNotAvailableException)
+        {
+            return SelectedClientUncertain(targetWindow);
+        }
+        catch (InvalidOperationException)
+        {
+            return SelectedClientUncertain(targetWindow);
+        }
+        catch (COMException)
+        {
+            return SelectedClientUncertain(targetWindow);
+        }
+        catch (Exception)
+        {
+            return SelectedClientUncertain(targetWindow);
+        }
+    }
+
+    private SendControlDiscoveryResult DiscoverElement(
+        AutomationElement element,
+        IntPtr fallbackWindow,
+        bool classifyPotentialComposerAsUncertain)
+    {
+        var window = FindOwningWindow(element);
+        if (window == IntPtr.Zero)
+        {
+            window = RootWindow(fallbackWindow);
+        }
+        if (window == IntPtr.Zero)
+        {
+            return Unrelated();
+        }
+
+        var match = _profiles.Match(GetWindowText(window), GetProcessName(window));
+        if (!match.Matched || match.Profile is null)
+        {
+            return Unrelated();
+        }
+
+        if (element.Current.ControlType != ControlType.Button)
+        {
+            if (classifyPotentialComposerAsUncertain && IsPotentialComposer(element))
+            {
+                return SelectedClientUncertain(window);
+            }
+
+            return NonSendControl(match.Profile.ProfileId);
+        }
+
+        if (!IsSendControl(match.Profile, element))
+        {
+            return NonSendControl(match.Profile.ProfileId);
+        }
+
+        var composer = _composerDiscovery.DiscoverActiveSurface();
+        if (composer.Surface is not null
+            && !string.Equals(composer.Surface.ProfileId, match.Profile.ProfileId, StringComparison.Ordinal))
+        {
+            composer = TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.SurfaceUnverified,
+                new Dictionary<string, string>
+                {
+                    ["send_control_profile_match"] = "false"
+                });
+        }
+
+        return new SendControlDiscoveryResult(SendControlClassification.IdentifiedSend, composer);
+    }
+
+    private static bool IsPotentialComposer(AutomationElement element)
+    {
+        var controlType = element.Current.ControlType;
+        return controlType.Equals(ControlType.Edit)
+            || controlType.Equals(ControlType.Document)
+            || controlType.Equals(ControlType.Text)
+            || element.TryGetCurrentPattern(TextPattern.Pattern, out _)
+            || element.TryGetCurrentPattern(ValuePattern.Pattern, out _);
     }
 
     private static SendControlDiscoveryResult Unrelated()
@@ -218,9 +276,9 @@ internal sealed class WindowsSendControlDiscovery : ISendControlDiscovery
         }
     }
 
-    private static SendControlDiscoveryResult SelectedClientUncertain(NativePointerGesture gesture)
+    private static SendControlDiscoveryResult SelectedClientUncertain(IntPtr targetWindow)
     {
-        var profileId = TryGetSelectedProfileId(gesture.TargetWindow);
+        var profileId = TryGetSelectedProfileId(targetWindow);
         return string.IsNullOrWhiteSpace(profileId)
             ? Unrelated()
             : new SendControlDiscoveryResult(
@@ -331,6 +389,9 @@ internal sealed class WindowsSendControlDiscovery : ISendControlDiscovery
     {
         [DllImport("user32.dll")]
         internal static extern IntPtr GetAncestor(IntPtr handle, uint flags);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         internal static extern int GetWindowTextLength(IntPtr handle);

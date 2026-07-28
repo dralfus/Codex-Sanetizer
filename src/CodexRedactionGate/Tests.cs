@@ -7032,6 +7032,7 @@ public class ResidentFirstRunSetupLaunchTests
             Exception? threadFailure = null;
             var hookWasStartedBeforeSetup = 0;
             var hookStayedStartedAfterSetup = 0;
+            var selectedSendWasBlockedDuringSetup = 0;
 
             var thread = new Thread(() =>
             {
@@ -7039,22 +7040,33 @@ public class ResidentFirstRunSetupLaunchTests
                 {
                     var hook = new SanitizerTests.FakeNativeSubmitHookHost();
                     var profile = CreatePendingSetupProfile();
+                    var nativeController = new NativeSubmitInterceptionController(
+                        profile,
+                        new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                        activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateSetupTestSurface()),
+                        firstRunSetupController: new FirstRunSetupController(),
+                        setupLayout: layout);
                     var protection = new TrayProtectionController(
                         new SanitizerTests.FakeTrayHotkeyHost(),
                         () => throw new AssertionException("Manual scan should not run."),
                         hook,
-                        new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                        nativeController,
                         () => throw new AssertionException("Cloud submission should not run."),
                         profile,
                         storageLayout: layout,
-                        activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
-                            OsInteractionStatusIds.NotComposer,
-                            new Dictionary<string, string>()));
+                        activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateSetupTestSurface()));
                     var setup = new TestSetupController(_ =>
                     {
                         if (hook.Started)
                         {
                             Interlocked.Exchange(ref hookWasStartedBeforeSetup, 1);
+                        }
+
+                        hook.Trigger(new NativeKeyGesture("Enter"));
+                        if (hook.LastClassification?.Status == OsInteractionStatusIds.NativeSubmitSetupRequired
+                            && hook.LastClassification.SuppressOriginalInput)
+                        {
+                            Interlocked.Exchange(ref selectedSendWasBlockedDuringSetup, 1);
                         }
 
                         setupStarted.Set();
@@ -7107,6 +7119,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(setupCompleted.IsSet, Is.True);
             Assert.That(Volatile.Read(ref hookWasStartedBeforeSetup), Is.EqualTo(1));
             Assert.That(Volatile.Read(ref hookStayedStartedAfterSetup), Is.EqualTo(1));
+            Assert.That(Volatile.Read(ref selectedSendWasBlockedDuringSetup), Is.EqualTo(1));
         }
         finally
         {
@@ -7130,6 +7143,22 @@ public class ResidentFirstRunSetupLaunchTests
             CapabilityStatus: OsInteractionStatusIds.BindingUnknown,
             CompatibilityEvidence: null,
             Diagnostics: new Dictionary<string, string>());
+    }
+
+    private static TextSurfaceDescriptor CreateSetupTestSurface()
+    {
+        return new TextSurfaceDescriptor(
+            "setup-native-profile-test",
+            "codex-desktop",
+            "codex-desktop",
+            Supported: true,
+            CanCaptureText: true,
+            CanReplaceText: true,
+            CanSubmit: true,
+            Metadata: new SurfaceMetadata(
+                SurfaceKind: "test",
+                CloudSubmission: "false",
+                ComposerStatus: OsInteractionStatusIds.SupportedComposer));
     }
 
     private static FirstRunSetupResult SetupCancelledResult()

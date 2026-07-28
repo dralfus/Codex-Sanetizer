@@ -162,7 +162,8 @@ public sealed record NativeKeyGesture(
     bool Alt = false,
     bool Shift = false,
     bool ImeComposing = false,
-    bool DeadKey = false)
+    bool DeadKey = false,
+    IntPtr TargetWindow = default)
 {
     public static NativeKeyGesture CtrlAltShiftEnter { get; } = new("ENTER", Ctrl: true, Alt: true, Shift: true);
     public static NativeKeyGesture CtrlAltShiftPause { get; } = new("PAUSE", Ctrl: true, Alt: true, Shift: true);
@@ -1455,7 +1456,8 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             Key: VirtualKeyToName(data.vkCode),
             Ctrl: IsKeyDown(VkControl),
             Alt: IsKeyDown(VkMenu),
-            Shift: IsKeyDown(VkShift));
+            Shift: IsKeyDown(VkShift),
+            TargetWindow: NativeMethods.GetForegroundWindow());
         var result = ClassifyKeyboardWithinBudget(gesture);
 
         if (!result.SuppressOriginalInput)
@@ -1574,7 +1576,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         }
         catch (Exception)
         {
-            return true;
+            return false;
         }
     }
 
@@ -1586,7 +1588,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         }
         catch (Exception)
         {
-            return true;
+            return false;
         }
     }
 
@@ -1624,6 +1626,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         return virtualKey switch
         {
             0x0D => "ENTER",
+            0x20 => "SPACE",
             0x09 => "TAB",
             0x1B => "ESC",
             0x13 => "PAUSE",
@@ -1658,6 +1661,9 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         [DllImport("user32.dll")]
         public static extern short GetKeyState(int nVirtKey);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll")]
         public static extern IntPtr WindowFromPoint(Point point);

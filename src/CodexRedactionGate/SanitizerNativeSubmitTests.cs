@@ -1475,6 +1475,158 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_RoutesFocusedKeyboardSendThroughTheProtectedFlow()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitCalls = 0;
+        var focusedSend = new SendControlDiscoveryResult(
+            SendControlClassification.IdentifiedSend,
+            TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(focusedSend, focusedSend),
+            profile,
+            () => submitCalls++,
+            activeSurfaceResult: TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter"));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(submitCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TrayProtectionController_PassesThroughFocusedKeyboardNonSendControl()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var nonSend = new SendControlDiscoveryResult(
+            SendControlClassification.NonSendControl,
+            TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(nonSend, nonSend),
+            profile,
+            () => throw new AssertionException("Non-Send input must not submit."),
+            activeSurfaceResult: TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_DoesNotTreatEveryKeyOnFocusedSendControlAsSubmit()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var focusedSend = new SendControlDiscoveryResult(
+            SendControlClassification.IdentifiedSend,
+            TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(focusedSend, focusedSend),
+            profile,
+            () => throw new AssertionException("Only the verified submit binding may submit."),
+            activeSurfaceResult: TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("A"));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_SuppressesFocusedControlUncertaintyForTheSelectedSubmitBinding()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var uncertain = new SendControlDiscoveryResult(
+            SendControlClassification.SelectedClientUncertain,
+            TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.SurfaceUnverified,
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(uncertain, uncertain),
+            profile,
+            () => throw new AssertionException("An uncertain control must not submit."),
+            activeSurfaceResult: TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.True);
+    }
+
+    [Test]
+    public void TrayProtectionController_PassesThroughFocusedControlUncertaintyForNonSubmitInput()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var uncertain = new SendControlDiscoveryResult(
+            SendControlClassification.SelectedClientUncertain,
+            TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.SurfaceUnverified,
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(uncertain, uncertain),
+            profile,
+            () => throw new AssertionException("Non-submit input must not submit."),
+            activeSurfaceResult: TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("A"));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_DoesNotRouteAnUnselectedFocusedSendControlToTheOnlyRuntime()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var unselectedSend = new SendControlDiscoveryResult(
+            SendControlClassification.IdentifiedSend,
+            TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(unselectedSend, unselectedSend),
+            profile,
+            () => throw new AssertionException("An unselected profile must not submit through Codex."),
+            activeProfileId: "chatgpt-desktop",
+            activeSurfaceResult: TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string> { ["profile_id"] = "chatgpt-desktop" }));
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter"));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.False);
+    }
+
+    [Test]
     public void TrayProtectionController_PassesThroughSelectedNonSendControl()
     {
         var hook = new FakeNativeSubmitHookHost();
@@ -1558,7 +1710,10 @@ public class HandleButtonClickTests : SanitizerTests
             () => { });
 
         Assert.That(tray.Start(), Is.True);
-        var result = hook.TriggerKeyboardClassificationFailure(new NativeKeyGesture("Enter", Ctrl: true));
+        var result = hook.TriggerKeyboardClassificationFailure(new NativeKeyGesture(
+            "Enter",
+            Ctrl: true,
+            TargetWindow: new IntPtr(42)));
 
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
         Assert.That(result.SuppressOriginalInput, Is.True);
@@ -1579,7 +1734,10 @@ public class HandleButtonClickTests : SanitizerTests
             activeProfileId: "unselected-client");
 
         Assert.That(tray.Start(), Is.True);
-        var result = hook.TriggerKeyboardClassificationFailure(new NativeKeyGesture("Enter", Ctrl: true));
+        var result = hook.TriggerKeyboardClassificationFailure(new NativeKeyGesture(
+            "Enter",
+            Ctrl: true,
+            TargetWindow: new IntPtr(42)));
 
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
         Assert.That(result.SuppressOriginalInput, Is.False);
@@ -1870,14 +2028,20 @@ public class HandleButtonClickTests : SanitizerTests
 
     private sealed class FixedSendControlDiscovery : ISendControlDiscovery
     {
-        private readonly SendControlDiscoveryResult _result;
+        private readonly SendControlDiscoveryResult _pointerResult;
+        private readonly SendControlDiscoveryResult _focusedResult;
 
-        public FixedSendControlDiscovery(SendControlDiscoveryResult result)
+        public FixedSendControlDiscovery(
+            SendControlDiscoveryResult pointerResult,
+            SendControlDiscoveryResult? focusedResult = null)
         {
-            _result = result;
+            _pointerResult = pointerResult;
+            _focusedResult = focusedResult ?? pointerResult;
         }
 
-        public SendControlDiscoveryResult Discover(NativePointerGesture gesture) => _result;
+        public SendControlDiscoveryResult Discover(NativePointerGesture gesture) => _pointerResult;
+
+        public SendControlDiscoveryResult DiscoverFocusedControl() => _focusedResult;
     }
 
     private static TrayProtectionController CreatePointerTray(
@@ -1885,7 +2049,8 @@ public class HandleButtonClickTests : SanitizerTests
         ISendControlDiscovery sendControlDiscovery,
         SubmitBindingProfile profile,
         Action onSubmit,
-        string activeProfileId = "codex-desktop")
+        string activeProfileId = "codex-desktop",
+        TextSurfaceDiscoveryResult? activeSurfaceResult = null)
     {
         var runtime = new NativeSubmitRuntime(
             hook,
@@ -1904,7 +2069,9 @@ public class HandleButtonClickTests : SanitizerTests
             runtime.Runner,
             profile,
             sendControlDiscovery: sendControlDiscovery,
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(activeProfileId)));
+            activeSurfaceDiscovery: () => activeSurfaceResult
+                ?? TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(activeProfileId)),
+            selectedWindowProfileResolver: _ => activeProfileId);
     }
 
     private static TextSurfaceDescriptor CreateNativeSurfaceWithWindow(string profileId, string windowHandle)

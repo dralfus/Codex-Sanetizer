@@ -68,6 +68,7 @@ internal sealed class TrayProtectionController
     private readonly Func<OsInteractionResult> _applyOnlyRunner;
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
     private readonly DefaultStorageLayout _storageLayout;
+    private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
     private readonly object _reloadGate = new();
     private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
     private int _nativeSubmitFlowInProgress;
@@ -89,7 +90,8 @@ internal sealed class TrayProtectionController
         DefaultStorageLayout? storageLayout = null,
         ISendControlDiscovery? sendControlDiscovery = null,
         IReadOnlyList<NativeSubmitRuntime>? nativeSubmitRuntimes = null,
-        Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null)
+        Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null,
+        Func<IntPtr, string?>? selectedWindowProfileResolver = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
@@ -101,6 +103,7 @@ internal sealed class TrayProtectionController
             resolvedProfile);
         _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         _storageLayout = storageLayout ?? DefaultStorageLayout.CreateDefault();
+        _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
         var surfaceDiscovery = activeSurfaceDiscovery ?? (() => TextSurfaceDiscoveryResult.Failure(
             OsInteractionStatusIds.NotComposer,
             new Dictionary<string, string>()));
@@ -418,25 +421,34 @@ internal sealed class TrayProtectionController
     private bool ShouldSuppressPointerClassificationFailure(NativePointerGesture gesture)
     {
         var snapshot = ReadSnapshot();
-        if (gesture.TargetWindow != IntPtr.Zero)
+        if (gesture.TargetWindow == IntPtr.Zero)
         {
-            var profileId = WindowsSendControlDiscovery.TryGetSelectedProfileId(gesture.TargetWindow);
-            return !string.IsNullOrWhiteSpace(profileId)
-                && snapshot.RuntimeSet?.Runtimes.Any(runtime => string.Equals(
-                    runtime.Profile.ProfileId,
-                    profileId,
-                    StringComparison.Ordinal)) == true;
+            return false;
         }
 
-        var discovery = DiscoverActiveSurface(snapshot);
-        return ResolveRuntimeByProfileIdentity(snapshot, discovery) is not null;
+        var profileId = _selectedWindowProfileResolver(gesture.TargetWindow);
+        return !string.IsNullOrWhiteSpace(profileId)
+            && snapshot.RuntimeSet?.Runtimes.Any(runtime => string.Equals(
+                runtime.Profile.ProfileId,
+                profileId,
+                StringComparison.Ordinal)) == true;
     }
 
     private bool ShouldSuppressKeyboardClassificationFailure(NativeKeyGesture gesture)
     {
         var snapshot = ReadSnapshot();
-        var discovery = DiscoverActiveSurface(snapshot);
-        var runtime = ResolveRuntimeByProfileIdentity(snapshot, discovery);
+        if (gesture.TargetWindow == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var profileId = _selectedWindowProfileResolver(gesture.TargetWindow);
+        var runtime = string.IsNullOrWhiteSpace(profileId)
+            ? null
+            : snapshot.RuntimeSet?.Runtimes.FirstOrDefault(candidate => string.Equals(
+                candidate.Profile.ProfileId,
+                profileId,
+                StringComparison.Ordinal));
         return runtime?.Profile.SubmitBinding?.Matches(gesture) == true;
     }
 
@@ -720,6 +732,15 @@ internal sealed class TrayProtectionController
     {
         var snapshot = ReadSnapshot();
         var discovery = DiscoverActiveSurface(snapshot);
+        var focusedControlResult = ClassifyFocusedSendControl(snapshot, discovery, gesture, out var focusedComposerDiscovery);
+        if (focusedControlResult is not null)
+        {
+            return RememberSnapshot(
+                snapshot,
+                focusedControlResult,
+                NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, focusedComposerDiscovery?.Surface));
+        }
+
         var runtime = ResolveRuntime(snapshot, discovery);
         var knownDiscovery = discovery.Succeeded || HasProfileIdentity(discovery)
             ? discovery
@@ -736,6 +757,44 @@ internal sealed class TrayProtectionController
             snapshot,
             result,
             NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, discovery.Surface));
+    }
+
+    private NativeSubmitInterceptionResult? ClassifyFocusedSendControl(
+        ProtectionSnapshot snapshot,
+        TextSurfaceDiscoveryResult composerDiscovery,
+        NativeKeyGesture gesture,
+        out TextSurfaceDiscoveryResult? focusedComposerDiscovery)
+    {
+        focusedComposerDiscovery = null;
+        if (composerDiscovery.Succeeded && composerDiscovery.Surface?.CanSubmit == true)
+        {
+            return null;
+        }
+
+        var sendControlDiscovery = snapshot.SendControlDiscovery;
+        if (sendControlDiscovery is null)
+        {
+            return null;
+        }
+
+        var focusedControl = sendControlDiscovery.DiscoverFocusedControl();
+        focusedComposerDiscovery = focusedControl.ComposerDiscovery;
+        var runtime = ResolveRuntime(snapshot, focusedControl.ComposerDiscovery)
+            ?? ResolveRuntimeByProfileIdentity(snapshot, focusedControl.ComposerDiscovery);
+        if (runtime is not null && !IsFocusedSendActivation(runtime.Profile, gesture))
+        {
+            return null;
+        }
+
+        return focusedControl.Classification switch
+        {
+            SendControlClassification.IdentifiedSend when runtime is not null
+                => runtime.Controller.HandleIdentifiedSendControl(focusedControl.ComposerDiscovery),
+            SendControlClassification.SelectedClientUncertain when runtime is not null
+                => SuppressUncertainSelectedSend(runtime.Profile.ProfileId),
+            SendControlClassification.NonSendControl => PassThroughPointer(),
+            _ => null
+        };
     }
 
     private static TextSurfaceDiscoveryResult DiscoverActiveSurface(ProtectionSnapshot snapshot)
@@ -761,6 +820,19 @@ internal sealed class TrayProtectionController
             return null;
         }
 
+        if (knownSurface is not null)
+        {
+            if (!knownSurface.Succeeded || knownSurface.Surface is null)
+            {
+                return null;
+            }
+
+            return snapshot.RuntimeSet.Runtimes.FirstOrDefault(runtime => string.Equals(
+                runtime.Profile.ProfileId,
+                knownSurface.Surface.ProfileId,
+                StringComparison.Ordinal));
+        }
+
         if (snapshot.RuntimeSet.Runtimes.Count == 1)
         {
             return snapshot.RuntimeSet.Runtimes[0];
@@ -769,7 +841,7 @@ internal sealed class TrayProtectionController
         TextSurfaceDiscoveryResult discovery;
         try
         {
-            discovery = knownSurface ?? snapshot.ActiveSurfaceDiscovery();
+            discovery = snapshot.ActiveSurfaceDiscovery();
         }
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
         {
@@ -809,6 +881,20 @@ internal sealed class TrayProtectionController
     {
         return !string.IsNullOrWhiteSpace(discovery.Surface?.ProfileId)
             || discovery.Diagnostics.ContainsKey("profile_id");
+    }
+
+    private static bool IsFocusedSendActivation(SubmitBindingProfile profile, NativeKeyGesture gesture)
+    {
+        if (profile.SubmitBinding?.Matches(gesture) == true)
+        {
+            return true;
+        }
+
+        return !gesture.Ctrl
+            && !gesture.Alt
+            && !gesture.Shift
+            && (string.Equals(gesture.Key, "Enter", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(gesture.Key, "Space", StringComparison.OrdinalIgnoreCase));
     }
 
     private static NativeSubmitRuntime? ResolveClassifiedRuntime(
