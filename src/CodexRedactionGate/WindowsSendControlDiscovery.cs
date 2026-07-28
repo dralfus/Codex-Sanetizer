@@ -28,7 +28,7 @@ internal interface ISendControlDiscovery
 {
     SendControlDiscoveryResult Discover(NativePointerGesture gesture);
 
-    SendControlDiscoveryResult DiscoverFocusedControl();
+    SendControlDiscoveryResult DiscoverFocusedControl(IntPtr capturedTargetWindow);
 }
 
 internal static class SendControlEvidence
@@ -147,37 +147,50 @@ internal sealed class WindowsSendControlDiscovery : ISendControlDiscovery
         }
     }
 
-    public SendControlDiscoveryResult DiscoverFocusedControl()
+    public SendControlDiscoveryResult DiscoverFocusedControl(IntPtr capturedTargetWindow)
     {
-        if (!OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsWindows() || capturedTargetWindow == IntPtr.Zero)
         {
             return Unrelated();
         }
 
-        var targetWindow = NativeMethods.GetForegroundWindow();
         try
         {
             var element = AutomationElement.FocusedElement;
             return element is null
-                ? SelectedClientUncertain(targetWindow)
-                : DiscoverElement(element, targetWindow, classifyPotentialComposerAsUncertain: true);
+                ? SelectedClientUncertain(capturedTargetWindow)
+                : DiscoverFocusedElement(element, capturedTargetWindow);
         }
         catch (ElementNotAvailableException)
         {
-            return SelectedClientUncertain(targetWindow);
+            return SelectedClientUncertain(capturedTargetWindow);
         }
         catch (InvalidOperationException)
         {
-            return SelectedClientUncertain(targetWindow);
+            return SelectedClientUncertain(capturedTargetWindow);
         }
         catch (COMException)
         {
-            return SelectedClientUncertain(targetWindow);
+            return SelectedClientUncertain(capturedTargetWindow);
         }
         catch (Exception)
         {
-            return SelectedClientUncertain(targetWindow);
+            return SelectedClientUncertain(capturedTargetWindow);
         }
+    }
+
+    private SendControlDiscoveryResult DiscoverFocusedElement(
+        AutomationElement element,
+        IntPtr capturedTargetWindow)
+    {
+        var capturedRoot = RootWindow(capturedTargetWindow);
+        var focusedRoot = FindOwningWindow(element);
+        if (capturedRoot == IntPtr.Zero || focusedRoot == IntPtr.Zero || focusedRoot != capturedRoot)
+        {
+            return SelectedClientUncertain(capturedTargetWindow);
+        }
+
+        return DiscoverElement(element, capturedRoot, classifyPotentialComposerAsUncertain: true);
     }
 
     private SendControlDiscoveryResult DiscoverElement(

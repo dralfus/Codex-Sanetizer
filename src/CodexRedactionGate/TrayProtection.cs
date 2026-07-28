@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -22,6 +23,8 @@ internal sealed record ProtectionSnapshot(
 internal sealed record NativeSubmitExecutionContext(
     ProtectionSnapshot Snapshot,
     NativeSubmitTargetIdentity? Target);
+
+internal readonly record struct CapturedTargetProfileKey(IntPtr Window, uint ProcessId);
 
 public sealed record TrayProtectionState(
     bool Enabled,
@@ -69,6 +72,7 @@ internal sealed class TrayProtectionController
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
     private readonly DefaultStorageLayout _storageLayout;
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
+    private readonly ConcurrentDictionary<CapturedTargetProfileKey, string> _capturedTargetProfiles = new();
     private readonly object _reloadGate = new();
     private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
     private int _nativeSubmitFlowInProgress;
@@ -402,6 +406,7 @@ internal sealed class TrayProtectionController
         }
 
         var discovery = snapshot.SendControlDiscovery.Discover(gesture);
+        RememberCapturedTargetProfile(gesture.TargetWindow, gesture.TargetProcessId, discovery.ComposerDiscovery);
         var runtime = ResolveRuntime(snapshot, discovery.ComposerDiscovery)
             ?? ResolveRuntimeByProfileIdentity(snapshot, discovery.ComposerDiscovery);
         var result = discovery.Classification switch
@@ -426,7 +431,7 @@ internal sealed class TrayProtectionController
             return false;
         }
 
-        var profileId = _selectedWindowProfileResolver(gesture.TargetWindow);
+        var profileId = LookupCapturedTargetProfile(gesture.TargetWindow, gesture.TargetProcessId);
         return !string.IsNullOrWhiteSpace(profileId)
             && snapshot.RuntimeSet?.Runtimes.Any(runtime => string.Equals(
                 runtime.Profile.ProfileId,
@@ -442,7 +447,7 @@ internal sealed class TrayProtectionController
             return false;
         }
 
-        var profileId = _selectedWindowProfileResolver(gesture.TargetWindow);
+        var profileId = LookupCapturedTargetProfile(gesture.TargetWindow, gesture.TargetProcessId);
         var runtime = string.IsNullOrWhiteSpace(profileId)
             ? null
             : snapshot.RuntimeSet?.Runtimes.FirstOrDefault(candidate => string.Equals(
@@ -450,6 +455,53 @@ internal sealed class TrayProtectionController
                 profileId,
                 StringComparison.Ordinal));
         return runtime?.Profile.SubmitBinding?.Matches(gesture) == true;
+    }
+
+    private string? LookupCapturedTargetProfile(IntPtr targetWindow, uint targetProcessId)
+    {
+        return TryCreateCapturedTargetProfileKey(targetWindow, targetProcessId, out var key)
+            && _capturedTargetProfiles.TryGetValue(key, out var profileId)
+            ? profileId
+            : null;
+    }
+
+    private void RememberCapturedTargetProfile(
+        IntPtr targetWindow,
+        uint targetProcessId,
+        TextSurfaceDiscoveryResult discovery)
+    {
+        if (!TryCreateCapturedTargetProfileKey(targetWindow, targetProcessId, out var key))
+        {
+            return;
+        }
+
+        var profileId = discovery.Surface?.ProfileId;
+        if (string.IsNullOrWhiteSpace(profileId)
+            && !discovery.Diagnostics.TryGetValue("profile_id", out profileId))
+        {
+            try
+            {
+                profileId = _selectedWindowProfileResolver(targetWindow);
+            }
+            catch
+            {
+                return;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(profileId))
+        {
+            _capturedTargetProfiles[key] = profileId;
+        }
+    }
+
+    private static bool TryCreateCapturedTargetProfileKey(
+        IntPtr targetWindow,
+        uint targetProcessId,
+        out CapturedTargetProfileKey key)
+    {
+        key = new CapturedTargetProfileKey(targetWindow, targetProcessId);
+        return targetWindow != IntPtr.Zero && targetProcessId != 0;
     }
 
     private void RunNativeSendControlOnce(NativePointerGesture gesture, NativeSubmitInterceptionResult classification)
@@ -732,6 +784,7 @@ internal sealed class TrayProtectionController
     {
         var snapshot = ReadSnapshot();
         var discovery = DiscoverActiveSurface(snapshot);
+        RememberCapturedTargetProfile(gesture.TargetWindow, gesture.TargetProcessId, discovery);
         var focusedControlResult = ClassifyFocusedSendControl(snapshot, discovery, gesture, out var focusedComposerDiscovery);
         if (focusedControlResult is not null)
         {
@@ -777,8 +830,9 @@ internal sealed class TrayProtectionController
             return null;
         }
 
-        var focusedControl = sendControlDiscovery.DiscoverFocusedControl();
+        var focusedControl = sendControlDiscovery.DiscoverFocusedControl(gesture.TargetWindow);
         focusedComposerDiscovery = focusedControl.ComposerDiscovery;
+        RememberCapturedTargetProfile(gesture.TargetWindow, gesture.TargetProcessId, focusedComposerDiscovery);
         var runtime = ResolveRuntime(snapshot, focusedControl.ComposerDiscovery)
             ?? ResolveRuntimeByProfileIdentity(snapshot, focusedControl.ComposerDiscovery);
         if (runtime is not null && !IsFocusedSendActivation(runtime.Profile, gesture))

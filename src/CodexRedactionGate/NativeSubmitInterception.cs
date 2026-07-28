@@ -163,13 +163,19 @@ public sealed record NativeKeyGesture(
     bool Shift = false,
     bool ImeComposing = false,
     bool DeadKey = false,
-    IntPtr TargetWindow = default)
+    IntPtr TargetWindow = default,
+    uint TargetProcessId = 0)
 {
     public static NativeKeyGesture CtrlAltShiftEnter { get; } = new("ENTER", Ctrl: true, Alt: true, Shift: true);
     public static NativeKeyGesture CtrlAltShiftPause { get; } = new("PAUSE", Ctrl: true, Alt: true, Shift: true);
 }
 
-public sealed record NativePointerGesture(int X, int Y, string Button, IntPtr TargetWindow = default);
+public sealed record NativePointerGesture(
+    int X,
+    int Y,
+    string Button,
+    IntPtr TargetWindow = default,
+    uint TargetProcessId = 0);
 
 public sealed record SurfaceCompatibilityEvidence(
     string PackageFamilyName,
@@ -760,6 +766,18 @@ public sealed class NativeSubmitInterceptionController
         bool hookHealthy = true)
     {
         ArgumentNullException.ThrowIfNull(composerDiscovery);
+        var diagnostics = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["profile_id"] = _profile.ProfileId,
+            ["capability_status"] = _profile.CapabilityStatus,
+            ["managed_mode"] = _policy.ManagedMode.ToString().ToLowerInvariant()
+        };
+        var setupGate = SuppressSelectedSubmitIfSetupRequired(diagnostics);
+        if (setupGate is not null)
+        {
+            return setupGate;
+        }
+
         if (!composerDiscovery.Succeeded || composerDiscovery.Surface is null)
         {
             return new NativeSubmitInterceptionResult(
@@ -767,9 +785,8 @@ public sealed class NativeSubmitInterceptionController
                 SuppressOriginalInput: true,
                 Applied: false,
                 Submitted: false,
-                Diagnostics: new Dictionary<string, string>
+                Diagnostics: new Dictionary<string, string>(diagnostics, StringComparer.Ordinal)
                 {
-                    ["profile_id"] = _profile.ProfileId,
                     ["fail_closed_reason"] = "identified_send_control_composer_unverified"
                 });
         }
@@ -1452,12 +1469,14 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
+        var targetWindow = NativeMethods.GetForegroundWindow();
         var gesture = new NativeKeyGesture(
             Key: VirtualKeyToName(data.vkCode),
             Ctrl: IsKeyDown(VkControl),
             Alt: IsKeyDown(VkMenu),
             Shift: IsKeyDown(VkShift),
-            TargetWindow: NativeMethods.GetForegroundWindow());
+            TargetWindow: targetWindow,
+            TargetProcessId: NativeMethods.GetWindowProcessId(targetWindow));
         var result = ClassifyKeyboardWithinBudget(gesture);
 
         if (!result.SuppressOriginalInput)
@@ -1481,11 +1500,13 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         }
 
         var data = Marshal.PtrToStructure<NativeMethods.MsLlHookStruct>(lParam);
+        var targetWindow = NativeMethods.WindowFromPoint(data.pt);
         var gesture = new NativePointerGesture(
             data.pt.x,
             data.pt.y,
             "left",
-            NativeMethods.WindowFromPoint(data.pt));
+            targetWindow,
+            NativeMethods.GetWindowProcessId(targetWindow));
         var result = ClassifyPointerWithinBudget(gesture);
 
         if (!result.SuppressOriginalInput)
@@ -1664,6 +1685,15 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
+
+        public static uint GetWindowProcessId(IntPtr handle)
+        {
+            _ = GetWindowThreadProcessId(handle, out var processId);
+            return processId;
+        }
 
         [DllImport("user32.dll")]
         public static extern IntPtr WindowFromPoint(Point point);
