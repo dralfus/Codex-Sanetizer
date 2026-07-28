@@ -1,65 +1,154 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows.Automation;
 
 namespace CodexRedactionGate;
 
+internal enum SendControlClassification
+{
+    Unrelated,
+    NonSendControl,
+    IdentifiedSend,
+    SelectedClientUncertain
+}
+
 internal sealed record SendControlDiscoveryResult(
-    bool Identified,
-    TextSurfaceDiscoveryResult ComposerDiscovery);
+    SendControlClassification Classification,
+    TextSurfaceDiscoveryResult ComposerDiscovery)
+{
+    public bool Identified => Classification == SendControlClassification.IdentifiedSend;
+}
 
 internal interface ISendControlDiscovery
 {
     SendControlDiscoveryResult Discover(NativePointerGesture gesture);
 }
 
+internal static class SendControlEvidence
+{
+    internal const string AutomationIdHashKey = "send_control_automation_id_hash";
+    internal const string NameHashKey = "send_control_name_hash";
+
+    public static IReadOnlyDictionary<string, string> Create(string automationId, string name)
+    {
+        var evidence = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["send_control_evidence"] = "verified"
+        };
+        if (!string.IsNullOrWhiteSpace(automationId))
+        {
+            evidence[AutomationIdHashKey] = Hash(automationId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            evidence[NameHashKey] = Hash(name);
+        }
+
+        return evidence;
+    }
+
+    public static bool Matches(IReadOnlyDictionary<string, string> diagnostics, string automationId, string name)
+    {
+        return (!string.IsNullOrWhiteSpace(automationId)
+                && diagnostics.TryGetValue(AutomationIdHashKey, out var automationIdHash)
+                && string.Equals(automationIdHash, Hash(automationId), StringComparison.Ordinal))
+            || (!string.IsNullOrWhiteSpace(name)
+                && diagnostics.TryGetValue(NameHashKey, out var nameHash)
+                && string.Equals(nameHash, Hash(name), StringComparison.Ordinal));
+    }
+
+    private static string Hash(string value)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    }
+}
+
 internal sealed class WindowsSendControlDiscovery : ISendControlDiscovery
 {
-    private static readonly string[] SendTokens = { "send", "submit" };
+    private static readonly string[] SendTokens =
+    {
+        "send",
+        "submit",
+        "\u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c",
+        "\u53d1\u9001",
+        "\u53d1\u9001\u6d88\u606f"
+    };
     private readonly SurfaceProfileCatalog _profiles;
     private readonly WindowsFocusedComposerDiscovery _composerDiscovery;
+    private readonly DefaultStorageLayout? _storageLayout;
+    private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, string>> _persistedEvidence;
 
     public WindowsSendControlDiscovery(
         SurfaceProfileCatalog profiles,
-        WindowsFocusedComposerDiscovery composerDiscovery)
+        WindowsFocusedComposerDiscovery composerDiscovery,
+        DefaultStorageLayout? storageLayout = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _composerDiscovery = composerDiscovery ?? throw new ArgumentNullException(nameof(composerDiscovery));
+        _storageLayout = storageLayout;
+        _persistedEvidence = storageLayout is null
+            ? new ConcurrentDictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal)
+            : new ConcurrentDictionary<string, IReadOnlyDictionary<string, string>>(
+                SubmitBindingProfileStore.Load(storageLayout).Profiles.ToDictionary(
+                profile => profile.ProfileId,
+                profile => profile.Diagnostics,
+                StringComparer.Ordinal),
+                StringComparer.Ordinal);
     }
 
-    public static WindowsSendControlDiscovery CreateDefault()
+    public static WindowsSendControlDiscovery CreateDefault(DefaultStorageLayout? storageLayout = null)
     {
         return new WindowsSendControlDiscovery(
             SurfaceProfileCatalog.Default,
-            WindowsFocusedComposerDiscovery.CreateDefault());
+            WindowsFocusedComposerDiscovery.CreateDefault(),
+            storageLayout);
     }
 
     public SendControlDiscoveryResult Discover(NativePointerGesture gesture)
     {
         if (!OperatingSystem.IsWindows() || !string.Equals(gesture.Button, "left", StringComparison.Ordinal))
         {
-            return NotIdentified();
+            return Unrelated();
         }
 
         try
         {
             var element = AutomationElement.FromPoint(new System.Windows.Point(gesture.X, gesture.Y));
-            if (element is null || element.Current.ControlType != ControlType.Button || !IsSendControl(element))
+            if (element is null)
             {
-                return NotIdentified();
+                return Unrelated();
             }
 
             var window = FindOwningWindow(element);
             if (window == IntPtr.Zero)
             {
-                return NotIdentified();
+                window = RootWindow(gesture.TargetWindow);
+            }
+            if (window == IntPtr.Zero)
+            {
+                return Unrelated();
             }
 
             var match = _profiles.Match(GetWindowText(window), GetProcessName(window));
             if (!match.Matched || match.Profile is null)
             {
-                return NotIdentified();
+                return Unrelated();
+            }
+
+            if (element.Current.ControlType != ControlType.Button)
+            {
+                return NonSendControl(match.Profile.ProfileId);
+            }
+
+            if (!IsSendControl(match.Profile, element))
+            {
+                return NonSendControl(match.Profile.ProfileId);
             }
 
             var composer = _composerDiscovery.DiscoverActiveSurface();
@@ -74,34 +163,102 @@ internal sealed class WindowsSendControlDiscovery : ISendControlDiscovery
                     });
             }
 
-            return new SendControlDiscoveryResult(true, composer);
+            return new SendControlDiscoveryResult(SendControlClassification.IdentifiedSend, composer);
         }
         catch (ElementNotAvailableException)
         {
-            return NotIdentified();
+            return SelectedClientUncertain(gesture);
         }
         catch (InvalidOperationException)
         {
-            return NotIdentified();
+            return SelectedClientUncertain(gesture);
         }
         catch (COMException)
         {
-            return NotIdentified();
+            return SelectedClientUncertain(gesture);
+        }
+        catch (Exception)
+        {
+            return SelectedClientUncertain(gesture);
         }
     }
 
-    private static SendControlDiscoveryResult NotIdentified()
+    private static SendControlDiscoveryResult Unrelated()
     {
         return new SendControlDiscoveryResult(
-            false,
+            SendControlClassification.Unrelated,
             TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer, new Dictionary<string, string>()));
     }
 
-    private static bool IsSendControl(AutomationElement element)
+    private static SendControlDiscoveryResult NonSendControl(string profileId)
+    {
+        return new SendControlDiscoveryResult(
+            SendControlClassification.NonSendControl,
+            TextSurfaceDiscoveryResult.Failure(
+                OsInteractionStatusIds.NotComposer,
+                new Dictionary<string, string> { ["profile_id"] = profileId }));
+    }
+
+    internal static string? TryGetSelectedProfileId(IntPtr targetWindow)
+    {
+        try
+        {
+            var window = RootWindow(targetWindow);
+            if (window == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            var match = SurfaceProfileCatalog.Default.Match(GetWindowText(window), GetProcessName(window));
+            return match.Matched && match.Profile is not null ? match.Profile.ProfileId : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static SendControlDiscoveryResult SelectedClientUncertain(NativePointerGesture gesture)
+    {
+        var profileId = TryGetSelectedProfileId(gesture.TargetWindow);
+        return string.IsNullOrWhiteSpace(profileId)
+            ? Unrelated()
+            : new SendControlDiscoveryResult(
+                SendControlClassification.SelectedClientUncertain,
+                TextSurfaceDiscoveryResult.Failure(
+                    OsInteractionStatusIds.SurfaceUnverified,
+                    new Dictionary<string, string> { ["profile_id"] = profileId }));
+    }
+
+    private bool IsSendControl(SurfaceProfile profile, AutomationElement element)
     {
         var name = element.Current.Name ?? string.Empty;
         var automationId = element.Current.AutomationId ?? string.Empty;
-        return ContainsKnownToken(name) || ContainsKnownToken(automationId);
+        if (_persistedEvidence.TryGetValue(profile.ProfileId, out var evidence)
+            && SendControlEvidence.Matches(evidence, automationId, name))
+        {
+            return true;
+        }
+
+        if (!ContainsKnownToken(name) && !ContainsKnownToken(automationId))
+        {
+            return false;
+        }
+
+        PersistEvidence(profile.ProfileId, automationId, name);
+        return true;
+    }
+
+    private void PersistEvidence(string profileId, string automationId, string name)
+    {
+        var evidence = SendControlEvidence.Create(automationId, name);
+        _persistedEvidence[profileId] = evidence;
+        if (_storageLayout is null)
+        {
+            return;
+        }
+
+        SubmitBindingProfileStore.MergeDiagnostics(_storageLayout, profileId, evidence);
     }
 
     private static bool ContainsKnownToken(string value)
@@ -125,13 +282,24 @@ internal sealed class WindowsSendControlDiscovery : ISendControlDiscovery
             var handle = new IntPtr(current.Current.NativeWindowHandle);
             if (handle != IntPtr.Zero)
             {
-                return NativeMethods.GetAncestor(handle, 2);
+                return RootWindow(handle);
             }
 
             current = TreeWalker.ControlViewWalker.GetParent(current);
         }
 
         return IntPtr.Zero;
+    }
+
+    private static IntPtr RootWindow(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+
+        var root = NativeMethods.GetAncestor(handle, 2);
+        return root == IntPtr.Zero ? handle : root;
     }
 
     private static string GetWindowText(IntPtr window)

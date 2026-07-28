@@ -168,7 +168,7 @@ public sealed record NativeKeyGesture(
     public static NativeKeyGesture CtrlAltShiftPause { get; } = new("PAUSE", Ctrl: true, Alt: true, Shift: true);
 }
 
-public sealed record NativePointerGesture(int X, int Y, string Button);
+public sealed record NativePointerGesture(int X, int Y, string Button, IntPtr TargetWindow = default);
 
 public sealed record SurfaceCompatibilityEvidence(
     string PackageFamilyName,
@@ -254,6 +254,7 @@ public sealed record SubmitBindingProfileStoreResult(
 public static class SubmitBindingProfileStore
 {
     private const string FileName = "native-submit-profiles.json";
+    private static readonly object UpdateGate = new();
 
     public static string DefaultPath(DefaultStorageLayout layout)
     {
@@ -300,12 +301,54 @@ public static class SubmitBindingProfileStore
     {
         ArgumentNullException.ThrowIfNull(profile);
         var loaded = Load(layout);
+        if (!loaded.Succeeded)
+        {
+            return new SubmitBindingProfileStoreResult(false, "profiles_unavailable", loaded.Profiles);
+        }
+
         var profiles = loaded.Profiles
             .Where(item => !string.Equals(item.ProfileId, profile.ProfileId, StringComparison.Ordinal))
             .Append(profile)
             .OrderBy(item => item.ProfileId, StringComparer.Ordinal)
             .ToArray();
         return Save(layout, profiles);
+    }
+
+    public static SubmitBindingProfileStoreResult MergeDiagnostics(
+        DefaultStorageLayout layout,
+        string profileId,
+        IReadOnlyDictionary<string, string> diagnostics)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+
+        lock (UpdateGate)
+        {
+            var loaded = Load(layout);
+            if (!loaded.Succeeded)
+            {
+                return new SubmitBindingProfileStoreResult(false, "profiles_unavailable", loaded.Profiles);
+            }
+
+            var existing = loaded.Profiles.FirstOrDefault(profile => string.Equals(profile.ProfileId, profileId, StringComparison.Ordinal));
+            if (existing is null)
+            {
+                return new SubmitBindingProfileStoreResult(false, "profile_not_found", loaded.Profiles);
+            }
+
+            var merged = new Dictionary<string, string>(existing.Diagnostics, StringComparer.Ordinal);
+            foreach (var item in diagnostics)
+            {
+                merged[item.Key] = item.Value;
+            }
+
+            var profiles = loaded.Profiles
+                .Select(profile => string.Equals(profile.ProfileId, profileId, StringComparison.Ordinal)
+                    ? profile with { Diagnostics = merged }
+                    : profile)
+                .ToArray();
+            return Save(layout, profiles);
+        }
     }
 
     private static SubmitBindingProfile ToProfile(ProfileFileItem item)
@@ -1222,7 +1265,8 @@ internal interface INativeSubmitHookHost
 
     bool Start(
         Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit);
+        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+        Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure);
 
     void Stop();
 }
@@ -1231,7 +1275,8 @@ internal interface INativeSubmitPointerHookHost
 {
     bool StartPointer(
         Func<NativePointerGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativePointerGesture, NativeSubmitInterceptionResult> onSuppressedSubmit);
+        Action<NativePointerGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+        Func<NativePointerGesture, bool> shouldSuppressClassificationFailure);
 }
 
 internal sealed class UnavailableNativeSubmitHookHost : INativeSubmitHookHost
@@ -1247,7 +1292,8 @@ internal sealed class UnavailableNativeSubmitHookHost : INativeSubmitHookHost
 
     public bool Start(
         Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
+        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+        Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure)
     {
         ArgumentNullException.ThrowIfNull(classify);
         ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
@@ -1278,8 +1324,10 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     private IntPtr _mouseHook;
     private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
     private Action<NativeKeyGesture, NativeSubmitInterceptionResult>? _onSuppressedSubmit;
+    private Func<NativeKeyGesture, bool>? _shouldSuppressKeyboardClassificationFailure;
     private Func<NativePointerGesture, NativeSubmitInterceptionResult>? _classifyPointer;
     private Action<NativePointerGesture, NativeSubmitInterceptionResult>? _onSuppressedPointerSubmit;
+    private Func<NativePointerGesture, bool>? _shouldSuppressPointerClassificationFailure;
 
     public WindowsNativeSubmitHookHost()
     {
@@ -1291,10 +1339,12 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     public bool Start(
         Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
+        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+        Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure)
     {
         ArgumentNullException.ThrowIfNull(classify);
         ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
+        ArgumentNullException.ThrowIfNull(shouldSuppressClassificationFailure);
 
         if (!OperatingSystem.IsWindows())
         {
@@ -1311,6 +1361,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         _classify = classify;
         _onSuppressedSubmit = onSuppressedSubmit;
+        _shouldSuppressKeyboardClassificationFailure = shouldSuppressClassificationFailure;
         _hook = NativeMethods.SetWindowsHookEx(WhKeyboardLl, _callback, NativeMethods.GetModuleHandle(null), 0);
         if (_hook == IntPtr.Zero)
         {
@@ -1340,16 +1391,20 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         _classify = null;
         _onSuppressedSubmit = null;
+        _shouldSuppressKeyboardClassificationFailure = null;
         _classifyPointer = null;
         _onSuppressedPointerSubmit = null;
+        _shouldSuppressPointerClassificationFailure = null;
     }
 
     public bool StartPointer(
         Func<NativePointerGesture, NativeSubmitInterceptionResult> classify,
-        Action<NativePointerGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
+        Action<NativePointerGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+        Func<NativePointerGesture, bool> shouldSuppressClassificationFailure)
     {
         ArgumentNullException.ThrowIfNull(classify);
         ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
+        ArgumentNullException.ThrowIfNull(shouldSuppressClassificationFailure);
         if (!OperatingSystem.IsWindows())
         {
             LastErrorCode = OsInteractionStatusIds.UnsupportedPlatform;
@@ -1358,6 +1413,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         _classifyPointer = classify;
         _onSuppressedPointerSubmit = onSuppressedSubmit;
+        _shouldSuppressPointerClassificationFailure = shouldSuppressClassificationFailure;
         if (_mouseHook != IntPtr.Zero)
         {
             return true;
@@ -1369,6 +1425,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             LastErrorCode = "native_send_control_hook_register_failed";
             _classifyPointer = null;
             _onSuppressedPointerSubmit = null;
+            _shouldSuppressPointerClassificationFailure = null;
             return false;
         }
 
@@ -1377,7 +1434,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode < 0 || _classify is null || _onSuppressedSubmit is null)
+        if (nCode < 0 || _classify is null || _onSuppressedSubmit is null || _shouldSuppressKeyboardClassificationFailure is null)
         {
             return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
         }
@@ -1399,16 +1456,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             Ctrl: IsKeyDown(VkControl),
             Alt: IsKeyDown(VkMenu),
             Shift: IsKeyDown(VkShift));
-        NativeSubmitInterceptionResult result;
-        try
-        {
-            result = _classify(gesture);
-        }
-        catch (Exception)
-        {
-            LastErrorCode = "native_submit_hook_callback_failed";
-            return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
-        }
+        var result = ClassifyKeyboardWithinBudget(gesture);
 
         if (!result.SuppressOriginalInput)
         {
@@ -1425,23 +1473,18 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode < 0 || _classifyPointer is null || _onSuppressedPointerSubmit is null || wParam.ToInt32() != WmLButtonDown)
+        if (nCode < 0 || _classifyPointer is null || _onSuppressedPointerSubmit is null || _shouldSuppressPointerClassificationFailure is null || wParam.ToInt32() != WmLButtonDown)
         {
             return NativeMethods.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
         }
 
         var data = Marshal.PtrToStructure<NativeMethods.MsLlHookStruct>(lParam);
-        var gesture = new NativePointerGesture(data.pt.x, data.pt.y, "left");
-        NativeSubmitInterceptionResult result;
-        try
-        {
-            result = _classifyPointer(gesture);
-        }
-        catch (Exception)
-        {
-            LastErrorCode = "native_send_control_hook_callback_failed";
-            return NativeMethods.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
-        }
+        var gesture = new NativePointerGesture(
+            data.pt.x,
+            data.pt.y,
+            "left",
+            NativeMethods.WindowFromPoint(data.pt));
+        var result = ClassifyPointerWithinBudget(gesture);
 
         if (!result.SuppressOriginalInput)
         {
@@ -1454,6 +1497,121 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         }
 
         return new IntPtr(1);
+    }
+
+    private NativeSubmitInterceptionResult ClassifyPointerWithinBudget(NativePointerGesture gesture)
+    {
+        return ClassifyWithinBudget(
+            () => _classifyPointer!(gesture),
+            () => ShouldSuppressPointerClassificationFailure(gesture),
+            "pointer");
+    }
+
+    private NativeSubmitInterceptionResult ClassifyKeyboardWithinBudget(NativeKeyGesture gesture)
+    {
+        return ClassifyWithinBudget(
+            () => _classify!(gesture),
+            () => ShouldSuppressKeyboardClassificationFailure(gesture),
+            "keyboard");
+    }
+
+    private NativeSubmitInterceptionResult ClassifyWithinBudget(
+        Func<NativeSubmitInterceptionResult> classify,
+        Func<bool> shouldSuppressFailure,
+        string inputType)
+    {
+        NativeSubmitInterceptionResult? result = null;
+        Exception? failure = null;
+        var completed = new ManualResetEventSlim(false);
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                result = classify();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                completed.Set();
+            }
+        });
+
+        if (completed.Wait(TimeSpan.FromMilliseconds(75)))
+        {
+            completed.Dispose();
+            if (failure is null && result is not null)
+            {
+                return result;
+            }
+        }
+        else
+        {
+            // The worker owns disposal after a timeout so its final Set cannot
+            // race with disposal on the low-level hook callback thread.
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                completed.Wait();
+                completed.Dispose();
+            });
+        }
+
+        LastErrorCode = failure is null
+            ? "native_submit_classification_timeout"
+            : "native_submit_hook_callback_failed";
+        return shouldSuppressFailure()
+            ? ClassificationUnavailableResult(inputType)
+            : PassThroughResult();
+    }
+
+    private bool ShouldSuppressKeyboardClassificationFailure(NativeKeyGesture gesture)
+    {
+        try
+        {
+            return _shouldSuppressKeyboardClassificationFailure!(gesture);
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    private bool ShouldSuppressPointerClassificationFailure(NativePointerGesture gesture)
+    {
+        try
+        {
+            return _shouldSuppressPointerClassificationFailure!(gesture);
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    private static NativeSubmitInterceptionResult ClassificationUnavailableResult(string inputType)
+    {
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.SurfaceUnverified,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["input_type"] = inputType,
+                ["send_control_status"] = "unavailable"
+            });
+    }
+
+    private static NativeSubmitInterceptionResult PassThroughResult()
+    {
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitPassThrough,
+            SuppressOriginalInput: false,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>());
     }
 
     private static bool IsKeyDown(int virtualKey)
@@ -1500,6 +1658,9 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         [DllImport("user32.dll")]
         public static extern short GetKeyState(int nVirtKey);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr WindowFromPoint(Point point);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern IntPtr GetModuleHandle(string? lpModuleName);
@@ -1933,7 +2094,8 @@ public static class NativeSubmitProductSmokeRunner
 
         public bool Start(
             Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
+            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+            Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure)
         {
             _classify = classify ?? throw new ArgumentNullException(nameof(classify));
             _onSuppressedSubmit = onSuppressedSubmit ?? throw new ArgumentNullException(nameof(onSuppressedSubmit));

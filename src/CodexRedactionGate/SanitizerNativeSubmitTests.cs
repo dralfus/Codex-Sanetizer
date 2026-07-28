@@ -1068,10 +1068,13 @@ public partial class SanitizerTests
         }
     }
 
-    internal sealed class FakeNativeSubmitHookHost : INativeSubmitHookHost
+    internal sealed class FakeNativeSubmitHookHost : INativeSubmitHookHost, INativeSubmitPointerHookHost
     {
         private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
         private Action<NativeKeyGesture, NativeSubmitInterceptionResult>? _onSuppressedSubmit;
+        private Func<NativeKeyGesture, bool>? _shouldSuppressClassificationFailure;
+        private Func<NativePointerGesture, NativeSubmitInterceptionResult>? _classifyPointer;
+        private Action<NativePointerGesture, NativeSubmitInterceptionResult>? _onSuppressedPointerSubmit;
 
         public bool Started { get; private set; }
 
@@ -1083,12 +1086,16 @@ public partial class SanitizerTests
 
         public NativeSubmitInterceptionResult? LastClassification { get; private set; }
 
+        public NativeSubmitInterceptionResult? LastPointerClassification { get; private set; }
+
         public bool Start(
             Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
+            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+            Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure)
         {
             _classify = classify;
             _onSuppressedSubmit = onSuppressedSubmit;
+            _shouldSuppressClassificationFailure = shouldSuppressClassificationFailure;
             Started = StartResult;
             if (Started)
             {
@@ -1103,6 +1110,19 @@ public partial class SanitizerTests
             Started = false;
             _classify = null;
             _onSuppressedSubmit = null;
+            _shouldSuppressClassificationFailure = null;
+            _classifyPointer = null;
+            _onSuppressedPointerSubmit = null;
+        }
+
+        public bool StartPointer(
+            Func<NativePointerGesture, NativeSubmitInterceptionResult> classify,
+            Action<NativePointerGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+            Func<NativePointerGesture, bool> shouldSuppressClassificationFailure)
+        {
+            _classifyPointer = classify;
+            _onSuppressedPointerSubmit = onSuppressedSubmit;
+            return StartResult;
         }
 
         public void Trigger(NativeKeyGesture gesture)
@@ -1113,6 +1133,29 @@ public partial class SanitizerTests
             {
                 _onSuppressedSubmit!(gesture, result);
             }
+        }
+
+        public void TriggerPointer(NativePointerGesture gesture)
+        {
+            var result = _classifyPointer!(gesture);
+            LastPointerClassification = result;
+            if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
+            {
+                _onSuppressedPointerSubmit!(gesture, result);
+            }
+        }
+
+        public NativeSubmitInterceptionResult TriggerKeyboardClassificationFailure(NativeKeyGesture gesture)
+        {
+            var suppress = _shouldSuppressClassificationFailure!(gesture);
+            var result = new NativeSubmitInterceptionResult(
+                suppress ? OsInteractionStatusIds.SurfaceUnverified : OsInteractionStatusIds.NativeSubmitPassThrough,
+                SuppressOriginalInput: suppress,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>());
+            LastClassification = result;
+            return result;
         }
     }
 
@@ -1409,6 +1452,162 @@ public partial class SanitizerTests
 public class HandleButtonClickTests : SanitizerTests
 {
     [Test]
+    public void TrayProtectionController_RoutesKeyboardAndMouseSendThroughTheSameProtectedFlow()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitCalls = 0;
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.IdentifiedSend,
+                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")))),
+            profile,
+            () => submitCalls++);
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        hook.TriggerPointer(new NativePointerGesture(10, 10, "left"));
+
+        Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(hook.LastPointerClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(submitCalls, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void TrayProtectionController_PassesThroughSelectedNonSendControl()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitCalls = 0;
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.NonSendControl,
+                TextSurfaceDiscoveryResult.Failure(
+                    OsInteractionStatusIds.NotComposer,
+                    new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }))),
+            profile,
+            () => submitCalls++);
+
+        Assert.That(tray.Start(), Is.True);
+        hook.TriggerPointer(new NativePointerGesture(20, 20, "left"));
+
+        Assert.That(hook.LastPointerClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(hook.LastPointerClassification?.SuppressOriginalInput, Is.False);
+        Assert.That(submitCalls, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void TrayProtectionController_SuppressesUncertainSelectedSendControl()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitCalls = 0;
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.SelectedClientUncertain,
+                TextSurfaceDiscoveryResult.Failure(
+                    OsInteractionStatusIds.SurfaceUnverified,
+                    new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }))),
+            profile,
+            () => submitCalls++);
+
+        Assert.That(tray.Start(), Is.True);
+        hook.TriggerPointer(new NativePointerGesture(30, 30, "left"));
+
+        Assert.That(hook.LastPointerClassification?.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(hook.LastPointerClassification?.SuppressOriginalInput, Is.True);
+        Assert.That(submitCalls, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void TrayProtectionController_PassesThroughUnrelatedPointerUncertainty()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitCalls = 0;
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.Unrelated,
+                TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer, new Dictionary<string, string>()))),
+            profile,
+            () => submitCalls++);
+
+        Assert.That(tray.Start(), Is.True);
+        hook.TriggerPointer(new NativePointerGesture(40, 40, "left"));
+
+        Assert.That(hook.LastPointerClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(hook.LastPointerClassification?.SuppressOriginalInput, Is.False);
+        Assert.That(submitCalls, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void TrayProtectionController_SuppressesSelectedSubmitWhenKeyboardClassificationFails()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.Unrelated,
+                TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer, new Dictionary<string, string>()))),
+            profile,
+            () => { });
+
+        Assert.That(tray.Start(), Is.True);
+        var result = hook.TriggerKeyboardClassificationFailure(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+    }
+
+    [Test]
+    public void TrayProtectionController_PassesThroughUnrelatedKeyboardClassificationFailure()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.Unrelated,
+                TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer, new Dictionary<string, string>()))),
+            profile,
+            () => { },
+            activeProfileId: "unselected-client");
+
+        Assert.That(tray.Start(), Is.True);
+        var result = hook.TriggerKeyboardClassificationFailure(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(result.SuppressOriginalInput, Is.False);
+    }
+
+    [Test]
+    public void SendControlEvidence_MatchesStableAutomationIdAfterLocalizedLabelChanges()
+    {
+        var evidence = SendControlEvidence.Create("sendButton", "Send");
+
+        var matched = SendControlEvidence.Matches(evidence, "sendButton", "Enviar");
+
+        Assert.That(matched, Is.True);
+        Assert.That(string.Join("|", evidence.Values), Does.Not.Contain("sendButton"));
+        Assert.That(string.Join("|", evidence.Values), Does.Not.Contain("Send"));
+    }
+
+    [Test]
+    public void SendControlEvidence_DoesNotTreatAnUnrelatedButtonAsSend()
+    {
+        var evidence = SendControlEvidence.Create("sendButton", "Send");
+
+        var matched = SendControlEvidence.Matches(evidence, "skillPicker", "Choose skill");
+
+        Assert.That(matched, Is.False);
+    }
+
+    [Test]
     public void TrayProtectionController_SuppressesSelectedClientClassifierUncertainty()
     {
         var hook = new FakeNativeSubmitHookHost();
@@ -1590,9 +1789,36 @@ public class HandleButtonClickTests : SanitizerTests
             Assert.That(stored.IsProtected, Is.False);
             Assert.That(System.Text.Json.JsonSerializer.Serialize(result), Does.Not.Contain("synthetic prompt"));
         }
+
         finally
         {
             Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void SubmitBindingProfileStore_UpsertDoesNotOverwriteAnUnreadableExistingStore()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            Directory.CreateDirectory(layout.SettingsDirectory);
+            const string invalidStore = "{ invalid-json";
+            File.WriteAllText(SubmitBindingProfileStore.DefaultPath(layout), invalidStore);
+
+            var result = SubmitBindingProfileStore.Upsert(layout, CreateProtectedProfile());
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo("profiles_unavailable"));
+            Assert.That(File.ReadAllText(SubmitBindingProfileStore.DefaultPath(layout)), Is.EqualTo(invalidStore));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
         }
     }
 
@@ -1640,6 +1866,45 @@ public class HandleButtonClickTests : SanitizerTests
         }
 
         public TextSurfaceDiscoveryResult DiscoverActiveSurface() => TextSurfaceDiscoveryResult.Success(_surface);
+    }
+
+    private sealed class FixedSendControlDiscovery : ISendControlDiscovery
+    {
+        private readonly SendControlDiscoveryResult _result;
+
+        public FixedSendControlDiscovery(SendControlDiscoveryResult result)
+        {
+            _result = result;
+        }
+
+        public SendControlDiscoveryResult Discover(NativePointerGesture gesture) => _result;
+    }
+
+    private static TrayProtectionController CreatePointerTray(
+        FakeNativeSubmitHookHost hook,
+        ISendControlDiscovery sendControlDiscovery,
+        SubmitBindingProfile profile,
+        Action onSubmit,
+        string activeProfileId = "codex-desktop")
+    {
+        var runtime = new NativeSubmitRuntime(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                onSubmit();
+                return CreateSubmittedResult("codex-desktop");
+            },
+            profile);
+        return new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            runtime.Controller,
+            runtime.Runner,
+            profile,
+            sendControlDiscovery: sendControlDiscovery,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(activeProfileId)));
     }
 
     private static TextSurfaceDescriptor CreateNativeSurfaceWithWindow(string profileId, string windowHandle)

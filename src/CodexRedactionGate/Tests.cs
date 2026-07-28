@@ -4706,7 +4706,8 @@ public partial class SanitizerTests
 
         public bool Start(
             Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
+            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+            Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure)
         {
             ArgumentNullException.ThrowIfNull(classify);
             ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
@@ -6906,6 +6907,7 @@ public class ResidentFirstRunSetupLaunchTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Save(layout, new[] { CreatePendingSetupProfile() });
 
             // Create setup controller that tracks calls
             var setupCallCount = 0;
@@ -6964,6 +6966,7 @@ public class ResidentFirstRunSetupLaunchTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Save(layout, new[] { CreatePendingSetupProfile() });
 
             // Create setup controller that fails
             var setupController = new TestSetupController(
@@ -6991,34 +6994,46 @@ public class ResidentFirstRunSetupLaunchTests
         }
     }
 
-    private static void LaunchFirstRunSetupIfRequiredWithController(DefaultStorageLayout layout, IFirstRunSetupController setupController)
+    [Test]
+    public void FirstRunSetupBackgroundRunner_CapturesWorkerFailureAndKeepsSetupBlocked()
     {
-        // This simulates the logic in LaunchFirstRunSetupIfRequired but with injected controller
+        var tempDirectory = CreateTempDirectory();
         try
         {
-            var profilesResult = SubmitBindingProfileStore.Load(layout);
-            var hasProtectedProfile = profilesResult.Profiles.Any(p => p.IsProtected && p.Enabled);
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var captured = false;
 
-            if (!hasProtectedProfile)
-            {
-                // Wait for setup completion
-                var setupResult = setupController.EnsureSetup(layout);
-                if (setupResult.Succeeded)
-                {
-                    // Verify profile is actually protected before refreshing status
-                    var finalStatus = setupController.GetSetupStatus(layout);
-                    if (!finalStatus.State.Required)
-                    {
-                        // Status can be refreshed only after verifying protection
-                        // In real code, this would call RefreshStatus()
-                    }
-                }
-            }
+            var result = FirstRunSetupBackgroundRunner.Run(
+                layout,
+                () => throw new InvalidOperationException("DOMAIN_C195C3D8E8F3"),
+                _ => captured = true);
+
+            Assert.That(result, Is.Null);
+            Assert.That(captured, Is.True);
+            Assert.That(SubmitBindingProfileStore.Load(layout).Profiles.Any(profile => profile.IsProtected), Is.False);
         }
-        catch
+        finally
         {
-            // Swallow any errors to avoid crashing the tray app
+            Directory.Delete(tempDirectory, recursive: true);
         }
+    }
+
+    private static void LaunchFirstRunSetupIfRequiredWithController(DefaultStorageLayout layout, IFirstRunSetupController setupController)
+    {
+        FirstRunSetupBackgroundRunner.Run(layout, () => setupController, _ => { });
+    }
+
+    private static SubmitBindingProfile CreatePendingSetupProfile()
+    {
+        return new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: true,
+            BindingSource: "not_verified",
+            SubmitBinding: null,
+            NewlineBinding: null,
+            CapabilityStatus: OsInteractionStatusIds.BindingUnknown,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
     }
 
     private sealed class TestSetupController : IFirstRunSetupController

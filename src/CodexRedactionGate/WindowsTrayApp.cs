@@ -122,7 +122,7 @@ public static class WindowsTrayApp
         var runtime = runtimeSet?.Runtimes.FirstOrDefault();
         var nativeProfile = runtime?.Profile;
         var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
-        var activeSurfaceDiscovery = WindowsActiveSurfaceDiscovery.CreateDefault();
+        var activeSurfaceDiscovery = WindowsFocusedComposerDiscovery.CreateDefault();
         var orchestrator = new OsInteractionOrchestrator(
             sanitizer,
             WindowsFocusedComposerDiscovery.CreateDefault(),
@@ -141,7 +141,7 @@ public static class WindowsTrayApp
             runtime?.Runner,
             nativeProfile,
             storageLayout: resolvedLayout,
-            sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault(),
+            sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault(resolvedLayout),
             nativeSubmitRuntimes: runtimeSet?.Runtimes,
             activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface);
     }
@@ -163,7 +163,7 @@ public static class WindowsTrayApp
         }
 
         var hookHost = new WindowsNativeSubmitHookHost();
-        var activeSurfaceDiscovery = WindowsActiveSurfaceDiscovery.CreateDefault();
+        var activeSurfaceDiscovery = WindowsFocusedComposerDiscovery.CreateDefault();
         var runtimes = profiles.Select(nativeProfile =>
         {
             var controller = new NativeSubmitInterceptionController(
@@ -378,15 +378,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void RunFirstRunSetupWorker()
     {
-        FirstRunSetupResult? result = null;
-        try
-        {
-            result = new FirstRunSetupLaunchCoordinator(_layout, _firstRunSetupControllerFactory()).RunIfRequired();
-        }
-        catch (Exception exception)
-        {
-            LocalCrashDiagnostics.CaptureDefault(exception, "first_run_setup", "setup_failed");
-        }
+        var result = FirstRunSetupBackgroundRunner.Run(
+            _layout,
+            _firstRunSetupControllerFactory,
+            exception => LocalCrashDiagnostics.CaptureDefault(exception, "first_run_setup", "setup_failed"));
 
         if (!_activationWindow.IsDisposed)
         {
@@ -616,6 +611,29 @@ internal static class TrayProtectionDisableConfirmationText
             "Selected AI apps will no longer be protected while Code Sanitizer is stopped.",
             $"protected_send_binding={state.ProtectedSendBinding}",
             $"readiness={state.ReadinessStatus}");
+    }
+}
+
+internal static class FirstRunSetupBackgroundRunner
+{
+    public static FirstRunSetupResult? Run(
+        DefaultStorageLayout layout,
+        Func<IFirstRunSetupController> controllerFactory,
+        Action<Exception> captureFailure)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(controllerFactory);
+        ArgumentNullException.ThrowIfNull(captureFailure);
+
+        try
+        {
+            return new FirstRunSetupLaunchCoordinator(layout, controllerFactory()).RunIfRequired();
+        }
+        catch (Exception exception)
+        {
+            captureFailure(exception);
+            return null;
+        }
     }
 }
 

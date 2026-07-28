@@ -463,7 +463,8 @@ public static class ProductSmokeRunner
 
         public bool Start(
             Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit)
+            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+            Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure)
         {
             ArgumentNullException.ThrowIfNull(classify);
             ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
