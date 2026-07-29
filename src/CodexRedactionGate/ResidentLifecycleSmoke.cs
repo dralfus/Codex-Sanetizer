@@ -35,7 +35,7 @@ internal static class ResidentLifecycleSmokeRunner
 
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-resident-smoke", Guid.NewGuid().ToString("N"));
         ResidentLifecycleSmokeReport? report = null;
-        using var completed = new ManualResetEventSlim(false);
+        var completed = new ManualResetEventSlim(false);
         var thread = new Thread(() => report = RunOnStaThread(directory, completed))
         {
             IsBackground = true
@@ -43,17 +43,23 @@ internal static class ResidentLifecycleSmokeRunner
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
 
+        var joined = false;
         try
         {
-            return thread.Join(Timeout) && completed.IsSet && report is not null
+            joined = thread.Join(Timeout);
+            return joined && completed.IsSet && report is not null
                 ? report
                 : Failed();
         }
         finally
         {
-            if (Directory.Exists(directory))
+            if (joined)
             {
-                Directory.Delete(directory, recursive: true);
+                completed.Dispose();
+                if (Directory.Exists(directory))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
             }
         }
     }
