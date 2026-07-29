@@ -272,10 +272,10 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 265, 266, 267.
 
-- [ ] Smoke fails when any listed resident boundary is disconnected or pass-through.
-- [ ] The smoke result contains only raw-free evidence.
-- [ ] Smoke launches the actual application context and proves hook registration, setup gating, runtime reload, selected Send failure handling, and second-instance behavior without a cloud submission.
-- [ ] Smoke does not treat a fake hook host, a constant, or application-file presence as proof that a resident hook/lifecycle boundary worked.
+- [x] Smoke fails when any listed resident boundary is disconnected or pass-through.
+- [x] The smoke result contains only raw-free evidence.
+- [x] Smoke launches the actual application context and proves hook registration, setup gating, runtime reload, selected Send failure handling, and second-instance behavior without a cloud submission.
+- [x] Smoke does not treat a fake hook host, a constant, or application-file presence as proof that a resident hook/lifecycle boundary worked.
 
 ## 278. Fail closed when the bounded native callback fallback itself faults
 

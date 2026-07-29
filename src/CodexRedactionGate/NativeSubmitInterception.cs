@@ -1357,6 +1357,8 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     public string? LastErrorCode { get; private set; }
 
+    internal bool IsKeyboardHookRegistered => _hook != IntPtr.Zero;
+
     public bool Start(
         Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
         Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,

@@ -17,6 +17,11 @@ public sealed record ProductSmokeReport(
     bool Passed,
     bool InstallArtifactPresent,
     bool ResidentTrayLaunchPassed,
+    bool ResidentHookRegistrationPassed,
+    bool ResidentSetupGatePassed,
+    bool ResidentRuntimeReloadPassed,
+    bool ResidentSelectedSendFailurePassed,
+    bool ResidentSecondInstancePassed,
     bool AutostartResidentCommandPassed,
     bool FirstRunPassed,
     bool HotkeyRegistrationPassed,
@@ -91,10 +96,8 @@ public static class ProductSmokeRunner
         ArgumentNullException.ThrowIfNull(hmacSecret);
 
         var installArtifactPresent = File.Exists(appArtifactPath);
-        var installDirectory = Path.GetDirectoryName(Path.GetFullPath(appArtifactPath)) ?? string.Empty;
-        var residentTrayExecutable = Path.Combine(installDirectory, "CodexRedactionGate.Tray.exe");
-        var residentTrayLaunchPassed = File.Exists(residentTrayExecutable)
-            || ReleasePackagingDeclaresResidentTray();
+        var residentLifecycle = ResidentLifecycleSmokeRunner.Run();
+        var residentTrayLaunchPassed = residentLifecycle.Passed;
         var autostartResidentCommandPassed = ReleasePackagingDeclaresResidentTray();
         layout.EnsureDirectories();
         var firstRunPassed = Directory.Exists(layout.PolicyDirectory)
@@ -249,6 +252,11 @@ public static class ProductSmokeRunner
                 Passed: false,
                 InstallArtifactPresent: installArtifactPresent,
                 ResidentTrayLaunchPassed: residentTrayLaunchPassed,
+                ResidentHookRegistrationPassed: residentLifecycle.HookRegistrationPassed,
+                ResidentSetupGatePassed: residentLifecycle.SetupGatePassed,
+                ResidentRuntimeReloadPassed: residentLifecycle.RuntimeReloadPassed,
+                ResidentSelectedSendFailurePassed: residentLifecycle.SelectedSendFailurePassed,
+                ResidentSecondInstancePassed: residentLifecycle.SecondInstancePassed,
                 AutostartResidentCommandPassed: autostartResidentCommandPassed,
                 FirstRunPassed: firstRunPassed,
                 HotkeyRegistrationPassed: hotkeyPassed,
@@ -290,6 +298,11 @@ public static class ProductSmokeRunner
             && uninstallSafePassed
             && nativeSubmit.Passed
             && residentTrayLaunchPassed
+            && residentLifecycle.HookRegistrationPassed
+            && residentLifecycle.SetupGatePassed
+            && residentLifecycle.RuntimeReloadPassed
+            && residentLifecycle.SelectedSendFailurePassed
+            && residentLifecycle.SecondInstancePassed
             && autostartResidentCommandPassed
             && protectedTriggerStatusPassed
             && unloadConfirmationPassed
@@ -309,6 +322,11 @@ public static class ProductSmokeRunner
             Passed: passed,
             InstallArtifactPresent: installArtifactPresent,
             ResidentTrayLaunchPassed: residentTrayLaunchPassed,
+            ResidentHookRegistrationPassed: residentLifecycle.HookRegistrationPassed,
+            ResidentSetupGatePassed: residentLifecycle.SetupGatePassed,
+            ResidentRuntimeReloadPassed: residentLifecycle.RuntimeReloadPassed,
+            ResidentSelectedSendFailurePassed: residentLifecycle.SelectedSendFailurePassed,
+            ResidentSecondInstancePassed: residentLifecycle.SecondInstancePassed,
             AutostartResidentCommandPassed: autostartResidentCommandPassed,
             FirstRunPassed: firstRunPassed,
             HotkeyRegistrationPassed: hotkeyPassed,
@@ -368,6 +386,11 @@ public static class ProductSmokeRunner
             "live_compatibility_note: use_disposable_local_target_first_then_throwaway_codex_or_chatgpt_desktop_task",
             $"install_artifact_present: {report.InstallArtifactPresent.ToString().ToLowerInvariant()}",
             $"resident_tray_launch: {report.ResidentTrayLaunchPassed.ToString().ToLowerInvariant()}",
+            $"resident_hook_registration: {report.ResidentHookRegistrationPassed.ToString().ToLowerInvariant()}",
+            $"resident_setup_gate: {report.ResidentSetupGatePassed.ToString().ToLowerInvariant()}",
+            $"resident_runtime_reload: {report.ResidentRuntimeReloadPassed.ToString().ToLowerInvariant()}",
+            $"resident_selected_send_failure: {report.ResidentSelectedSendFailurePassed.ToString().ToLowerInvariant()}",
+            $"resident_second_instance: {report.ResidentSecondInstancePassed.ToString().ToLowerInvariant()}",
             $"autostart_resident_command: {report.AutostartResidentCommandPassed.ToString().ToLowerInvariant()}",
             $"first_run: {report.FirstRunPassed.ToString().ToLowerInvariant()}",
             $"hotkey_registration: {report.HotkeyRegistrationPassed.ToString().ToLowerInvariant()}",

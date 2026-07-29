@@ -4068,6 +4068,12 @@ public partial class SanitizerTests
 
             Assert.That(report.Passed, Is.True);
             Assert.That(report.InstallArtifactPresent, Is.True);
+            Assert.That(report.ResidentTrayLaunchPassed, Is.True);
+            Assert.That(report.ResidentHookRegistrationPassed, Is.True);
+            Assert.That(report.ResidentSetupGatePassed, Is.True);
+            Assert.That(report.ResidentRuntimeReloadPassed, Is.True);
+            Assert.That(report.ResidentSelectedSendFailurePassed, Is.True);
+            Assert.That(report.ResidentSecondInstancePassed, Is.True);
             Assert.That(report.FirstRunPassed, Is.True);
             Assert.That(report.HotkeyRegistrationPassed, Is.True);
             Assert.That(report.DictionaryPolicySetupPassed, Is.True);
@@ -4089,6 +4095,11 @@ public partial class SanitizerTests
             Assert.That(rendered, Does.Contain("project_file_read_only_smoke: true"));
             Assert.That(rendered, Does.Contain("project_file_product_smoke: true"));
             Assert.That(rendered, Does.Contain("native_submit_interception: true"));
+            Assert.That(rendered, Does.Contain("resident_hook_registration: true"));
+            Assert.That(rendered, Does.Contain("resident_setup_gate: true"));
+            Assert.That(rendered, Does.Contain("resident_runtime_reload: true"));
+            Assert.That(rendered, Does.Contain("resident_selected_send_failure: true"));
+            Assert.That(rendered, Does.Contain("resident_second_instance: true"));
             Assert.That(rendered, Does.Contain("native_submit_repeatability: true"));
             Assert.That(rendered, Does.Contain("native_submit_duplicate_guard: true"));
             Assert.That(rendered, Does.Contain("native_submit_overlay_foreground_request: true"));
