@@ -394,3 +394,50 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [x] The self-test path does not call the production sanitizer factory or touch the default storage layout.
 - [x] Production `--doctor` continues to report a raw-free DPAPI readiness failure instead of being hidden by self-test isolation.
 - [x] Tests prove both the isolated self-test success and raw-free production DPAPI failure reporting.
+
+## 281. Recover unreadable local DPAPI protection safely and prevent partial secret writes
+
+**What to build:** Give a user whose local DPAPI HMAC secret or mapping vault cannot be opened a confirmed, raw-free recovery workflow. The workflow must preserve the old protected artifacts for investigation, explain that previous restorable mappings may no longer be recoverable, and create a fresh protected local state only after the user explicitly approves it. New HMAC secret creation must be crash-safe, so an interrupted write cannot itself leave a truncated secret file.
+
+**Blocked by:** None - can start immediately.
+
+**Do not:** Delete, overwrite, or silently rotate the existing secret or vault; expose raw paths, exception messages, mappings, prompts, or protected values; treat `--self-test` success as proof that the user's local vault is ready; or downgrade to plaintext storage.
+
+- [ ] `--doctor` and the tray present one stable recovery-required status when the production DPAPI secret or vault is unreadable, while normal protected Send remains fail-closed.
+- [ ] Recovery requires explicit local confirmation, preserves the previous secret and vault as a recoverable backup/quarantine, and warns that old pseudonyms may not be restorable after recovery.
+- [ ] A confirmed recovery creates a fresh user-scoped DPAPI secret and vault; a follow-up doctor check reports the new local state accurately without leaking paths or values.
+- [ ] Secret provisioning uses an atomic write/replace path and tests cover interrupted/contended creation, cancellation, and the unreadable-secret recovery path.
+
+## 282. Separate broker evidence from live project-file protection status
+
+**What to build:** Make readiness, tray diagnostics, CLI output, and product smoke distinguish a tested local file-context broker from actual live Codex project-file enforcement. A successful in-memory broker exercise must never make the released product report that the live Codex file channel is protected.
+
+**Blocked by:** None - can start immediately.
+
+**Do not:** Change the current live capability to `true` without a verified pre-cloud client integration; hide the unsupported status behind a generic `ready` result; or remove the useful broker workflow tests.
+
+- [ ] `--product-smoke` reports broker-workflow evidence separately and reports live `project_files_protected: false` until a real client boundary is verified.
+- [ ] `--doctor`, tray status, and README use one consistent capability vocabulary that distinguishes composer protection, broker-demo capability, and live project-file protection.
+- [ ] Regression tests prove no aggregate readiness or release-success field can imply live project-file protection when the broker is only exercised in a temporary test workspace.
+
+## 283. Prove a supported live ingress boundary for protected project files
+
+**What to build:** Establish a real, pre-cloud integration boundary through which a selected coding workspace's supported file reads, attachments, and file-derived tool output must pass before model visibility. If the selected Codex/Desktop surface has no such supported boundary, keep the capability explicitly unsupported rather than implying protection from UI observation or a local broker demo.
+
+**Blocked by:** 282. Separate broker evidence from live project-file protection status; a verified supported Codex/Desktop integration surface or an approved local gateway design.
+
+**Do not:** Claim protection from post-action UI Automation events, scrape raw project content from the client after it has been sent, or turn every file in a task into a sequence of blocking confirmation dialogs.
+
+- [ ] A disposable protected workspace demonstrates one real pre-cloud file-context operation entering the local broker and produces raw-free evidence that the model-visible payload is sanitized.
+- [ ] When the boundary is unavailable, protected-workspace mode fails closed for that channel and reports `unsupported` rather than silently allowing a direct read/upload/tool-output path.
+- [ ] The user experience presents one operation-level batch summary with a navigable per-file list; it does not require accepting a separate popup for every file.
+- [ ] Live `project_files_protected` can become `true` only after the real ingress proof and its automated regression test exist.
+
+## 284. Enforce source-whitespace hygiene in the release check
+
+**What to build:** Remove current source whitespace defects and add a lightweight repeatable release check so trailing whitespace and extra end-of-file blank lines do not create noisy diffs or conceal substantive security changes.
+
+**Blocked by:** None - can start immediately.
+
+- [ ] Tracked source and test files have no current `git diff --check` whitespace errors.
+- [ ] The documented release verification includes a non-interactive whitespace check that fails before packaging when new defects are introduced.
