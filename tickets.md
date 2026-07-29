@@ -332,16 +332,16 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 ## 275. Establish a pre-action enforcement boundary for programmatic UI Automation Send
 
-**What to build:** Ensure the product never represents non-cancellable UI Automation observations as a protected Send interception path. UIA providers can raise `InvokedEvent` at provider-dependent times, but the external client API cannot cancel a third-party application's `Invoke()` action. Define and implement a supported pre-action enforcement boundary for programmatic `Invoke()` activation, either inside the selected client or at its cloud-egress boundary, before claiming this path is protected.
+**What to build:** Publish third-party programmatic UI Automation `Invoke()` as explicitly unsupported until a verified pre-action enforcement boundary exists. UIA providers can raise `InvokedEvent` at provider-dependent times, but the external client API cannot cancel a third-party application's `Invoke()` action. The verified keyboard/mouse Send path remains separately protected.
 
-**Blocked by:** Product decision on the supported enforcement boundary. The external Windows UI Automation client API exposes `InvokedEvent` as non-cancellable observation and cannot cancel a third-party application's `Invoke()` action.
+**Blocked by:** None. Product decision: publish the unsupported path now; do not implement a cloud-egress or in-client boundary in this release.
 
 **Do not:** Treat `InvokedEvent` observation as prevention, report a raw Send as protected after it has happened, or silently broaden low-level keyboard/mouse hooks to unrelated applications.
 
-- [ ] The supported pre-action boundary prevents a programmatic Send before cloud submission, or the profile is explicitly reported as unsupported for that path.
-- [ ] Protected status and diagnostics distinguish pre-action enforcement from post-action observation using raw-free statuses.
-- [ ] Tests prove a programmatic activation cannot be reported as successfully protected when no pre-action boundary is active.
-- [ ] Documentation records the Windows UIA limitation and the selected enforcement design.
+- [x] The profile is explicitly reported as `programmatic_uia_invoke_unsupported` for that path.
+- [x] Protected status and diagnostics distinguish manual pre-action enforcement from programmatic UIA non-prevention using raw-free statuses.
+- [x] Tests prove a protected keyboard/mouse profile cannot report programmatic UIA activation as successfully protected when no pre-action boundary is active.
+- [x] Documentation records the Windows UIA limitation and the selected unsupported-path design.
 
 ## 277. Bind native Send decisions to the captured target before callback timeout
 

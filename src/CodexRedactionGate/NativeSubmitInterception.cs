@@ -239,7 +239,8 @@ public sealed record SubmitBindingProfile(
             ["binding_source"] = BindingSource,
             ["capability_status"] = CapabilityStatus,
             ["submit_binding"] = SubmitBinding?.DisplayText ?? "unknown",
-            ["newline_binding"] = NewlineBinding?.DisplayText ?? "unknown"
+            ["newline_binding"] = NewlineBinding?.DisplayText ?? "unknown",
+            ["programmatic_uia_invoke"] = OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported
         };
 
         if (CompatibilityEvidence is not null)

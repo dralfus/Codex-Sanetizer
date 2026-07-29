@@ -65,6 +65,8 @@ Every native input event uses this decision table:
 | Selected AI client, uncertain composer, Send-control identity, hook health, UI Automation, setup state, or target validity | Suppress and report raw-free degraded/setup status. Do not submit. |
 | Deferred approval/replay cannot revalidate the initiating target | Abort raw-free. Do not rediscover the current foreground window and redirect the attempt. |
 
+The table applies to native keyboard and pointer gestures that Code Sanitizer can suppress before their target application receives them. Third-party programmatic UI Automation `Invoke()` is a different path: the external UIA client API cannot cancel the target application's action before provider notification. Until a verified pre-action enforcement boundary exists, this path is explicitly published as `programmatic_uia_invoke_unsupported`, never as `protected`.
+
 The target identity and snapshot generation captured for the original gesture travel with deferred sanitization, confirmation, and replay. A later focus change cannot redirect that attempt to another composer. The normal cloud-bound paths remain: a locally verified prompt without sensitive terms, locally verified sanitized text approved in the overlay, or the separately confirmed one-shot emergency bypass. No cancellation, reload failure, exception, or stale state may create an additional pass-through path.
 
 The highest resident-adapter test seam is an application-context/native-hook lifecycle harness that injects a classified input event and observes suppression, status, and approved replay. Unit tests support that seam, but release readiness requires lifecycle evidence covering startup, setup, reload, target change, and repeated sends.

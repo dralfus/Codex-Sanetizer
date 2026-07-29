@@ -9,6 +9,7 @@ This directory documents Codex Redaction Gate: a local safety layer that interce
 - `POST_REFACTOR_IMPROVEMENT_SPEC.md` - the next improvement wave after the sanitizer pipeline split.
 - `NEXT_IMPROVEMENT_SPEC.md` - product-readiness improvements around operations, packaging, audit, and smoke coverage.
 - `PROJECT_FILE_WORKFLOW_SPEC.md` - product spec for protected coding-agent file reads, sanitized virtual files, and restore-aware local writes.
+- `PROGRAMMATIC_UIA_SEND_LIMITATION_SPEC.md` - explicit coverage limit for third-party programmatic UI Automation Send activation.
 - `REQUIREMENTS.md` - functional, non-functional, and security requirements.
 - `ARCHITECTURE.md` - target architecture, components, data flows, and integration options.
 - `SANITIZER_DESIGN.md` - concrete sanitizer design: API, pipeline, policy, span replacement, and verification.

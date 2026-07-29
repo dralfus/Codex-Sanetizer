@@ -1135,7 +1135,7 @@ public static class Program
         foreach (var profile in result.Profiles.OrderBy(profile => profile.ProfileId, StringComparer.Ordinal))
         {
             var composerProtected = profile.CapabilityStatus == OsInteractionStatusIds.Protected;
-            Console.WriteLine($"profile={profile.ProfileId} readiness={profile.CapabilityStatus} capability_status={profile.CapabilityStatus} composer_protected={composerProtected.ToString().ToLowerInvariant()} project_files_protected=false binding_source={profile.BindingSource} protected_send_binding={profile.SubmitBinding?.DisplayText ?? "unknown"} newline_binding={profile.NewlineBinding?.DisplayText ?? "unknown"}");
+            Console.WriteLine($"profile={profile.ProfileId} readiness={profile.CapabilityStatus} capability_status={profile.CapabilityStatus} composer_protected={composerProtected.ToString().ToLowerInvariant()} programmatic_uia_invoke={OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported} project_files_protected=false binding_source={profile.BindingSource} protected_send_binding={profile.SubmitBinding?.DisplayText ?? "unknown"} newline_binding={profile.NewlineBinding?.DisplayText ?? "unknown"}");
         }
 
         return result.Succeeded ? 0 : 1;

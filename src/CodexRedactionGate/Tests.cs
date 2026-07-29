@@ -1527,6 +1527,44 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_ReportsProgrammaticUiaInvokeAsUnsupportedAlongsideProtectedManualSend()
+    {
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "codex-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            TextSurfaceDiscoveryResult.Success(new TextSurfaceDescriptor(
+                "surface-1",
+                "codex-desktop",
+                "Codex desktop composer",
+                Supported: true,
+                CanCaptureText: true,
+                CanReplaceText: true,
+                CanSubmit: true,
+                Metadata: new SurfaceMetadata())));
+        var controller = new TrayProtectionController(
+            new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            new RecordingNativeSubmitHookHost(),
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("Native submit should not run."),
+            profile);
+
+        controller.Start();
+        var profileDiagnostics = profile.ToRawFreeDiagnostics();
+        var trayStatus = TrayStatusFormatter.FormatMenuStatus(controller.State);
+
+        Assert.That(profile.IsProtected, Is.True);
+        Assert.That(
+            profileDiagnostics["programmatic_uia_invoke"],
+            Is.EqualTo(OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported));
+        Assert.That(
+            controller.State.ProgrammaticUiaInvokeStatus,
+            Is.EqualTo(OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported));
+        Assert.That(trayStatus, Does.Contain("programmatic_uia_invoke=programmatic_uia_invoke_unsupported"));
+    }
+
+    [Test]
     public void TrayProtectionController_DisableRequiresConfirmationAndCanBePolicyBlocked()
     {
         var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
@@ -5947,6 +5985,40 @@ public class CliTests
         finally
         {
             Program.NativeProfileDiscoveryFactory = originalDiscoveryFactory;
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Main_NativeProfilesStatus_ReportsProgrammaticUiaInvokeAsUnsupportedWithoutProfileDiagnostics()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+                "codex-desktop",
+                "Enter",
+                "Ctrl+Enter",
+                TextSurfaceDiscoveryResult.Success(CreateCliNativeSubmitSurface("codex-desktop"))) with
+            {
+                Diagnostics = new Dictionary<string, string>
+                {
+                    ["untrusted"] = "PROMPT_SECRET_123"
+                }
+            };
+            SubmitBindingProfileStore.Save(layout, new[] { profile });
+
+            var (exitCode, stdout, stderr) = RunCli(layout, "--native-profiles-status");
+
+            Assert.That(exitCode, Is.EqualTo(0));
+            Assert.That(stderr, Is.Empty);
+            Assert.That(stdout, Does.Contain("composer_protected=true"));
+            Assert.That(stdout, Does.Contain("programmatic_uia_invoke=programmatic_uia_invoke_unsupported"));
+            Assert.That(stdout, Does.Not.Contain("PROMPT_SECRET_123"));
+        }
+        finally
+        {
             Directory.Delete(tempDirectory, recursive: true);
         }
     }

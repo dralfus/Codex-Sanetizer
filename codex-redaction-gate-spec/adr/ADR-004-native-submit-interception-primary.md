@@ -79,6 +79,7 @@ Negative:
 
 - Never intercept submit shortcuts outside explicitly enabled AI surface profiles.
 - Never claim `protected` when the active submit binding is unknown.
+- Never claim that a third-party programmatic UI Automation `Invoke()` is protected: external UIA observation is non-cancellable, so this path is published as `programmatic_uia_invoke_unsupported` until a verified pre-action boundary exists.
 - Never replay the native submit shortcut until the composer text is verified as sanitized or sanitizer result is `allow`.
 - Never treat confirmation overlay display as one-shot state; after confirm, cancel, block or failure, the resident hook must be ready for the next protected Send.
 - Never treat Cancel as approval, pass-through, or a future bypass.
