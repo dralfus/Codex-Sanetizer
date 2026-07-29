@@ -249,11 +249,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 253. Connect selected-app Send controls to native interception without blocking other controls; 274. Make selected-client uncertainty and target identity explicit.
 
-- [ ] A selected Send candidate is never passed through because UIA discovery failed or its localized label changed.
-- [ ] Keyboard and mouse callback exceptions after a selected Send candidate fail closed rather than calling through to the original input.
-- [ ] UIA work is bounded outside the low-level hook callback and hook-loss is surfaced as a raw-free degraded state.
-- [ ] An unproven callback failure in an unrelated application does not suppress ordinary keyboard or mouse input.
-- [ ] Candidate classification distinguishes selected-app uncertainty from unrelated input: selected-app uncertainty blocks Send, unrelated input continues normally.
+- [x] A selected Send candidate is never passed through because UIA discovery failed or its localized label changed.
+- [x] Keyboard and mouse callback exceptions after a selected Send candidate fail closed rather than calling through to the original input.
+- [x] UIA work is bounded outside the low-level hook callback and hook-loss is surfaced as a raw-free degraded state.
+- [x] An unproven callback failure in an unrelated application does not suppress ordinary keyboard or mouse input.
+- [x] Candidate classification distinguishes selected-app uncertainty from unrelated input: selected-app uncertainty blocks Send, unrelated input continues normally.
 - [x] Tests cover localized evidence, transient UIA failure, and non-Send controls.
 
 ## 268. Remove raw exception messages from all interactive UI failure paths
