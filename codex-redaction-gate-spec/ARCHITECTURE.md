@@ -49,6 +49,10 @@ The Windows native adapter is a resident protection state machine. Its safety de
 
 The adapter therefore publishes one immutable, versioned resident-protection snapshot. It includes the selected profile set and their verified bindings, hook readiness, the guarded submit flow, UI Automation/classification capability, and the captured-target contract. A native input callback reads one snapshot and completes its decision from that snapshot alone.
 
+### Bounded Callback Fallback
+
+The low-level keyboard and pointer callbacks must never rediscover the foreground window, invoke UI Automation, or resolve a process after the input event is captured. Background classification records a raw-free target verdict keyed by the captured window and process identity: selected protected target, known unrelated target, or unknown. The bounded callback fallback consumes only that precomputed verdict. If the fallback implementation faults, a precomputed selected target is suppressed with a stable raw-free failure status, while a known unrelated or unknown target continues normally. This prevents an internal fallback error from releasing a selected Send without turning Code Sanitizer into a global keyboard blocker.
+
 Snapshot publication is transactional: build and validate a candidate first, start any required hook resources, then atomically publish the complete candidate. If candidate creation or activation fails, the previous complete snapshot remains active. Readers must never observe a mixture of profiles/bindings from one generation and controller, runner, or hook state from another.
 
 Every native input event uses this decision table:

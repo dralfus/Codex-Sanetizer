@@ -1816,6 +1816,31 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
+    public void WindowsNativeSubmitHookHost_CachesOnlySelectedCapturedTargets()
+    {
+        var host = new WindowsNativeSubmitHookHost();
+        var selected = new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.SurfaceUnverified,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string> { ["profile_id"] = "codex-desktop" });
+        var unrelated = new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitPassThrough,
+            SuppressOriginalInput: false,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>());
+
+        host.RememberSelectedTargetForTest(new IntPtr(42), 7, selected);
+        host.RememberSelectedTargetForTest(new IntPtr(43), 7, unrelated);
+
+        Assert.That(host.IsSelectedTargetForTest(new IntPtr(42), 7), Is.True);
+        Assert.That(host.IsSelectedTargetForTest(new IntPtr(42), 8), Is.False);
+        Assert.That(host.IsSelectedTargetForTest(new IntPtr(43), 7), Is.False);
+    }
+
+    [Test]
     public void TrayProtectionController_FocusedSendUsesCapturedWindowWhenFocusChanges()
     {
         var hook = new FakeNativeSubmitHookHost();

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -1338,6 +1339,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     private readonly NativeMethods.LowLevelKeyboardProc _callback;
     private readonly NativeMethods.LowLevelMouseProc _mouseCallback;
+    private readonly ConcurrentDictionary<(nint Window, uint ProcessId), byte> _selectedTargets = new();
     private IntPtr _hook;
     private IntPtr _mouseHook;
     private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
@@ -1527,6 +1529,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         return ClassifyWithinBudget(
             () => _classifyPointer!(gesture),
             () => ShouldSuppressPointerClassificationFailure(gesture),
+            result => RememberSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId, result),
             "pointer");
     }
 
@@ -1535,12 +1538,14 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         return ClassifyWithinBudget(
             () => _classify!(gesture),
             () => ShouldSuppressKeyboardClassificationFailure(gesture),
+            result => RememberSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId, result),
             "keyboard");
     }
 
     private NativeSubmitInterceptionResult ClassifyWithinBudget(
         Func<NativeSubmitInterceptionResult> classify,
         Func<bool> shouldSuppressFailure,
+        Action<NativeSubmitInterceptionResult> rememberSelectedTarget,
         string inputType)
     {
         NativeSubmitInterceptionResult? result = null;
@@ -1567,6 +1572,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             completed.Dispose();
             if (failure is null && result is not null)
             {
+                rememberSelectedTarget(result);
                 return result;
             }
         }
@@ -1597,7 +1603,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         }
         catch (Exception)
         {
-            return false;
+            return IsSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId);
         }
     }
 
@@ -1609,8 +1615,42 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         }
         catch (Exception)
         {
-            return false;
+            return IsSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId);
         }
+    }
+
+    private void RememberSelectedTarget(
+        IntPtr targetWindow,
+        uint targetProcessId,
+        NativeSubmitInterceptionResult result)
+    {
+        if (targetWindow == IntPtr.Zero || targetProcessId == 0
+            || !result.Diagnostics.ContainsKey("profile_id"))
+        {
+            return;
+        }
+
+        _selectedTargets.TryAdd(((nint)targetWindow, targetProcessId), 0);
+    }
+
+    private bool IsSelectedTarget(IntPtr targetWindow, uint targetProcessId)
+    {
+        return targetWindow != IntPtr.Zero
+            && targetProcessId != 0
+            && _selectedTargets.ContainsKey(((nint)targetWindow, targetProcessId));
+    }
+
+    internal void RememberSelectedTargetForTest(
+        IntPtr targetWindow,
+        uint targetProcessId,
+        NativeSubmitInterceptionResult result)
+    {
+        RememberSelectedTarget(targetWindow, targetProcessId, result);
+    }
+
+    internal bool IsSelectedTargetForTest(IntPtr targetWindow, uint targetProcessId)
+    {
+        return IsSelectedTarget(targetWindow, targetProcessId);
     }
 
     private static NativeSubmitInterceptionResult ClassificationUnavailableResult(string inputType)
