@@ -30,7 +30,8 @@ internal sealed record SingleInstanceNotificationSettings(bool Enabled, string T
         return value?.Trim().ToLowerInvariant() switch
         {
             "none" => "none",
-            "messagebox" => "messagebox",
+            // Keep legacy deployments non-modal as required by the tray contract.
+            "messagebox" => "balloon",
             "toast" => "toast",
             "balloon" => "balloon",
             _ => "balloon"

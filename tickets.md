@@ -124,16 +124,16 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 ## 258. Add user notification when second tray instance is blocked
 
-**What to build:** Add user-facing notification when a second launch of the tray is blocked by single-instance enforcement. The notification should briefly inform the user that the tray is already running and has been activated.
+**What to build:** Add one user-facing notification when a second launch of the tray is blocked by single-instance enforcement. It must briefly report that Code Sanitizer is already running; it remains visible whether foreground activation succeeds or falls back.
 
 **Blocked by:** 252. Wire per-user single-instance enforcement into the installed tray entry point.
 
 **Do not:** Show a modal dialog that requires user interaction; log to event viewer without user feedback; or leak window titles or process IDs in the message.
 
-- [ ] Second launch shows a non-modal, auto-dismissing notification (toast or balloon)
-- [ ] Notification text is localized and contains no sensitive information
-- [ ] Notification is suppressed if activation succeeded silently
-- [ ] Notification includes a link to "Open diagnostics" for troubleshooting
+- [x] Second launch shows one non-modal, auto-dismissing notification (toast or balloon), regardless of whether foreground activation succeeds
+- [x] Notification text is localized and contains no sensitive information
+- [x] No second-instance path opens a modal dialog or relies on a hidden activation form as the only user-visible outcome
+- [x] Notification directs the user to the resident tray icon for local diagnostics without exposing data
 
 ## 259. Add Global\ mutex option for multi-user system support
 
@@ -165,7 +165,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 ## 261. Make user notification configurable (optional/suppressible)
 
-**What to build:** Make the user notification shown when a second tray instance is blocked configurable via a registry setting or config file. Users should be able to suppress notifications entirely or choose notification type (toast vs balloon vs none).
+**What to build:** Make the non-modal notification shown when a second tray instance is blocked configurable via a registry setting. Users should be able to suppress notifications entirely or choose its non-modal presentation.
 
 **Blocked by:** 258. Add user notification when second tray instance is blocked.
 
@@ -173,8 +173,8 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 - [ ] Add registry key `HKEY_CURRENT_USER\Software\CodexRedactionGate\SingleInstance` with notification settings
 - [ ] Setting `DisableNotification` (DWORD) suppresses all user notifications
-- [ ] Setting `NotificationType` (REG_SZ) allows: `toast`, `balloon`, `messagebox`, `none`
-- [ ] Default value shows notification with message box for compatibility
+- [ ] Setting `NotificationType` (REG_SZ) allows: `toast`, `balloon`, `none`; a legacy `messagebox` value is treated as `balloon` and never opens a modal dialog
+- [ ] Default value shows a balloon notification
 - [ ] Configuration is read once at startup and cached
 
 ## 262. Add unit tests for SingleInstanceEnforcement crash recovery
@@ -194,17 +194,16 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 ## 263. Improve ActivateExistingInstance documentation and limitations
 
-**What to build:** Add comprehensive documentation to `ActivateExistingInstance` explaining the current implementation limitations and what would be required for full window activation. Include code comments about window handle storage requirements and Win32 API dependencies.
+**What to build:** Document the implemented per-user activation path, its Windows foreground limitations, storage lifecycle, and the safe fallback when activation cannot be completed.
 
 **Blocked by:** 257. Implement actual window activation in ActivateExistingInstance.
 
-**Do not:** Remove current simplified implementation; add implementation details to public API; or document as "TODO" without concrete guidance.
+**Do not:** Claim cross-user or cross-session activation; expose stored window handles to other users; or document the fallback as raw pass-through.
 
-- [ ] XML documentation explains why window activation is not implemented
-- [ ] Comments describe required window handle storage mechanism (named shared memory)
-- [ ] Documentation references Win32 API functions needed: `FindWindow`, `SetForegroundWindow`
-- [ ] Document thread-safety requirements for handle storage
-- [ ] Add note about elevation requirements for cross-user scenarios
+- [ ] XML documentation explains the per-user handle registration, validation, and cleanup lifecycle
+- [ ] Documentation references the `IsWindow`, `ShowWindow`, and `SetForegroundWindow` Win32 calls and their failure semantics
+- [ ] Document thread-safety and stale-handle cleanup requirements for the shared store
+- [ ] README states the same-user/session boundary and the visible notification fallback
 
 ## 264. Add localization support for user notifications
 
@@ -303,12 +302,12 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 ## 270. Make second-instance activation visibly useful
 
-**What to build:** Replace invisible activation-window foregrounding with a visible tray/menu or diagnostics/settings surface, or show the non-modal notification even after signalling succeeds.
+**What to build:** Ensure every second launch gives a visible non-modal outcome even if foreground activation of the resident activation window succeeds.
 
 **Blocked by:** 257.
 
-- [ ] A second launch produces a visible user outcome without stealing focus to an invisible form.
-- [ ] Tests cover activation success and notification fallback.
+- [x] A second launch produces a visible non-modal user outcome without relying on the invisible activation form.
+- [x] Tests cover activation success and fallback with exactly one notification decision.
 
 ## 271. Centralize crash bootstrap and local crash-directory resolution
 

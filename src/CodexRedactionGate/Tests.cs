@@ -6732,12 +6732,36 @@ public class SingleInstanceEnforcementTests
     [TestCase(null, "balloon")]
     [TestCase("toast", "toast")]
     [TestCase("balloon", "balloon")]
-    [TestCase("messagebox", "messagebox")]
+    [TestCase("messagebox", "balloon")]
     [TestCase("none", "none")]
     [TestCase("unexpected", "balloon")]
     public void SingleInstanceNotificationSettings_NormalizesKnownTypes(string? configured, string expected)
     {
         Assert.That(SingleInstanceNotificationSettings.NormalizeType(configured), Is.EqualTo(expected));
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public void WindowsTrayApp_SecondInstanceCreatesNonModalNotificationForEveryActivationOutcome(bool activationSucceeded)
+    {
+        var notification = WindowsTrayApp.CreateSecondInstanceNotification(
+            new SingleInstanceNotificationSettings(true, "balloon"),
+            activationSucceeded);
+
+        Assert.That(notification, Is.Not.Null);
+        Assert.That(notification!.Title, Is.EqualTo(AppStrings.Get("ProductName")));
+        Assert.That(notification.Message, Is.EqualTo(AppStrings.Get("AlreadyRunning")));
+        Assert.That(notification.DisplayMilliseconds, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public void WindowsTrayApp_SecondInstanceDoesNotCreateNotificationWhenUserSuppressesIt()
+    {
+        var notification = WindowsTrayApp.CreateSecondInstanceNotification(
+            new SingleInstanceNotificationSettings(false, "none"),
+            activationSucceeded: true);
+
+        Assert.That(notification, Is.Null);
     }
 
     [Test]
@@ -6866,6 +6890,7 @@ public class SingleInstanceEnforcementTests
         var tempDirectory = CreateTempDirectory();
         try
         {
+            SecondInstanceNotification? notification = null;
             using var owner = new ExternalMutexOwner("tray");
             using var activationWindow = new Form
             {
@@ -6882,11 +6907,41 @@ public class SingleInstanceEnforcementTests
                 DefaultStorageLayout.Create(tempDirectory),
                 useGlobalMutex: false,
                 _ => throw new AssertionException("A second tray instance must not enter the message loop."),
-                new SingleInstanceNotificationSettings(false, "none"));
+                new SingleInstanceNotificationSettings(true, "balloon"),
+                shown => notification = shown);
             Application.DoEvents();
 
             Assert.That(exitCode, Is.EqualTo(0));
             Assert.That(activationWindow.WindowState, Is.EqualTo(FormWindowState.Normal));
+            Assert.That(notification?.ActivationSucceeded, Is.True);
+        }
+        finally
+        {
+            SingleInstanceEnforcement.ClearActivationWindow("tray");
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void WindowsTrayApp_RunSecondInstanceReportsVisibleFallbackWhenActivationWindowIsUnavailable()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            SecondInstanceNotification? notification = null;
+            using var owner = new ExternalMutexOwner("tray");
+
+            var exitCode = WindowsTrayApp.Run(
+                TestSanitizers.Create(),
+                DefaultStorageLayout.Create(tempDirectory),
+                useGlobalMutex: false,
+                _ => throw new AssertionException("A second tray instance must not enter the message loop."),
+                new SingleInstanceNotificationSettings(true, "balloon"),
+                shown => notification = shown);
+
+            Assert.That(exitCode, Is.EqualTo(0));
+            Assert.That(notification, Is.Not.Null);
+            Assert.That(notification!.ActivationSucceeded, Is.False);
         }
         finally
         {

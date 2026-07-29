@@ -9,6 +9,12 @@ using System.Windows.Forms;
 
 namespace CodexRedactionGate;
 
+internal sealed record SecondInstanceNotification(
+    string Title,
+    string Message,
+    int DisplayMilliseconds,
+    bool ActivationSucceeded);
+
 public static class WindowsTrayApp
 {
     public static int Run(ISanitizer sanitizer)
@@ -31,7 +37,8 @@ public static class WindowsTrayApp
         DefaultStorageLayout layout,
         bool useGlobalMutex,
         Action<WindowsTrayApplicationContext> runMessageLoop,
-        SingleInstanceNotificationSettings? secondInstanceNotificationSettings)
+        SingleInstanceNotificationSettings? secondInstanceNotificationSettings,
+        Action<SecondInstanceNotification>? secondInstanceNotificationPresenter = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
@@ -50,10 +57,13 @@ public static class WindowsTrayApp
         // Single instance enforcement - second launch should activate existing instance and exit
         if (SingleInstanceEnforcement.IsAnotherInstanceRunning("tray", useGlobalMutex))
         {
-            SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
+            var activationSucceeded = SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
             if (ShouldNotifySecondInstance())
             {
-                ShowAlreadyRunningNotification(secondInstanceNotificationSettings ?? SingleInstanceNotificationSettings.Load());
+                ShowAlreadyRunningNotification(
+                    secondInstanceNotificationSettings ?? SingleInstanceNotificationSettings.Load(),
+                    activationSucceeded,
+                    secondInstanceNotificationPresenter);
             }
             return 0; // Exit cleanly - existing instance will handle everything
         }
@@ -61,10 +71,13 @@ public static class WindowsTrayApp
         using var enforcement = new SingleInstanceEnforcement("tray", useGlobalMutex);
         if (!enforcement.IsFirstInstance)
         {
-            SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
+            var activationSucceeded = SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
             if (ShouldNotifySecondInstance())
             {
-                ShowAlreadyRunningNotification(secondInstanceNotificationSettings ?? SingleInstanceNotificationSettings.Load());
+                ShowAlreadyRunningNotification(
+                    secondInstanceNotificationSettings ?? SingleInstanceNotificationSettings.Load(),
+                    activationSucceeded,
+                    secondInstanceNotificationPresenter);
             }
             return 0;
         }
@@ -83,21 +96,20 @@ public static class WindowsTrayApp
         return 0;
     }
 
-    private static void ShowAlreadyRunningNotification(SingleInstanceNotificationSettings settings)
+    private static void ShowAlreadyRunningNotification(
+        SingleInstanceNotificationSettings settings,
+        bool activationSucceeded,
+        Action<SecondInstanceNotification>? presenter)
     {
-        ArgumentNullException.ThrowIfNull(settings);
-        if (!settings.Enabled || settings.Type == "none")
+        var notificationDetails = CreateSecondInstanceNotification(settings, activationSucceeded);
+        if (notificationDetails is null)
         {
             return;
         }
 
-        if (settings.Type == "messagebox")
+        if (presenter is not null)
         {
-            MessageBox.Show(
-                AppStrings.Get("AlreadyRunning"),
-                AppStrings.Get("ProductName"),
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            presenter(notificationDetails);
             return;
         }
 
@@ -105,16 +117,33 @@ public static class WindowsTrayApp
         {
             Icon = System.Drawing.SystemIcons.Information,
             Visible = true,
-            BalloonTipTitle = AppStrings.Get("ProductName"),
-            BalloonTipText = AppStrings.Get("AlreadyRunning")
+            BalloonTipTitle = notificationDetails.Title,
+            BalloonTipText = notificationDetails.Message
         };
-        notification.ShowBalloonTip(3000);
-        var until = DateTime.UtcNow.AddSeconds(3);
+        notification.ShowBalloonTip(notificationDetails.DisplayMilliseconds);
+        var until = DateTime.UtcNow.AddMilliseconds(notificationDetails.DisplayMilliseconds);
         while (DateTime.UtcNow < until)
         {
             Application.DoEvents();
             System.Threading.Thread.Sleep(50);
         }
+    }
+
+    internal static SecondInstanceNotification? CreateSecondInstanceNotification(
+        SingleInstanceNotificationSettings settings,
+        bool activationSucceeded)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!settings.Enabled || settings.Type == "none")
+        {
+            return null;
+        }
+
+        return new SecondInstanceNotification(
+            AppStrings.Get("ProductName"),
+            AppStrings.Get("AlreadyRunning"),
+            DisplayMilliseconds: 3000,
+            ActivationSucceeded: activationSucceeded);
     }
 
     internal static bool ShouldNotifySecondInstance()
