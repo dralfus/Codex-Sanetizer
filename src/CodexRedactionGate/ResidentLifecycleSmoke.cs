@@ -332,7 +332,7 @@ internal static class ResidentLifecycleSmokeRunner
         public void Trigger(NativeKeyGesture gesture)
         {
             var result = _classify!(gesture);
-            if (result.SuppressOriginalInput)
+            if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
             {
                 _onSuppressedSubmit!(gesture, result);
             }
