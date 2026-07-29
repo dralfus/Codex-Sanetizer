@@ -481,3 +481,16 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [x] A failure moving the first artifact and a failure moving the second artifact both return one raw-free recovery-failed status and retain byte-identical original secret and vault data.
 - [x] A recovery cleanup or restore failure is handled fail-closed, leaves all remaining artifacts discoverable locally, and never escapes as an unhandled exception.
 - [x] Automated tests cover the move-failure and rollback paths plus a successful recovery followed by an accurate raw-free doctor status.
+
+## 288. Keep DPAPI recovery fail-closed across incomplete and concurrent attempts
+
+**What to build:** Make local-protection recovery a single durable transaction. If rollback or cleanup cannot complete, or a second CLI/tray recovery runs while the first is incomplete, inspection and protected Send must remain in recovery-required mode until one explicit confirmed recovery has completed successfully. Existing artifacts must remain discoverable locally.
+
+**Blocked by:** 287. Make DPAPI recovery rollback non-destructive when quarantine fails.
+
+**Do not:** Auto-initialize a fresh secret or vault merely because an incomplete recovery temporarily leaves both normal paths absent; let a second recovery bypass the original confirmation; expose file paths, exception details, mappings, prompts, or protected values; or enable protected Send after any incomplete recovery state.
+
+- [ ] A local recovery transaction is serialized across CLI and tray invocations, records incomplete recovery durably before moving artifacts, and clears that state only after a fully successful confirmed recovery.
+- [ ] `--doctor`, tray startup, and the protected Send gate report one raw-free recovery-required status when an incomplete transaction or retained recovery backup exists; they do not create fresh local protection implicitly.
+- [ ] Cleanup and restore failures, including unexpected local file-operation failures, are contained and return one raw-free recovery-failed result rather than escaping an exception.
+- [ ] Automated tests prove byte-for-byte preservation of both secret and vault, failed-rollback follow-up inspection/Send blocking, and a competing recovery invocation that cannot initialize state without the completed confirmed transaction.
