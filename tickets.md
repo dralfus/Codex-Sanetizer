@@ -403,10 +403,10 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Delete, overwrite, or silently rotate the existing secret or vault; expose raw paths, exception messages, mappings, prompts, or protected values; treat `--self-test` success as proof that the user's local vault is ready; or downgrade to plaintext storage.
 
-- [ ] `--doctor` and the tray present one stable recovery-required status when the production DPAPI secret or vault is unreadable, while normal protected Send remains fail-closed.
-- [ ] Recovery requires explicit local confirmation, preserves the previous secret and vault as a recoverable backup/quarantine, and warns that old pseudonyms may not be restorable after recovery.
-- [ ] A confirmed recovery creates a fresh user-scoped DPAPI secret and vault; a follow-up doctor check reports the new local state accurately without leaking paths or values.
-- [ ] Secret provisioning uses an atomic write/replace path and tests cover interrupted/contended creation, cancellation, and the unreadable-secret recovery path.
+- [x] `--doctor` and the tray present one stable recovery-required status when the production DPAPI secret or vault is unreadable, while normal protected Send remains fail-closed.
+- [x] Recovery requires explicit local confirmation, preserves the previous secret and vault as a recoverable backup/quarantine, and warns that old pseudonyms may not be restorable after recovery.
+- [x] A confirmed recovery creates a fresh user-scoped DPAPI secret and vault; a follow-up doctor check reports the new local state accurately without leaking paths or values.
+- [x] Secret provisioning uses an atomic write/replace path and tests cover interrupted/contended creation, cancellation, and the unreadable-secret recovery path.
 
 ## 282. Separate broker evidence from live project-file protection status
 
@@ -416,9 +416,9 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Change the current live capability to `true` without a verified pre-cloud client integration; hide the unsupported status behind a generic `ready` result; or remove the useful broker workflow tests.
 
-- [ ] `--product-smoke` reports broker-workflow evidence separately and reports live `project_files_protected: false` until a real client boundary is verified.
-- [ ] `--doctor`, tray status, and README use one consistent capability vocabulary that distinguishes composer protection, broker-demo capability, and live project-file protection.
-- [ ] Regression tests prove no aggregate readiness or release-success field can imply live project-file protection when the broker is only exercised in a temporary test workspace.
+- [x] `--product-smoke` reports broker-workflow evidence separately and reports live `project_files_protected: false` until a real client boundary is verified.
+- [x] `--doctor`, tray status, and README use one consistent capability vocabulary that distinguishes composer protection, broker-demo capability, and live project-file protection.
+- [x] Regression tests prove no aggregate readiness or release-success field can imply live project-file protection when the broker is only exercised in a temporary test workspace.
 
 ## 283. Prove a supported live ingress boundary for protected project files
 

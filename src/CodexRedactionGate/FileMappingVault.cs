@@ -149,6 +149,16 @@ public sealed class FileMappingVault : IMappingVault
         return _byPseudonym.TryGetValue(pseudonym, out record!);
     }
 
+    public void EnsureInitialized()
+    {
+        using var vaultLock = VaultFileLock.Acquire(_vaultFilePath);
+        LoadFromDisk();
+        if (!File.Exists(_vaultFilePath))
+        {
+            Persist();
+        }
+    }
+
     private bool TryGetPseudonymInMemory(string entityType, string normalizedValue, out string pseudonym)
     {
         if (_byOriginal.TryGetValue(OriginalKey(entityType, normalizedValue), out var record))

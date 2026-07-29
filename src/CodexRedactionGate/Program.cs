@@ -142,6 +142,16 @@ public static class Program
             return RunDoctor(new MvpPackageManifest(args[2], args[3], args[4]));
         }
 
+        if (args.Length == 1 && args[0] == "--dpapi-recover")
+        {
+            return RunDpapiRecovery(confirmed: false, runtime.LayoutFactory);
+        }
+
+        if (args.Length == 2 && args[0] == "--dpapi-recover" && args[1] == "--confirm")
+        {
+            return RunDpapiRecovery(confirmed: true, runtime.LayoutFactory);
+        }
+
         if (args.Length is 3 or 4 && args[0] == "--dictionary-add")
         {
             return RunDictionaryAdd(args[1], args[2], args.Length == 4 ? args[3] : null, runtime.LayoutFactory);
@@ -377,6 +387,12 @@ public static class Program
             || (args.Length == 2 && args[0] == "--tray-app" && args[1] == "--global"))
         {
             var layout = runtime.LayoutFactory();
+            var recovery = LocalProtectionRecovery.Inspect(layout);
+            if (recovery.RecoveryRequired)
+            {
+                return WindowsTrayApp.RunRecoveryRequired(layout, useGlobalMutex: args.Length == 2);
+            }
+
             return WindowsTrayApp.Run(
                 runtime.SanitizerFactory(Array.Empty<DictionaryTerm>()),
                 layout,
@@ -602,6 +618,17 @@ public static class Program
         }
 
         return report.Ready ? 0 : 1;
+    }
+
+    private static int RunDpapiRecovery(bool confirmed, Func<DefaultStorageLayout> layoutFactory)
+    {
+        var result = LocalProtectionRecovery.Recover(layoutFactory(), confirmed);
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"recovery_required: {result.RecoveryRequired.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"confirmation_required: {result.ConfirmationRequired.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"previous_artifacts_preserved: {result.PreviousArtifactsPreserved.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"vault_initialized: {result.VaultInitialized.ToString().ToLowerInvariant()}");
+        return result.Succeeded ? 0 : 1;
     }
 
     private static int RunDictionaryAdd(
@@ -1779,6 +1806,7 @@ public static class Program
         Console.WriteLine("  --restore-view");
         Console.WriteLine("  --dictionary-ui");
         Console.WriteLine("  --doctor [--package app gitleaks provenance]");
+        Console.WriteLine("  --dpapi-recover [--confirm]");
         Console.WriteLine("  --dictionary-add type value [notes]");
         Console.WriteLine("  --dictionary-add-batch type value [type value]...");
         Console.WriteLine("  --dictionary-list");

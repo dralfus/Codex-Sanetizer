@@ -32,7 +32,8 @@ public sealed record ProductSmokeReport(
     bool ProtectedTriggerStatusPassed,
     bool UnloadConfirmationPassed,
     bool ComposerProtectionStatusPassed,
-    bool ProjectFileProtectionStatusPassed,
+    bool ProjectFileBrokerWorkflowPassed,
+    bool LiveProjectFilesProtected,
     bool ProjectFileReadOnlySmokePassed,
     bool ProjectFileProductSmokePassed,
     bool DictionaryPolicySetupPassed,
@@ -201,8 +202,9 @@ public static class ProductSmokeRunner
             && TrayMenuContent.RuleManagementText.Contains("--native-profile-verify-delay chatgpt-desktop", StringComparison.Ordinal);
         var projectFileReadOnlySmoke = ProjectFileReadOnlySmokeRunner.Run(hmacSecret);
         var projectFileProductSmoke = ProjectFileProductSmokeRunner.Run(hmacSecret);
-        var projectFileProtectionStatusPassed = projectFileReadOnlySmoke.Passed
+        var projectFileBrokerWorkflowPassed = projectFileReadOnlySmoke.Passed
             && projectFileProductSmoke.Passed;
+        const bool liveProjectFilesProtected = false;
 
         var rawFreeArtifacts = renderedAudit
             + Environment.NewLine
@@ -231,7 +233,8 @@ public static class ProductSmokeRunner
                 ProtectedTriggerStatusPassed: protectedTriggerStatusPassed,
                 UnloadConfirmationPassed: unloadConfirmationPassed,
                 ComposerProtectionStatusPassed: composerProtectionStatusPassed,
-                ProjectFileProtectionStatusPassed: projectFileProtectionStatusPassed,
+                ProjectFileBrokerWorkflowPassed: projectFileBrokerWorkflowPassed,
+                LiveProjectFilesProtected: liveProjectFilesProtected,
                 ProjectFileReadOnlySmokePassed: projectFileReadOnlySmoke.Passed,
                 ProjectFileProductSmokePassed: projectFileProductSmoke.Passed,
                 DictionaryPolicySetupPassed: dictionaryPolicyPassed,
@@ -279,7 +282,7 @@ public static class ProductSmokeRunner
             && protectedTriggerStatusPassed
             && unloadConfirmationPassed
             && composerProtectionStatusPassed
-            && projectFileProtectionStatusPassed
+            && projectFileBrokerWorkflowPassed
             && projectFileReadOnlySmoke.Passed
             && projectFileProductSmoke.Passed
             && nativeSubmit.RepeatedSubmitPassed
@@ -309,7 +312,8 @@ public static class ProductSmokeRunner
             ProtectedTriggerStatusPassed: protectedTriggerStatusPassed,
             UnloadConfirmationPassed: unloadConfirmationPassed,
             ComposerProtectionStatusPassed: composerProtectionStatusPassed,
-            ProjectFileProtectionStatusPassed: projectFileProtectionStatusPassed,
+            ProjectFileBrokerWorkflowPassed: projectFileBrokerWorkflowPassed,
+            LiveProjectFilesProtected: liveProjectFilesProtected,
             ProjectFileReadOnlySmokePassed: projectFileReadOnlySmoke.Passed,
             ProjectFileProductSmokePassed: projectFileProductSmoke.Passed,
             DictionaryPolicySetupPassed: dictionaryPolicyPassed,
@@ -377,7 +381,8 @@ public static class ProductSmokeRunner
             $"protected_trigger_status: {report.ProtectedTriggerStatusPassed.ToString().ToLowerInvariant()}",
             $"unload_confirmation: {report.UnloadConfirmationPassed.ToString().ToLowerInvariant()}",
             $"composer_protected_status: {report.ComposerProtectionStatusPassed.ToString().ToLowerInvariant()}",
-            $"project_files_protected_status: {report.ProjectFileProtectionStatusPassed.ToString().ToLowerInvariant()}",
+            $"project_file_broker_workflow: {report.ProjectFileBrokerWorkflowPassed.ToString().ToLowerInvariant()}",
+            $"project_files_protected: {report.LiveProjectFilesProtected.ToString().ToLowerInvariant()}",
             $"project_file_read_only_smoke: {report.ProjectFileReadOnlySmokePassed.ToString().ToLowerInvariant()}",
             $"project_file_product_smoke: {report.ProjectFileProductSmokePassed.ToString().ToLowerInvariant()}",
             $"dictionary_policy_setup: {report.DictionaryPolicySetupPassed.ToString().ToLowerInvariant()}",

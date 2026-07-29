@@ -4137,6 +4137,9 @@ public partial class SanitizerTests
             Assert.That(rendered, Does.Contain("apply_only_write_back: true"));
             Assert.That(rendered, Does.Contain("project_file_read_only_smoke: true"));
             Assert.That(rendered, Does.Contain("project_file_product_smoke: true"));
+            Assert.That(rendered, Does.Contain("project_file_broker_workflow: true"));
+            Assert.That(rendered, Does.Contain("project_files_protected: false"));
+            Assert.That(rendered, Does.Not.Contain("project_files_protected_status: true"));
             Assert.That(rendered, Does.Contain("native_submit_interception: true"));
             Assert.That(rendered, Does.Contain("resident_hook_registration: true"));
             Assert.That(rendered, Does.Contain("resident_setup_gate: true"));
@@ -6322,7 +6325,7 @@ public class CliTests
             Assert.That(report.Ready, Is.False);
             Assert.That(
                 report.Items.Single(item => item.Component == "vault_secret").Code,
-                Is.EqualTo("vault_secret_dpapi_failed"));
+                Is.EqualTo(LocalProtectionRecovery.RecoveryRequiredCode));
             Assert.That(rendered, Does.Not.Contain("PROMPT_SECRET_123"));
             Assert.That(rendered, Does.Not.Contain("C:\\Users\\alexey.andreev"));
         }

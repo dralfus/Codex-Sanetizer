@@ -1084,6 +1084,13 @@ internal static class TrayStatusFormatter
         return TrimNotifyText($"{product} {enabled} {state.Mode} last={state.LastStatus} send={state.ProtectedSendBinding} manual={state.ManualScanHotkey}");
     }
 
+    public static string FormatRecoveryRequiredNotifyIconText(string localProtectionStatus)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localProtectionStatus);
+
+        return TrimNotifyText($"CodexRG local_protection={localProtectionStatus}");
+    }
+
     public static string FormatStartupError(TrayProtectionState state)
     {
         ArgumentNullException.ThrowIfNull(state);

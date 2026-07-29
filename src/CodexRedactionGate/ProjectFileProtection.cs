@@ -202,7 +202,7 @@ public sealed record ProjectFileProductSmokeReport(
     bool ApprovedWritePassed,
     bool UnsupportedFileBlockedPassed,
     bool BypassBlockedPassed,
-    bool ProjectFilesProtectedForBrokerWorkflow,
+    bool BrokerWorkflowPassed,
     bool RawFreeAuditEvidencePassed,
     int AuditEventCount,
     int ReplacementCount);
@@ -896,7 +896,7 @@ public static class ProjectFileProductSmokeRunner
                 && !auditPayload.Contains("user1", StringComparison.Ordinal)
                 && !auditPayload.Contains("P@ssw0rd!", StringComparison.Ordinal)
                 && !auditPayload.Contains(filePath, StringComparison.Ordinal);
-            var projectFilesProtectedForBrokerWorkflow = readPassed
+            var brokerWorkflowPassed = readPassed
                 && toolPassed
                 && approvedWritePassed
                 && unsupported.Code == "unsupported_attachment_type"
@@ -907,7 +907,7 @@ public static class ProjectFileProductSmokeRunner
                 && approvedWritePassed
                 && unsupported.Code == "unsupported_attachment_type"
                 && !bypass.Allowed
-                && projectFilesProtectedForBrokerWorkflow
+                && brokerWorkflowPassed
                 && rawFreeAudit;
 
             return new ProjectFileProductSmokeReport(
@@ -917,7 +917,7 @@ public static class ProjectFileProductSmokeRunner
                 ApprovedWritePassed: approvedWritePassed,
                 UnsupportedFileBlockedPassed: unsupported.Code == "unsupported_attachment_type",
                 BypassBlockedPassed: !bypass.Allowed,
-                ProjectFilesProtectedForBrokerWorkflow: projectFilesProtectedForBrokerWorkflow,
+                BrokerWorkflowPassed: brokerWorkflowPassed,
                 RawFreeAuditEvidencePassed: rawFreeAudit,
                 AuditEventCount: auditRecords.Count,
                 ReplacementCount: virtualFile?.ReplacementCount ?? 0);
@@ -943,7 +943,8 @@ public static class ProjectFileProductSmokeRunner
             $"approved_write: {report.ApprovedWritePassed.ToString().ToLowerInvariant()}",
             $"unsupported_file_blocked: {report.UnsupportedFileBlockedPassed.ToString().ToLowerInvariant()}",
             $"bypass_blocked: {report.BypassBlockedPassed.ToString().ToLowerInvariant()}",
-            $"project_files_protected: {report.ProjectFilesProtectedForBrokerWorkflow.ToString().ToLowerInvariant()}",
+            $"project_file_broker_workflow: {report.BrokerWorkflowPassed.ToString().ToLowerInvariant()}",
+            "project_files_protected: false",
             $"raw_free_audit_evidence: {report.RawFreeAuditEvidencePassed.ToString().ToLowerInvariant()}",
             $"audit_events: {report.AuditEventCount}",
             $"replacement_count: {report.ReplacementCount}"

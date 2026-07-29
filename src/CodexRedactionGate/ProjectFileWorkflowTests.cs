@@ -495,10 +495,11 @@ public sealed class ProjectFileWorkflowTests
         Assert.That(report.ApprovedWritePassed, Is.True);
         Assert.That(report.UnsupportedFileBlockedPassed, Is.True);
         Assert.That(report.BypassBlockedPassed, Is.True);
-        Assert.That(report.ProjectFilesProtectedForBrokerWorkflow, Is.True);
+        Assert.That(report.BrokerWorkflowPassed, Is.True);
         Assert.That(report.RawFreeAuditEvidencePassed, Is.True);
         Assert.That(rendered, Does.Contain("project_file_product_smoke: passed"));
-        Assert.That(rendered, Does.Contain("project_files_protected: true"));
+        Assert.That(rendered, Does.Contain("project_file_broker_workflow: true"));
+        Assert.That(rendered, Does.Contain("project_files_protected: false"));
         Assert.That(rendered, Does.Not.Contain("deploy.corp.example.local"));
         Assert.That(rendered, Does.Not.Contain("user1"));
         Assert.That(rendered, Does.Not.Contain("P@ssw0rd!"));

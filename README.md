@@ -112,6 +112,15 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --aud
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --audit-verify
 ```
 
+If `--doctor` reports `local_protection_recovery_required`, inspect the status first and then explicitly repair the local DPAPI-backed secret and vault:
+
+```powershell
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --dpapi-recover
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --dpapi-recover --confirm
+```
+
+The confirmed repair preserves the prior protected artifacts in a local recovery directory before creating fresh protection. Old restorable placeholders may no longer be recoverable after such a repair.
+
 Sanitize a project file through the local broker demo:
 
 ```powershell
@@ -120,7 +129,7 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --pro
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --project-file-sanitize .\src\example.cs --protected-workspace .
 ```
 
-This broker demo proves local sanitized virtual file generation. It still reports `project_files_protected: false` for live Codex because end-to-end Codex project-file interception starts in the next tickets.
+This broker demo proves the local `project_file_broker_workflow`. It reports `project_files_protected: false` for live Codex because end-to-end Codex project-file interception has not been verified yet.
 
 Configure the secondary hotkey and optional autostart:
 

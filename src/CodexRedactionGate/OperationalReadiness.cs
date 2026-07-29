@@ -30,7 +30,7 @@ public static class ReadinessDoctor
             CheckStorage(layout),
             CheckPolicy(layout),
             CheckVault(layout),
-            CheckVaultSecret(vaultSecretProbe),
+            CheckVaultSecret(layout, vaultSecretProbe),
             CheckAudit(layout),
             CheckScanner(manifest, defaultScannerPackageProbe),
             CheckProjectFileProtection()
@@ -84,13 +84,19 @@ public static class ReadinessDoctor
         }
     }
 
-    private static ReadinessItem CheckVaultSecret(Func<byte[]>? vaultSecretProbe)
+    private static ReadinessItem CheckVaultSecret(DefaultStorageLayout layout, Func<byte[]>? vaultSecretProbe)
     {
+        if (vaultSecretProbe is null)
+        {
+            var recovery = LocalProtectionRecovery.Inspect(layout);
+            return recovery.Succeeded
+                ? new ReadinessItem("vault_secret", "ready", "vault_secret_ready")
+                : new ReadinessItem("vault_secret", "recovery_required", recovery.Code);
+        }
+
         try
         {
-            var secret = vaultSecretProbe is null
-                ? DpapiProtectedHmacSecretProvider.CreateProduction().GetOrCreateSecret()
-                : vaultSecretProbe();
+            var secret = vaultSecretProbe();
 
             return secret.Length > 0
                 ? new ReadinessItem("vault_secret", "ready", "vault_secret_ready")
@@ -100,7 +106,7 @@ public static class ReadinessDoctor
         {
             // Capture crash without exposing sensitive data
             CaptureLocalCrash("dpapi_secret_load", ex);
-            return new ReadinessItem("vault_secret", "failed", "vault_secret_dpapi_failed");
+            return new ReadinessItem("vault_secret", "recovery_required", LocalProtectionRecovery.RecoveryRequiredCode);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException or InvalidOperationException)
         {

@@ -32,13 +32,25 @@ public static class WindowsTrayApp
         return Run(sanitizer, layout, useGlobalMutex, Application.Run, secondInstanceNotificationSettings: null);
     }
 
+    internal static int RunRecoveryRequired(DefaultStorageLayout layout, bool useGlobalMutex)
+    {
+        return Run(
+            new RecoveryRequiredSanitizer(),
+            layout,
+            useGlobalMutex,
+            Application.Run,
+            secondInstanceNotificationSettings: null,
+            localProtectionStatus: LocalProtectionRecovery.RecoveryRequiredCode);
+    }
+
     internal static int Run(
         ISanitizer sanitizer,
         DefaultStorageLayout layout,
         bool useGlobalMutex,
         Action<WindowsTrayApplicationContext> runMessageLoop,
         SingleInstanceNotificationSettings? secondInstanceNotificationSettings,
-        Action<SecondInstanceNotification>? secondInstanceNotificationPresenter = null)
+        Action<SecondInstanceNotification>? secondInstanceNotificationPresenter = null,
+        string localProtectionStatus = LocalProtectionRecovery.ReadyCode)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
@@ -85,7 +97,8 @@ public static class WindowsTrayApp
             new WindowsTrayLocalCommandLauncher(),
             new MessageBoxTrayProtectionDisableConfirmation(),
             enforcement,
-            () => CreateNativeSubmitRuntimeSet(sanitizer, layout));
+            () => CreateNativeSubmitRuntimeSet(sanitizer, layout),
+            localProtectionStatus: localProtectionStatus);
         runMessageLoop(context);
         return 0;
     }
@@ -317,6 +330,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly Func<NativeSubmitRuntimeSet?>? _nativeSubmitRuntimeFactory;
     private readonly Func<IFirstRunSetupController> _firstRunSetupControllerFactory;
     private readonly Action<FirstRunSetupResult?>? _firstRunSetupCompleted;
+    private readonly string _localProtectionStatus;
     private int _firstRunSetupScheduled;
 
     internal bool IsTrayIconVisible => _notifyIcon.Visible;
@@ -351,7 +365,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         SingleInstanceEnforcement? singleInstanceEnforcement = null,
         Func<NativeSubmitRuntimeSet?>? nativeSubmitRuntimeFactory = null,
         Func<IFirstRunSetupController>? firstRunSetupControllerFactory = null,
-        Action<FirstRunSetupResult?>? firstRunSetupCompleted = null)
+        Action<FirstRunSetupResult?>? firstRunSetupCompleted = null,
+        string localProtectionStatus = LocalProtectionRecovery.ReadyCode)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
@@ -363,6 +378,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _nativeSubmitRuntimeFactory = nativeSubmitRuntimeFactory;
         _firstRunSetupControllerFactory = firstRunSetupControllerFactory ?? (() => new FirstRunSetupController());
         _firstRunSetupCompleted = firstRunSetupCompleted;
+        _localProtectionStatus = localProtectionStatus;
 
         _activationWindow = new Form
         {
@@ -392,6 +408,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripMenuItem("Verify ChatGPT Desktop profile", null, (_, _) => OpenCommand(TrayMenuContent.VerifyChatGptProfileCommand)));
         menu.Items.Add(new ToolStripMenuItem("Open audit viewer", null, (_, _) => OpenCommand(TrayMenuContent.AuditViewerCommand)));
         menu.Items.Add(new ToolStripMenuItem("Open diagnostics", null, (_, _) => OpenCommand(TrayMenuContent.DiagnosticsCommand)));
+        if (string.Equals(_localProtectionStatus, LocalProtectionRecovery.RecoveryRequiredCode, StringComparison.Ordinal))
+        {
+            menu.Items.Add(new ToolStripMenuItem("Repair local protection", null, (_, _) => RepairLocalProtection()));
+        }
         menu.Items.Add(new ToolStripMenuItem("Command reference...", null, (_, _) => ShowLocalText("Commands", TrayMenuContent.FormatBuildVersionHelpText(_buildVersion) + Environment.NewLine + Environment.NewLine + TrayMenuContent.RestoreText + Environment.NewLine + Environment.NewLine + TrayMenuContent.DiagnosticsText + Environment.NewLine + Environment.NewLine + TrayMenuContent.RuleManagementText)));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => Exit()));
@@ -536,10 +556,51 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void RefreshStatus()
     {
-        _notifyIcon.Text = TrayStatusFormatter.FormatNotifyIconText(_controller.State, _buildVersion);
         _versionItem.Text = TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion);
-        _statusItem.Text = TrayStatusFormatter.FormatMenuStatus(_controller.State);
+        if (string.Equals(_localProtectionStatus, LocalProtectionRecovery.RecoveryRequiredCode, StringComparison.Ordinal))
+        {
+            _notifyIcon.Text = TrayStatusFormatter.FormatRecoveryRequiredNotifyIconText(_localProtectionStatus);
+            _statusItem.Text = $"local_protection={_localProtectionStatus} protected_send=blocked repair_required=true";
+        }
+        else
+        {
+            _notifyIcon.Text = TrayStatusFormatter.FormatNotifyIconText(_controller.State, _buildVersion);
+            _statusItem.Text = $"local_protection={_localProtectionStatus} {TrayStatusFormatter.FormatMenuStatus(_controller.State)}";
+        }
+
         _toggleItem.Text = _controller.State.Enabled ? "Stop protection" : "Start protection";
+    }
+
+    private void RepairLocalProtection()
+    {
+        var confirmed = MessageBox.Show(
+            "Local protection cannot open the previous encrypted mappings. Repair creates a new protected local state; old restorable placeholders may no longer be recoverable. Continue?",
+            "Codex Redaction Gate - Repair local protection",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning) == DialogResult.Yes;
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var result = LocalProtectionRecovery.Recover(_layout, confirmed: true);
+        if (!result.Succeeded)
+        {
+            MessageBox.Show(
+                $"Local protection repair could not be completed. status={result.Code}",
+                "Codex Redaction Gate - Repair local protection",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return;
+        }
+
+        MessageBox.Show(
+            "Local protection was repaired. Code Sanitizer will restart before protected Send is re-enabled.",
+            "Codex Redaction Gate - Repair local protection",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+        Application.Restart();
+        ExitThread();
     }
 
     private void OpenCommand(TrayLocalCommand command)
