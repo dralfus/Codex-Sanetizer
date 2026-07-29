@@ -135,6 +135,10 @@ The installed tray app normally enforces one resident instance for the current W
 
 Second-launch notifications can be configured under `HKCU\Software\CodexRedactionGate\SingleInstance`: set `DisableNotification` to a non-zero DWORD to suppress them, or set `NotificationType` to `balloon`, `toast`, or `none`. The default is `balloon`; `toast` uses the native balloon fallback in this Windows Forms release. A legacy `messagebox` value is treated as `balloon`, so a second launch never requires a modal acknowledgement.
 
+### Second Tray Launches
+
+When the tray executable is started again for the same Windows user, the new process exits after asking the resident instance to restore its activation window. The activation handle is stored only in that user's HKCU registry hive and is validated before use. Windows may reject foreground activation, and a `--tray-app --global` mutex does not permit cross-session UI control. In either case, the second process shows one short non-modal, localized notification that directs the user to the resident tray icon for local diagnostics. A missing or stale handle is cleared; it never changes protection ownership or sends any prompt data.
+
 ## Windows Desktop Flow
 
 Supported v1 targets are Codex Desktop and ChatGPT Desktop on Windows.

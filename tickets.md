@@ -200,10 +200,10 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Claim cross-user or cross-session activation; expose stored window handles to other users; or document the fallback as raw pass-through.
 
-- [ ] XML documentation explains the per-user handle registration, validation, and cleanup lifecycle
-- [ ] Documentation references the `IsWindow`, `ShowWindow`, and `SetForegroundWindow` Win32 calls and their failure semantics
-- [ ] Document thread-safety and stale-handle cleanup requirements for the shared store
-- [ ] README states the same-user/session boundary and the visible notification fallback
+- [x] XML documentation explains the per-user handle registration, validation, and cleanup lifecycle
+- [x] Documentation references the `IsWindow`, `ShowWindow`, and `SetForegroundWindow` Win32 calls and their failure semantics
+- [x] Document thread-safety and stale-handle cleanup requirements for the shared store
+- [x] README states the same-user/session boundary and the visible notification fallback
 
 ## 264. Add localization support for user notifications
 

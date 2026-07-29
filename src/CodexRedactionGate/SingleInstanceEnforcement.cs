@@ -15,8 +15,9 @@ namespace CodexRedactionGate;
 public delegate void UserNotificationCallback(string title, string message, bool includeDiagnosticsLink);
 
 /// <summary>
-/// Single instance enforcement for resident Code Sanitizer tray app
-/// Ensures only one hook-owning resident instance per user
+/// Single-instance enforcement for the resident Code Sanitizer tray app.
+/// It ensures one hook-owning resident instance per user and coordinates a
+/// best-effort activation handle for a second launch.
 /// </summary>
 public sealed class SingleInstanceEnforcement : IDisposable
 {
@@ -142,11 +143,17 @@ public sealed class SingleInstanceEnforcement : IDisposable
 
     /// <summary>
     /// Activates the existing tray instance through its per-user registered window.
-    /// The handle is accepted only after the matching per-user mutex was opened. Win32 foreground rules
-    /// may still deny activation; callers must treat <c>false</c> as a visible,
-    /// raw-free notification case. This mechanism is session-local: a global
-    /// mutex prevents duplicate hook ownership across sessions but does not grant
-    /// cross-session UI activation rights.
+    /// The first resident instance stores its handle in HKCU after it creates the
+    /// activation window and removes it during normal disposal. The handle is read
+    /// only after opening the matching mutex, validated with <c>IsWindow</c>, then
+    /// restored with <c>ShowWindow</c> and foregrounded with
+    /// <c>SetForegroundWindow</c>. A stale or inaccessible handle is cleared.
+    ///
+    /// Windows foreground rules can deny the final call. Callers must therefore
+    /// treat <c>false</c> as the expected raw-free fallback and show a local
+    /// second-launch notification. The mechanism is same-user and session-local:
+    /// a global mutex can prevent duplicate hook ownership across sessions but
+    /// cannot grant cross-session UI activation rights.
     /// </summary>
     /// <param name="instanceId">Instance identifier</param>
     /// <param name="notificationCallback">Optional callback to show user notification</param>
