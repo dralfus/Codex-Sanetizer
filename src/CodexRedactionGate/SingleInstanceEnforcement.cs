@@ -20,7 +20,6 @@ public delegate void UserNotificationCallback(string title, string message, bool
 /// </summary>
 public sealed class SingleInstanceEnforcement : IDisposable
 {
-    internal const string ActivationWindowTitle = "CodexRedactionGate.Tray.Activation";
     private static readonly object OwnedNamesLock = new();
     private static readonly HashSet<string> ProcessOwnedNames = new(StringComparer.Ordinal);
     private readonly Mutex _mutex;
@@ -142,9 +141,8 @@ public sealed class SingleInstanceEnforcement : IDisposable
     }
 
     /// <summary>
-    /// Activates the existing tray instance through its private activation window.
-    /// The window is created only by the first resident instance and is accepted
-    /// only after the matching per-user mutex was opened. Win32 foreground rules
+    /// Activates the existing tray instance through its per-user registered window.
+    /// The handle is accepted only after the matching per-user mutex was opened. Win32 foreground rules
     /// may still deny activation; callers must treat <c>false</c> as a visible,
     /// raw-free notification case. This mechanism is session-local: a global
     /// mutex prevents duplicate hook ownership across sessions but does not grant
@@ -169,7 +167,15 @@ public sealed class SingleInstanceEnforcement : IDisposable
         try
         {
             using var mutex = Mutex.OpenExisting(mutexName);
-            var window = NativeMethods.FindWindow(null, ActivationWindowTitle);
+            if (!TrayActivationWindowStore.Default.TryRead(instanceId, out var window))
+            {
+                notificationCallback?.Invoke(
+                    AppStrings.Get("ProductName"),
+                    AppStrings.Get("AlreadyRunning"),
+                    includeDiagnosticsLink: false);
+                return false;
+            }
+
             if (window != IntPtr.Zero && NativeMethods.IsWindow(window))
             {
                 NativeMethods.ShowWindow(window, NativeMethods.SwRestore);
@@ -178,6 +184,8 @@ public sealed class SingleInstanceEnforcement : IDisposable
                     return true;
                 }
             }
+
+            TrayActivationWindowStore.Default.Clear(instanceId);
 
             notificationCallback?.Invoke(
                 AppStrings.Get("ProductName"),
@@ -194,6 +202,16 @@ public sealed class SingleInstanceEnforcement : IDisposable
 
             return false;
         }
+    }
+
+    internal static bool RegisterActivationWindow(string instanceId, IntPtr windowHandle)
+    {
+        return TrayActivationWindowStore.Default.TryStore(instanceId, windowHandle);
+    }
+
+    internal static void ClearActivationWindow(string instanceId)
+    {
+        TrayActivationWindowStore.Default.Clear(instanceId);
     }
 
     public void Dispose()
@@ -270,9 +288,6 @@ public sealed class SingleInstanceEnforcement : IDisposable
     private static class NativeMethods
     {
         internal const int SwRestore = 9;
-
-        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        internal static extern IntPtr FindWindow(string? className, string? windowName);
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]

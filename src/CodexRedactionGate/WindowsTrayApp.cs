@@ -327,7 +327,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
         _activationWindow = new Form
         {
-            Text = SingleInstanceEnforcement.ActivationWindowTitle,
+            Text = AppStrings.Get("ProductName"),
             FormBorderStyle = FormBorderStyle.None,
             ShowInTaskbar = false,
             Size = new System.Drawing.Size(1, 1),
@@ -336,6 +336,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             StartPosition = FormStartPosition.Manual
         };
         _activationWindow.Show();
+        SingleInstanceEnforcement.RegisterActivationWindow("tray", _activationWindow.Handle);
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };
@@ -465,6 +466,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         if (disposing)
         {
             StopProtectionAndHideIcon();
+            SingleInstanceEnforcement.ClearActivationWindow("tray");
             _activationWindow.Dispose();
             _notifyIcon.Dispose();
         }

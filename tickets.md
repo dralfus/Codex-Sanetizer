@@ -116,11 +116,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Return true without actual activation; rely on process ID alone; or expose window handles in a way that allows unauthorized access.
 
-- [ ] First instance stores its main window handle in a per-user shared location on startup
-- [ ] Second instance retrieves the stored handle and activates the window via Win32 API
-- [ ] Activation failure returns false; success returns true with actual foreground activation
-- [ ] Shared handle storage uses proper ACLs to allow only the same user to access it
-- [ ] Cleanup removes the stored handle on normal exit
+- [x] First instance stores its main window handle in a per-user shared location on startup
+- [x] Second instance retrieves the stored handle and activates the window via Win32 API
+- [x] Activation failure returns false; success returns true with actual foreground activation
+- [x] Shared handle storage uses proper ACLs to allow only the same user to access it
+- [x] Cleanup removes the stored handle on normal exit
 
 ## 258. Add user notification when second tray instance is blocked
 

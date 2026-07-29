@@ -6841,6 +6841,8 @@ public class SingleInstanceEnforcementTests
                 {
                     trayIconVisible = context.IsTrayIconVisible;
                     nativeHookReady = context.IsNativeSubmitHookReady;
+                    Assert.That(TrayActivationWindowStore.Default.TryRead("tray", out var windowHandle), Is.True);
+                    Assert.That(windowHandle, Is.Not.EqualTo(IntPtr.Zero));
                     context.ExitThread();
                 },
                 new SingleInstanceNotificationSettings(false, "none"));
@@ -6849,6 +6851,7 @@ public class SingleInstanceEnforcementTests
             Assert.That(trayIconVisible, Is.True);
             Assert.That(nativeHookReady, Is.True);
             Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"), Is.False);
+            Assert.That(TrayActivationWindowStore.Default.TryRead("tray", out _), Is.False);
         }
         finally
         {
@@ -6866,10 +6869,10 @@ public class SingleInstanceEnforcementTests
             using var owner = new ExternalMutexOwner("tray");
             using var activationWindow = new Form
             {
-                Text = SingleInstanceEnforcement.ActivationWindowTitle,
                 ShowInTaskbar = false
             };
             activationWindow.Show();
+            Assert.That(SingleInstanceEnforcement.RegisterActivationWindow("tray", activationWindow.Handle), Is.True);
             activationWindow.WindowState = FormWindowState.Minimized;
             Application.DoEvents();
 
@@ -6887,6 +6890,7 @@ public class SingleInstanceEnforcementTests
         }
         finally
         {
+            SingleInstanceEnforcement.ClearActivationWindow("tray");
             Directory.Delete(tempDirectory, recursive: true);
         }
     }
