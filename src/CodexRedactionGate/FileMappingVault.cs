@@ -151,12 +151,19 @@ public sealed class FileMappingVault : IMappingVault
 
     public void EnsureInitialized()
     {
+        _ = EnsureInitializedWithSnapshot();
+    }
+
+    internal byte[]? EnsureInitializedWithSnapshot()
+    {
         using var vaultLock = VaultFileLock.Acquire(_vaultFilePath);
         LoadFromDisk();
         if (!File.Exists(_vaultFilePath))
         {
-            Persist();
+            return Persist();
         }
+
+        return null;
     }
 
     private bool TryGetPseudonymInMemory(string entityType, string normalizedValue, out string pseudonym)
@@ -226,7 +233,7 @@ public sealed class FileMappingVault : IMappingVault
             JsonOptions) ?? throw new InvalidOperationException("Protected mapping vault payload is empty.");
     }
 
-    private void Persist()
+    private byte[] Persist()
     {
         var payload = new VaultPayload
         {
@@ -268,6 +275,7 @@ public sealed class FileMappingVault : IMappingVault
 
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope, JsonOptions));
         AtomicFileWriter.WriteAllBytes(_vaultFilePath, bytes);
+        return bytes;
     }
 
     private void AddRecord(MappingVaultRecord record)

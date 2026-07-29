@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -62,7 +63,17 @@ public static class LocalProtectionRecovery
         bool confirmed,
         IDataProtector? dataProtector = null)
     {
+        return Recover(layout, confirmed, dataProtector, RecoveryFileOperations.Physical);
+    }
+
+    internal static LocalProtectionRecoveryResult Recover(
+        DefaultStorageLayout layout,
+        bool confirmed,
+        IDataProtector? dataProtector,
+        RecoveryFileOperations fileOperations)
+    {
         ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(fileOperations);
 
         var inspection = Inspect(layout, dataProtector);
         if (!inspection.RecoveryRequired)
@@ -85,6 +96,7 @@ public static class LocalProtectionRecovery
         var secretPath = SecretPath(layout);
         var vaultPath = VaultPath(layout);
         var moved = new List<(string Source, string Backup)>();
+        var created = new List<CreatedArtifact>();
 
         try
         {
@@ -94,12 +106,21 @@ public static class LocalProtectionRecovery
                 "recovery",
                 $"{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}");
             Directory.CreateDirectory(recoveryDirectory);
-            MoveToRecoveryIfPresent(secretPath, recoveryDirectory, moved);
-            MoveToRecoveryIfPresent(vaultPath, recoveryDirectory, moved);
+            MoveToRecoveryIfPresent(secretPath, recoveryDirectory, moved, fileOperations);
+            MoveToRecoveryIfPresent(vaultPath, recoveryDirectory, moved, fileOperations);
 
-            var secret = new DpapiProtectedHmacSecretProvider(secretPath, protector).GetOrCreateSecret();
-            var vault = FileMappingVault.CreateProtected(vaultPath, secret, protector);
-            vault.EnsureInitialized();
+            var secretProvisioning = new DpapiProtectedHmacSecretProvider(secretPath, protector).GetOrCreateSecretWithStatus();
+            if (secretProvisioning.CreatedProtectedSecret is not null)
+            {
+                created.Add(new CreatedArtifact(secretPath, secretProvisioning.CreatedProtectedSecret));
+            }
+
+            var vault = FileMappingVault.CreateProtected(vaultPath, secretProvisioning.Secret, protector);
+            var createdVault = vault.EnsureInitializedWithSnapshot();
+            if (createdVault is not null)
+            {
+                created.Add(new CreatedArtifact(vaultPath, createdVault));
+            }
 
             return new LocalProtectionRecoveryResult(
                 Succeeded: true,
@@ -111,14 +132,15 @@ public static class LocalProtectionRecovery
         }
         catch (Exception exception) when (IsRecoverable(exception))
         {
-            DeleteFreshArtifacts(secretPath, vaultPath);
-            RestoreMovedArtifacts(moved);
+            DeleteCreatedArtifacts(created, fileOperations);
+            RestoreMovedArtifacts(moved, fileOperations);
             return new LocalProtectionRecoveryResult(
                 Succeeded: false,
                 Code: RecoveryFailedCode,
                 RecoveryRequired: true,
                 ConfirmationRequired: false,
-                PreviousArtifactsPreserved: moved.All(item => File.Exists(item.Source)),
+                PreviousArtifactsPreserved: moved.All(item =>
+                    fileOperations.FileExists(item.Source) || fileOperations.FileExists(item.Backup)),
                 VaultInitialized: false);
         }
     }
@@ -147,36 +169,56 @@ public static class LocalProtectionRecovery
     private static void MoveToRecoveryIfPresent(
         string source,
         string recoveryDirectory,
-        ICollection<(string Source, string Backup)> moved)
+        ICollection<(string Source, string Backup)> moved,
+        RecoveryFileOperations fileOperations)
     {
-        if (!File.Exists(source))
+        if (!fileOperations.FileExists(source))
         {
             return;
         }
 
         var backup = Path.Combine(recoveryDirectory, Path.GetFileName(source));
-        File.Move(source, backup);
+        fileOperations.Move(source, backup);
         moved.Add((source, backup));
     }
 
-    private static void DeleteFreshArtifacts(params string[] paths)
+    private static void DeleteCreatedArtifacts(
+        IEnumerable<CreatedArtifact> artifacts,
+        RecoveryFileOperations fileOperations)
     {
-        foreach (var path in paths)
+        foreach (var artifact in artifacts)
         {
-            if (File.Exists(path))
+            try
             {
-                File.Delete(path);
+                if (fileOperations.FileExists(artifact.Path)
+                    && CryptographicOperations.FixedTimeEquals(File.ReadAllBytes(artifact.Path), artifact.Contents))
+                {
+                    fileOperations.Delete(artifact.Path);
+                }
+            }
+            catch (Exception exception) when (IsRecoverable(exception))
+            {
+                // The original artifact remains at its source or in quarantine.
             }
         }
     }
 
-    private static void RestoreMovedArtifacts(IEnumerable<(string Source, string Backup)> moved)
+    private static void RestoreMovedArtifacts(
+        IEnumerable<(string Source, string Backup)> moved,
+        RecoveryFileOperations fileOperations)
     {
         foreach (var item in moved.Reverse())
         {
-            if (File.Exists(item.Backup) && !File.Exists(item.Source))
+            try
             {
-                File.Move(item.Backup, item.Source);
+                if (fileOperations.FileExists(item.Backup) && !fileOperations.FileExists(item.Source))
+                {
+                    fileOperations.Move(item.Backup, item.Source);
+                }
+            }
+            catch (Exception exception) when (IsRecoverable(exception))
+            {
+                // The original artifact remains in the quarantine directory.
             }
         }
     }
@@ -189,6 +231,40 @@ public static class LocalProtectionRecovery
             or FormatException
             or IOException
             or UnauthorizedAccessException
+            or SecurityException
             or InvalidOperationException;
+    }
+
+    private sealed record CreatedArtifact(string Path, byte[] Contents);
+}
+
+internal sealed class RecoveryFileOperations
+{
+    public static RecoveryFileOperations Physical { get; } = new();
+
+    private readonly Action<string, string> _move;
+    private readonly Action<string> _delete;
+
+    public RecoveryFileOperations(
+        Action<string, string>? move = null,
+        Action<string>? delete = null)
+    {
+        _move = move ?? File.Move;
+        _delete = delete ?? File.Delete;
+    }
+
+    public bool FileExists(string path)
+    {
+        return File.Exists(path);
+    }
+
+    public void Move(string source, string destination)
+    {
+        _move(source, destination);
+    }
+
+    public void Delete(string path)
+    {
+        _delete(path);
     }
 }

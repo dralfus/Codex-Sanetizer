@@ -16,6 +16,8 @@ public interface IDataProtector
     byte[] Unprotect(byte[] protectedData);
 }
 
+internal sealed record HmacSecretProvisioningResult(byte[] Secret, byte[]? CreatedProtectedSecret);
+
 public sealed class DpapiProtectedHmacSecretProvider
 {
     public const int SecretSizeBytes = 32;
@@ -53,9 +55,14 @@ public sealed class DpapiProtectedHmacSecretProvider
 
     public byte[] GetOrCreateSecret()
     {
+        return GetOrCreateSecretWithStatus().Secret;
+    }
+
+    internal HmacSecretProvisioningResult GetOrCreateSecretWithStatus()
+    {
         if (File.Exists(SecretFilePath))
         {
-            return LoadExistingSecret();
+            return new HmacSecretProvisioningResult(LoadExistingSecret(), CreatedProtectedSecret: null);
         }
 
         var secret = RandomNumberGenerator.GetBytes(SecretSizeBytes);
@@ -78,10 +85,12 @@ public sealed class DpapiProtectedHmacSecretProvider
         }
         catch (IOException) when (File.Exists(SecretFilePath))
         {
-            return LoadExistingSecret();
+            return new HmacSecretProvisioningResult(LoadExistingSecret(), CreatedProtectedSecret: null);
         }
 
-        return (byte[])secret.Clone();
+        return new HmacSecretProvisioningResult(
+            Secret: (byte[])secret.Clone(),
+            CreatedProtectedSecret: (byte[])protectedSecret.Clone());
     }
 
     private byte[] LoadExistingSecret()

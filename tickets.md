@@ -468,3 +468,16 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] The operation-level status view shows that an excluded file was withheld, identifies the policy outcome locally, and keeps the rest of the task/file batch usable without a per-file confirmation-dialog storm.
 - [ ] If the live ingress boundary is missing, unhealthy, or cannot classify the selected file, the affected channel fails closed and the UI reports `unsupported` or `degraded`; it never claims the exclusion is enforced.
 - [ ] Automated tests use synthetic `.env` and arbitrary-file fixtures to prove no raw contents, paths, or filenames reach model-visible payload records, audit output, or cloud-bound diagnostics.
+
+## 287. Make DPAPI recovery rollback non-destructive when quarantine fails
+
+**What to build:** Make confirmed local-protection recovery transactional even when the old secret or vault cannot be moved into quarantine. A failed repair must leave every pre-existing artifact intact and keep protected Send fail-closed, rather than deleting a file that was never successfully quarantined.
+
+**Blocked by:** None - can start immediately.
+
+**Do not:** Delete an original secret or vault during cleanup unless the recovery operation can prove that it created that specific replacement; treat a partial quarantine as a successful backup; expose file paths, exception messages, mappings, prompts, or protected values; or enable protected Send after any recovery failure.
+
+- [x] The recovery workflow distinguishes original artifacts from replacements created during the current attempt and deletes only confirmed replacements during rollback.
+- [x] A failure moving the first artifact and a failure moving the second artifact both return one raw-free recovery-failed status and retain byte-identical original secret and vault data.
+- [x] A recovery cleanup or restore failure is handled fail-closed, leaves all remaining artifacts discoverable locally, and never escapes as an unhandled exception.
+- [x] Automated tests cover the move-failure and rollback paths plus a successful recovery followed by an accurate raw-free doctor status.
