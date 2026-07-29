@@ -190,6 +190,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [ ] Test verifies `IsFirstInstance` is true for the new instance
 - [ ] Test verifies no stale state persists between crashes
 - [ ] Test covers multiple rapid crash-restart cycles
+- [x] The abandoned-mutex regression waits through a bounded recovery window instead of assuming immediate kernel handoff after the owner thread exits.
 
 ## 263. Improve ActivateExistingInstance documentation and limitations
 
@@ -364,8 +365,8 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Set smoke statuses to constants, infer resident protection from file presence, treat a passing unit-test suite as proof of the resident hook, retain generated console logs as source artifacts, hide warnings, or add raw-sensitive fixtures to release output.
 
-- [ ] Product smoke consumes executable lifecycle assertions for setup enforcement, atomic reload/rollback, composer identity mismatch, selected Send handling, target-change abort, raw-free failures, and single-instance behavior.
-- [ ] Smoke output reflects actual assertions and raw-free evidence; no security status is hard-coded to `true`.
-- [ ] Tracked ad-hoc `test_*.txt` and `all_tests_output*.txt` files are removed and ignored as generated evidence.
-- [ ] Build has zero new nullable warnings in production and test code.
-- [ ] Full tests, installer smoke, and the final release smoke pass with raw-free artifacts.
+- [x] Product smoke consumes executable lifecycle assertions for setup enforcement, atomic reload/rollback, composer identity mismatch, selected Send handling, target-change abort, raw-free failures, and single-instance behavior.
+- [x] Smoke output reflects actual assertions and raw-free evidence; no security status is hard-coded to `true`.
+- [x] Tracked ad-hoc `test_*.txt` and `all_tests_output*.txt` files are removed and ignored as generated evidence.
+- [x] Build has zero new nullable warnings in production and test code.
+- [x] Full tests, installer smoke, and the final release smoke pass with raw-free artifacts.

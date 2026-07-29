@@ -20,7 +20,11 @@ public sealed record ProductSmokeReport(
     bool ResidentHookRegistrationPassed,
     bool ResidentSetupGatePassed,
     bool ResidentRuntimeReloadPassed,
+    bool ResidentRuntimeRollbackPassed,
     bool ResidentSelectedSendFailurePassed,
+    bool ResidentRawFreeFailurePassed,
+    bool TargetChangeAbortPassed,
+    bool ComposerIdentityMismatchPassed,
     bool ResidentSecondInstancePassed,
     bool AutostartResidentCommandPassed,
     bool FirstRunPassed,
@@ -117,56 +121,14 @@ public static class ProductSmokeRunner
             "Ctrl+Enter",
             TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("codex-desktop")));
         var profileSave = SubmitBindingProfileStore.Upsert(layout, smokeProfile);
-        var protectedTriggerStatus = TrayStatusFormatter.FormatMenuStatus(new TrayProtectionState(
-            Enabled: true,
-            Mode: "NativeSubmit",
-            Hotkey: loadedHotkey.Settings.ProtectionHotkey.Binding.DisplayText,
-            LastStatus: OsInteractionStatusIds.Protected,
-            LastDecision: null,
-            LastReplacementCount: null,
-            LastProfileId: smokeProfile.ProfileId,
-            LastApplied: false,
-            LastSubmitted: false,
-            NativeSubmitEnabled: true,
-            NativeSubmitStatus: OsInteractionStatusIds.Protected,
-            ProtectedSendBinding: smokeProfile.SubmitBinding!.DisplayText,
-            NewlineBinding: smokeProfile.NewlineBinding!.DisplayText,
-            ManualScanHotkey: loadedHotkey.Settings.ProtectionHotkey.Binding.DisplayText,
-            ReadinessStatus: OsInteractionStatusIds.Protected,
-            ComposerProtected: true,
-            ProjectFilesProtected: false,
-            ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
-            ResidentProcess: true));
         var protectedTriggerStatusPassed = profileSave.Succeeded
             && smokeProfile.IsProtected
-            && protectedTriggerStatus.Contains("protected_send_binding=Enter", StringComparison.Ordinal)
-            && protectedTriggerStatus.Contains("newline_binding=Ctrl+Enter", StringComparison.Ordinal)
-            && protectedTriggerStatus.Contains("manual_scan_hotkey=Ctrl+Shift+F9", StringComparison.Ordinal);
-        var composerProtectionStatusPassed = protectedTriggerStatus.Contains("composer_protected=true", StringComparison.Ordinal);
-        var projectFileProtectionStatusPassed = protectedTriggerStatus.Contains("project_files_protected=false", StringComparison.Ordinal)
-            && protectedTriggerStatus.Contains($"project_file_status={ProjectFileProtectionStatusValues.NotConfigured}", StringComparison.Ordinal);
+            && residentLifecycle.ProtectedStatusPassed;
+        var composerProtectionStatusPassed = residentLifecycle.ProtectedStatusPassed;
 
         var unloadController = new TrayProtectionController(
             new ProductSmokeTrayHotkeyHost("Ctrl+Shift+F9"),
-            () => new OsInteractionResult(
-                OsInteractionStatusIds.Applied,
-                Surface: null,
-                SanitizationResult: null,
-                ConfirmationModel: null,
-                Applied: false,
-                Submitted: false,
-                Diagnostics: new Dictionary<string, string>()),
-            new ProductSmokeNativeSubmitHookHost(),
-            new NativeSubmitInterceptionController(smokeProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
-            () => new OsInteractionResult(
-                OsInteractionStatusIds.Submitted,
-                Surface: null,
-                SanitizationResult: null,
-                ConfirmationModel: null,
-                Applied: true,
-                Submitted: true,
-                Diagnostics: new Dictionary<string, string>()),
-            smokeProfile);
+            () => throw new InvalidOperationException("manual_scan_not_expected"));
         unloadController.Start();
         var canceledUnload = unloadController.TryDisableProtection("exit", confirmed: false);
         var confirmedUnload = unloadController.TryDisableProtection("exit", confirmed: true);
@@ -239,6 +201,8 @@ public static class ProductSmokeRunner
             && TrayMenuContent.RuleManagementText.Contains("--native-profile-verify-delay chatgpt-desktop", StringComparison.Ordinal);
         var projectFileReadOnlySmoke = ProjectFileReadOnlySmokeRunner.Run(hmacSecret);
         var projectFileProductSmoke = ProjectFileProductSmokeRunner.Run(hmacSecret);
+        var projectFileProtectionStatusPassed = projectFileReadOnlySmoke.Passed
+            && projectFileProductSmoke.Passed;
 
         var rawFreeArtifacts = renderedAudit
             + Environment.NewLine
@@ -255,7 +219,11 @@ public static class ProductSmokeRunner
                 ResidentHookRegistrationPassed: residentLifecycle.HookRegistrationPassed,
                 ResidentSetupGatePassed: residentLifecycle.SetupGatePassed,
                 ResidentRuntimeReloadPassed: residentLifecycle.RuntimeReloadPassed,
+                ResidentRuntimeRollbackPassed: residentLifecycle.RuntimeRollbackPassed,
                 ResidentSelectedSendFailurePassed: residentLifecycle.SelectedSendFailurePassed,
+                ResidentRawFreeFailurePassed: residentLifecycle.RawFreeFailurePassed,
+                TargetChangeAbortPassed: residentLifecycle.TargetChangeAbortPassed,
+                ComposerIdentityMismatchPassed: mismatchVerification.CapabilityStatus == OsInteractionStatusIds.SurfaceUnverified,
                 ResidentSecondInstancePassed: residentLifecycle.SecondInstancePassed,
                 AutostartResidentCommandPassed: autostartResidentCommandPassed,
                 FirstRunPassed: firstRunPassed,
@@ -301,7 +269,11 @@ public static class ProductSmokeRunner
             && residentLifecycle.HookRegistrationPassed
             && residentLifecycle.SetupGatePassed
             && residentLifecycle.RuntimeReloadPassed
+            && residentLifecycle.RuntimeRollbackPassed
             && residentLifecycle.SelectedSendFailurePassed
+            && residentLifecycle.RawFreeFailurePassed
+            && residentLifecycle.TargetChangeAbortPassed
+            && mismatchVerification.CapabilityStatus == OsInteractionStatusIds.SurfaceUnverified
             && residentLifecycle.SecondInstancePassed
             && autostartResidentCommandPassed
             && protectedTriggerStatusPassed
@@ -325,7 +297,11 @@ public static class ProductSmokeRunner
             ResidentHookRegistrationPassed: residentLifecycle.HookRegistrationPassed,
             ResidentSetupGatePassed: residentLifecycle.SetupGatePassed,
             ResidentRuntimeReloadPassed: residentLifecycle.RuntimeReloadPassed,
+            ResidentRuntimeRollbackPassed: residentLifecycle.RuntimeRollbackPassed,
             ResidentSelectedSendFailurePassed: residentLifecycle.SelectedSendFailurePassed,
+            ResidentRawFreeFailurePassed: residentLifecycle.RawFreeFailurePassed,
+            TargetChangeAbortPassed: residentLifecycle.TargetChangeAbortPassed,
+            ComposerIdentityMismatchPassed: mismatchVerification.CapabilityStatus == OsInteractionStatusIds.SurfaceUnverified,
             ResidentSecondInstancePassed: residentLifecycle.SecondInstancePassed,
             AutostartResidentCommandPassed: autostartResidentCommandPassed,
             FirstRunPassed: firstRunPassed,
@@ -389,7 +365,11 @@ public static class ProductSmokeRunner
             $"resident_hook_registration: {report.ResidentHookRegistrationPassed.ToString().ToLowerInvariant()}",
             $"resident_setup_gate: {report.ResidentSetupGatePassed.ToString().ToLowerInvariant()}",
             $"resident_runtime_reload: {report.ResidentRuntimeReloadPassed.ToString().ToLowerInvariant()}",
+            $"resident_runtime_rollback: {report.ResidentRuntimeRollbackPassed.ToString().ToLowerInvariant()}",
             $"resident_selected_send_failure: {report.ResidentSelectedSendFailurePassed.ToString().ToLowerInvariant()}",
+            $"resident_raw_free_failure: {report.ResidentRawFreeFailurePassed.ToString().ToLowerInvariant()}",
+            $"target_change_abort: {report.TargetChangeAbortPassed.ToString().ToLowerInvariant()}",
+            $"composer_identity_mismatch: {report.ComposerIdentityMismatchPassed.ToString().ToLowerInvariant()}",
             $"resident_second_instance: {report.ResidentSecondInstancePassed.ToString().ToLowerInvariant()}",
             $"autostart_resident_command: {report.AutostartResidentCommandPassed.ToString().ToLowerInvariant()}",
             $"first_run: {report.FirstRunPassed.ToString().ToLowerInvariant()}",
@@ -471,26 +451,6 @@ public static class ProductSmokeRunner
         public bool Start(Action onTriggered)
         {
             ArgumentNullException.ThrowIfNull(onTriggered);
-            LastErrorCode = null;
-            return true;
-        }
-
-        public void Stop()
-        {
-        }
-    }
-
-    private sealed class ProductSmokeNativeSubmitHookHost : INativeSubmitHookHost
-    {
-        public string? LastErrorCode { get; private set; }
-
-        public bool Start(
-            Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
-            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
-            Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure)
-        {
-            ArgumentNullException.ThrowIfNull(classify);
-            ArgumentNullException.ThrowIfNull(onSuppressedSubmit);
             LastErrorCode = null;
             return true;
         }

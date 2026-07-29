@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -10,15 +11,23 @@ internal sealed record ResidentLifecycleSmokeReport(
     bool HookRegistrationPassed,
     bool SetupGatePassed,
     bool RuntimeReloadPassed,
+    bool RuntimeRollbackPassed,
     bool SelectedSendFailurePassed,
+    bool RawFreeFailurePassed,
+    bool TargetChangeAbortPassed,
     bool SecondInstancePassed,
+    bool ProtectedStatusPassed,
     bool NoCloudSubmissionPassed)
 {
     public bool Passed => HookRegistrationPassed
         && SetupGatePassed
         && RuntimeReloadPassed
+        && RuntimeRollbackPassed
         && SelectedSendFailurePassed
+        && RawFreeFailurePassed
+        && TargetChangeAbortPassed
         && SecondInstancePassed
+        && ProtectedStatusPassed
         && NoCloudSubmissionPassed;
 }
 
@@ -69,8 +78,12 @@ internal static class ResidentLifecycleSmokeRunner
         var hookRegistrationPassed = false;
         var setupGatePassed = false;
         var runtimeReloadPassed = false;
+        var runtimeRollbackPassed = false;
         var selectedSendFailurePassed = false;
+        var rawFreeFailurePassed = false;
+        var targetChangeAbortPassed = false;
         var secondInstancePassed = false;
+        var protectedStatusPassed = false;
         var cloudSubmissionCount = 0;
         var layout = DefaultStorageLayout.Create(directory);
         var setup = new SmokeSetupController();
@@ -124,15 +137,35 @@ internal static class ResidentLifecycleSmokeRunner
                         && !initialHook.IsKeyboardHookRegistered
                         && protection.State.NativeSubmitStatus == OsInteractionStatusIds.Protected
                         && protection.State.ComposerProtected;
+                    var rejectedCandidate = new UnavailableNativeSubmitHookHost("resident_smoke_candidate_unavailable");
+                    runtimeRollbackPassed = !protection.ReloadNativeSubmit(new NativeSubmitRuntimeSet(
+                        rejectedCandidate,
+                        new[] { new NativeSubmitRuntime(rejectedCandidate, reloadedController, NoCloudSubmission, protectedProfile) }))
+                        && reloadedHook.IsKeyboardHookRegistered
+                        && protection.State.NativeSubmitStatus == OsInteractionStatusIds.Protected
+                        && protection.State.ComposerProtected;
                     var selectedFailure = reloadedController.HandleIdentifiedSendControl(
                         TextSurfaceDiscoveryResult.Failure(
                             OsInteractionStatusIds.SurfaceUnverified,
-                            new Dictionary<string, string> { ["profile_id"] = protectedProfile.ProfileId }));
+                            new Dictionary<string, string>
+                            {
+                                ["profile_id"] = protectedProfile.ProfileId,
+                                ["test_input"] = "RESIDENT_SMOKE_SENSITIVE_VALUE"
+                            }));
                     selectedSendFailurePassed = selectedFailure.Status == OsInteractionStatusIds.SurfaceUnverified
                         && selectedFailure.SuppressOriginalInput
                         && !selectedFailure.Submitted;
+                    rawFreeFailurePassed = !selectedFailure.Diagnostics.Values.Contains(
+                        "RESIDENT_SMOKE_SENSITIVE_VALUE",
+                        StringComparer.Ordinal);
+                    targetChangeAbortPassed = TargetChangeAborts(protectedProfile);
                     using var second = new SingleInstanceEnforcement(instanceId);
                     secondInstancePassed = !second.IsFirstInstance;
+                    var renderedStatus = TrayStatusFormatter.FormatMenuStatus(protection.State);
+                    protectedStatusPassed = renderedStatus.Contains("protected_send_binding=Enter", StringComparison.Ordinal)
+                        && renderedStatus.Contains("newline_binding=Ctrl+Enter", StringComparison.Ordinal)
+                        && renderedStatus.Contains("manual_scan_hotkey=Ctrl+Shift+F9", StringComparison.Ordinal)
+                        && renderedStatus.Contains("composer_protected=true", StringComparison.Ordinal);
                     completed.Set();
                 });
 
@@ -165,8 +198,12 @@ internal static class ResidentLifecycleSmokeRunner
             hookRegistrationPassed,
             setupGatePassed,
             runtimeReloadPassed,
+            runtimeRollbackPassed,
             selectedSendFailurePassed,
+            rawFreeFailurePassed,
+            targetChangeAbortPassed,
             secondInstancePassed,
+            protectedStatusPassed,
             Volatile.Read(ref cloudSubmissionCount) == 0);
 
         OsInteractionResult NoCloudSubmission()
@@ -185,7 +222,61 @@ internal static class ResidentLifecycleSmokeRunner
 
     private static ResidentLifecycleSmokeReport Failed()
     {
-        return new ResidentLifecycleSmokeReport(false, false, false, false, false, false);
+        return new ResidentLifecycleSmokeReport(false, false, false, false, false, false, false, false, false, false);
+    }
+
+    private static bool TargetChangeAborts(SubmitBindingProfile profile)
+    {
+        var captured = WithWindowHandle(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface(profile.ProfileId), "1");
+        var changed = WithWindowHandle(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface(profile.ProfileId), "2");
+        var hook = new ControlledNativeSubmitHookHost();
+        var targetRunnerCalls = 0;
+        var runtime = new NativeSubmitRuntime(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("untargeted_runner_not_expected"),
+            profile,
+            target =>
+            {
+                targetRunnerCalls++;
+                var result = new CapturedTargetSurfaceDiscovery(
+                    new StaticSurfaceDiscovery(changed),
+                    target).DiscoverActiveSurface();
+                return new OsInteractionResult(
+                    result.Status,
+                    result.Surface,
+                    SanitizationResult: null,
+                    ConfirmationModel: null,
+                    Applied: false,
+                    Submitted: false,
+                    result.Diagnostics);
+            });
+        var protection = new TrayProtectionController(
+            new UnavailableTrayHotkeyHost(
+                new HotkeyBinding("target-change-smoke", "Ctrl+Shift+F9", "target_change_smoke"),
+                "target_change_manual_hotkey_disabled"),
+            () => throw new InvalidOperationException("manual_scan_not_expected"),
+            hook,
+            runtime.Controller,
+            runtime.Runner,
+            profile,
+            nativeSubmitRuntimes: new[] { runtime },
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(captured));
+
+        if (!protection.Start())
+        {
+            return false;
+        }
+
+        hook.Trigger(new NativeKeyGesture("Enter", TargetWindow: new IntPtr(1), TargetProcessId: 1));
+        return targetRunnerCalls == 1
+            && protection.State.LastStatus == OsInteractionStatusIds.StaleComposer
+            && !protection.State.LastSubmitted;
+    }
+
+    private static TextSurfaceDescriptor WithWindowHandle(TextSurfaceDescriptor surface, string windowHandle)
+    {
+        return surface with { Metadata = surface.Metadata with { WindowHandle = windowHandle } };
     }
 
     private sealed class SmokeCommandLauncher : ITrayLocalCommandLauncher
@@ -198,6 +289,54 @@ internal static class ResidentLifecycleSmokeRunner
     private sealed class SmokeDisableConfirmation : ITrayProtectionDisableConfirmation
     {
         public bool Confirm(string action, TrayProtectionState state) => true;
+    }
+
+    private sealed class StaticSurfaceDiscovery : IActiveTextSurfaceDiscovery
+    {
+        private readonly TextSurfaceDescriptor _surface;
+
+        public StaticSurfaceDiscovery(TextSurfaceDescriptor surface)
+        {
+            _surface = surface;
+        }
+
+        public TextSurfaceDiscoveryResult DiscoverActiveSurface()
+        {
+            return TextSurfaceDiscoveryResult.Success(_surface);
+        }
+    }
+
+    private sealed class ControlledNativeSubmitHookHost : INativeSubmitHookHost
+    {
+        private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
+        private Action<NativeKeyGesture, NativeSubmitInterceptionResult>? _onSuppressedSubmit;
+
+        public string? LastErrorCode => null;
+
+        public bool Start(
+            Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
+            Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
+            Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure)
+        {
+            _classify = classify ?? throw new ArgumentNullException(nameof(classify));
+            _onSuppressedSubmit = onSuppressedSubmit ?? throw new ArgumentNullException(nameof(onSuppressedSubmit));
+            return true;
+        }
+
+        public void Stop()
+        {
+            _classify = null;
+            _onSuppressedSubmit = null;
+        }
+
+        public void Trigger(NativeKeyGesture gesture)
+        {
+            var result = _classify!(gesture);
+            if (result.SuppressOriginalInput)
+            {
+                _onSuppressedSubmit!(gesture, result);
+            }
+        }
     }
 
     private sealed class SmokeSetupController : IFirstRunSetupController

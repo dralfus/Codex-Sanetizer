@@ -4072,7 +4072,11 @@ public partial class SanitizerTests
             Assert.That(report.ResidentHookRegistrationPassed, Is.True);
             Assert.That(report.ResidentSetupGatePassed, Is.True);
             Assert.That(report.ResidentRuntimeReloadPassed, Is.True);
+            Assert.That(report.ResidentRuntimeRollbackPassed, Is.True);
             Assert.That(report.ResidentSelectedSendFailurePassed, Is.True);
+            Assert.That(report.ResidentRawFreeFailurePassed, Is.True);
+            Assert.That(report.TargetChangeAbortPassed, Is.True);
+            Assert.That(report.ComposerIdentityMismatchPassed, Is.True);
             Assert.That(report.ResidentSecondInstancePassed, Is.True);
             Assert.That(report.FirstRunPassed, Is.True);
             Assert.That(report.HotkeyRegistrationPassed, Is.True);
@@ -4098,7 +4102,11 @@ public partial class SanitizerTests
             Assert.That(rendered, Does.Contain("resident_hook_registration: true"));
             Assert.That(rendered, Does.Contain("resident_setup_gate: true"));
             Assert.That(rendered, Does.Contain("resident_runtime_reload: true"));
+            Assert.That(rendered, Does.Contain("resident_runtime_rollback: true"));
             Assert.That(rendered, Does.Contain("resident_selected_send_failure: true"));
+            Assert.That(rendered, Does.Contain("resident_raw_free_failure: true"));
+            Assert.That(rendered, Does.Contain("target_change_abort: true"));
+            Assert.That(rendered, Does.Contain("composer_identity_mismatch: true"));
             Assert.That(rendered, Does.Contain("resident_second_instance: true"));
             Assert.That(rendered, Does.Contain("native_submit_repeatability: true"));
             Assert.That(rendered, Does.Contain("native_submit_duplicate_guard: true"));
@@ -4108,6 +4116,7 @@ public partial class SanitizerTests
             Assert.That(rendered, Does.Not.Contain("192.168.10.25"));
             Assert.That(rendered, Does.Not.Contain("Product Smoke Customer"));
             Assert.That(rendered, Does.Not.Contain("product-smoke.example.local"));
+            Assert.That(rendered, Does.Not.Contain("RESIDENT_SMOKE_SENSITIVE_VALUE"));
         }
         finally
         {
@@ -6655,6 +6664,13 @@ public class SingleInstanceEnforcementTests
         thread.Start();
         Assert.That(ready.Wait(TimeSpan.FromSeconds(2)), Is.True);
         thread.Join();
+
+        Assert.That(
+            SpinWait.SpinUntil(
+                () => !SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId),
+                TimeSpan.FromSeconds(2)),
+            Is.True,
+            "Abandoned mutex was not released within the bounded recovery window.");
 
         using var recovered = new SingleInstanceEnforcement(instanceId);
         Assert.That(recovered.IsFirstInstance, Is.True);
