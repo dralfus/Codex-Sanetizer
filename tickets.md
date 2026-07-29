@@ -441,3 +441,30 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 - [ ] Tracked source and test files have no current `git diff --check` whitespace errors.
 - [ ] The documented release verification includes a non-interactive whitespace check that fails before packaging when new defects are introduced.
+
+## 285. Show local protection capabilities and active state in the tray UI
+
+**What to build:** Add a clear local protection-status view reachable from the tray. It must tell the user both which capabilities the installed product contains and which of them are currently active for this Windows session: DPAPI-backed local storage, automatic selected-app prompt protection, and live project-file protection.
+
+**Blocked by:** 281. Recover unreadable local DPAPI protection safely and prevent partial secret writes; 282. Separate broker evidence from live project-file protection status.
+
+**Do not:** Present DPAPI as an unsafe on/off switch; claim that a successful self-test proves production DPAPI readiness; collapse `broker demo`, `unsupported`, and `live protected` into one green file-protection label; or include raw paths, sensitive terms, prompts, mappings, or exception details in the status view.
+
+- [ ] The tray offers a dedicated local status view with separate rows for `Local DPAPI protection`, `Automatic prompt protection`, and `Project-file protection`.
+- [ ] Each row shows a stable capability state and an operational state: DPAPI is `ready`, `recovery required`, or `unavailable`; prompt protection is `active`, `setup required`, `degraded`, or `disabled`; project-file protection is `live protected`, `broker demo only`, `unsupported`, or `not configured`.
+- [ ] The view explains the immediate consequence of every non-green state and offers only safe relevant actions, such as profile verification, opening recovery, or opening protected-file management.
+- [ ] Tray status updates after profile verification, protection enable/disable, DPAPI recovery, and file-policy changes without requiring a restart; tests prove the displayed states remain raw-free and truthful.
+
+## 286. Exclude selected files, including .env, from cloud file context
+
+**What to build:** Let the user select one or more exact local files - including `.env` - for an `exclude from cloud` policy. Once live project-file interception is available, Codex/Desktop must not receive the contents, filename, path, attachment representation, or file-derived tool output of an excluded file. The user must see locally that the file was excluded and why.
+
+**Blocked by:** 283. Prove a supported live ingress boundary for protected project files; 285. Show local protection capabilities and active state in the tray UI.
+
+**Do not:** Treat a filename suffix match as proof that a file was excluded; sanitize and forward an explicitly excluded file; expose selected raw paths in cloud-bound logs or diagnostics; silently fall back to direct reads/uploads when interception is unavailable; or mark a file protected based only on a local preference without a verified pre-cloud enforcement path.
+
+- [ ] The local UI can add, review, and remove one or more exact files from the exclusion policy, including `.env`; local display is allowed, while persisted/cloud-bound diagnostics use protected or raw-free identities.
+- [ ] For a protected workspace with a live ingress boundary, every supported path that could expose an excluded file - file read, direct attachment, file-derived tool output, diff, or patch context - is blocked before model visibility with a raw-free `file_excluded_from_cloud` status.
+- [ ] The operation-level status view shows that an excluded file was withheld, identifies the policy outcome locally, and keeps the rest of the task/file batch usable without a per-file confirmation-dialog storm.
+- [ ] If the live ingress boundary is missing, unhealthy, or cannot classify the selected file, the affected channel fails closed and the UI reports `unsupported` or `degraded`; it never claims the exclusion is enforced.
+- [ ] Automated tests use synthetic `.env` and arbitrary-file fixtures to prove no raw contents, paths, or filenames reach model-visible payload records, audit output, or cloud-bound diagnostics.
