@@ -1441,7 +1441,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             return true;
         }
 
-        _mouseHook = NativeMethods.SetWindowsMouseHookEx(WhMouseLl, _mouseCallback, NativeMethods.GetModuleHandle(null), 0);
+        _mouseHook = NativeMethods.SetWindowsHookEx(WhMouseLl, _mouseCallback, NativeMethods.GetModuleHandle(null), 0);
         if (_mouseHook == IntPtr.Zero)
         {
             LastErrorCode = "native_send_control_hook_register_failed";
@@ -1729,8 +1729,8 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         [DllImport("user32.dll", SetLastError = true)]
         public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
 
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern IntPtr SetWindowsMouseHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+        [DllImport("user32.dll", EntryPoint = "SetWindowsHookEx", SetLastError = true)]
+        public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool UnhookWindowsHookEx(IntPtr hhk);

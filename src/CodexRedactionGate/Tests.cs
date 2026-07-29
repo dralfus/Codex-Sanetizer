@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Windows.Forms;
 using NUnit.Framework;
 using CodexRedactionGate;
 using SanitizerWarning = CodexRedactionGate.Warning;
@@ -6661,6 +6662,13 @@ internal sealed class FixedConfirmationOverlay : IConfirmationOverlay
 [TestFixture]
 public class SingleInstanceEnforcementTests
 {
+    private static string CreateTempDirectory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
     [Test]
     public void SingleInstanceEnforcement_IsFirstInstance()
     {
@@ -6813,6 +6821,169 @@ public class SingleInstanceEnforcementTests
     public void WindowsTrayApp_SecondInstanceAlwaysProvidesVisibleOutcome()
     {
         Assert.That(WindowsTrayApp.ShouldNotifySecondInstance(), Is.True);
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApp_RunFirstInstanceRetainsNativeHookAndTrayIconUntilMessageLoopExits()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var trayIconVisible = false;
+            var nativeHookReady = false;
+
+            var exitCode = WindowsTrayApp.Run(
+                TestSanitizers.Create(),
+                DefaultStorageLayout.Create(tempDirectory),
+                useGlobalMutex: false,
+                context =>
+                {
+                    trayIconVisible = context.IsTrayIconVisible;
+                    nativeHookReady = context.IsNativeSubmitHookReady;
+                    context.ExitThread();
+                },
+                new SingleInstanceNotificationSettings(false, "none"));
+
+            Assert.That(exitCode, Is.EqualTo(0));
+            Assert.That(trayIconVisible, Is.True);
+            Assert.That(nativeHookReady, Is.True);
+            Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"), Is.False);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApp_RunSecondInstanceActivatesExistingWindowAndExitsCleanly()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            using var owner = new ExternalMutexOwner("tray");
+            using var activationWindow = new Form
+            {
+                Text = SingleInstanceEnforcement.ActivationWindowTitle,
+                ShowInTaskbar = false
+            };
+            activationWindow.Show();
+            activationWindow.WindowState = FormWindowState.Minimized;
+            Application.DoEvents();
+
+            Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"), Is.True);
+            var exitCode = WindowsTrayApp.Run(
+                TestSanitizers.Create(),
+                DefaultStorageLayout.Create(tempDirectory),
+                useGlobalMutex: false,
+                _ => throw new AssertionException("A second tray instance must not enter the message loop."),
+                new SingleInstanceNotificationSettings(false, "none"));
+            Application.DoEvents();
+
+            Assert.That(exitCode, Is.EqualTo(0));
+            Assert.That(activationWindow.WindowState, Is.EqualTo(FormWindowState.Normal));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApp_RunRecoversAfterAbandonedFirstInstance()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            using var ownerReady = new ManualResetEventSlim(false);
+            var owner = new Thread(() =>
+            {
+                _ = new Mutex(initiallyOwned: true, name: SingleInstanceEnforcement.BuildMutexName("tray", false));
+                ownerReady.Set();
+            });
+            owner.Start();
+            Assert.That(ownerReady.Wait(TimeSpan.FromSeconds(2)), Is.True);
+            owner.Join();
+            Assert.That(SpinWait.SpinUntil(
+                () => !SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"),
+                TimeSpan.FromSeconds(2)), Is.True);
+
+            var enteredMessageLoop = false;
+            var exitCode = WindowsTrayApp.Run(
+                TestSanitizers.Create(),
+                DefaultStorageLayout.Create(tempDirectory),
+                useGlobalMutex: false,
+                context =>
+                {
+                    enteredMessageLoop = true;
+                    context.ExitThread();
+                },
+                new SingleInstanceNotificationSettings(false, "none"));
+
+            Assert.That(exitCode, Is.EqualTo(0));
+            Assert.That(enteredMessageLoop, Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    private sealed class ExternalMutexOwner : IDisposable
+    {
+        private readonly ManualResetEventSlim _ready = new(false);
+        private readonly ManualResetEventSlim _release = new(false);
+        private readonly Thread _thread;
+        private Exception? _failure;
+
+        public ExternalMutexOwner(string instanceId)
+        {
+            _thread = new Thread(() => HoldMutex(instanceId)) { IsBackground = true };
+            _thread.Start();
+            if (!_ready.Wait(TimeSpan.FromSeconds(2)))
+            {
+                throw new AssertionException("External mutex owner did not start.");
+            }
+
+            if (_failure is not null)
+            {
+                throw new AssertionException("External mutex owner failed.", _failure);
+            }
+        }
+
+        public void Dispose()
+        {
+            _release.Set();
+            _thread.Join(TimeSpan.FromSeconds(2));
+            _ready.Dispose();
+            _release.Dispose();
+        }
+
+        private void HoldMutex(string instanceId)
+        {
+            try
+            {
+                using var mutex = new Mutex(
+                    initiallyOwned: false,
+                    name: SingleInstanceEnforcement.BuildMutexName(instanceId, false));
+                if (!mutex.WaitOne(TimeSpan.FromSeconds(2)))
+                {
+                    throw new InvalidOperationException("test_mutex_unavailable");
+                }
+
+                _ready.Set();
+                _release.Wait();
+                mutex.ReleaseMutex();
+            }
+            catch (Exception exception)
+            {
+                _failure = exception;
+                _ready.Set();
+            }
+        }
     }
 }
 

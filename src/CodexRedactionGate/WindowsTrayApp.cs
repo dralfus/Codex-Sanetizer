@@ -23,8 +23,19 @@ public static class WindowsTrayApp
 
     internal static int Run(ISanitizer sanitizer, DefaultStorageLayout layout, bool useGlobalMutex)
     {
+        return Run(sanitizer, layout, useGlobalMutex, Application.Run, secondInstanceNotificationSettings: null);
+    }
+
+    internal static int Run(
+        ISanitizer sanitizer,
+        DefaultStorageLayout layout,
+        bool useGlobalMutex,
+        Action<WindowsTrayApplicationContext> runMessageLoop,
+        SingleInstanceNotificationSettings? secondInstanceNotificationSettings)
+    {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(runMessageLoop);
 
         if (!OperatingSystem.IsWindows())
         {
@@ -42,7 +53,7 @@ public static class WindowsTrayApp
             SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
             if (ShouldNotifySecondInstance())
             {
-                ShowAlreadyRunningNotification(SingleInstanceNotificationSettings.Load());
+                ShowAlreadyRunningNotification(secondInstanceNotificationSettings ?? SingleInstanceNotificationSettings.Load());
             }
             return 0; // Exit cleanly - existing instance will handle everything
         }
@@ -53,7 +64,7 @@ public static class WindowsTrayApp
             SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
             if (ShouldNotifySecondInstance())
             {
-                ShowAlreadyRunningNotification(SingleInstanceNotificationSettings.Load());
+                ShowAlreadyRunningNotification(secondInstanceNotificationSettings ?? SingleInstanceNotificationSettings.Load());
             }
             return 0;
         }
@@ -68,7 +79,7 @@ public static class WindowsTrayApp
             new MessageBoxTrayProtectionDisableConfirmation(),
             enforcement,
             () => CreateNativeSubmitRuntimeSet(sanitizer, layout));
-        Application.Run(context);
+        runMessageLoop(context);
         return 0;
     }
 
@@ -268,6 +279,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly Func<IFirstRunSetupController> _firstRunSetupControllerFactory;
     private readonly Action<FirstRunSetupResult?>? _firstRunSetupCompleted;
     private int _firstRunSetupScheduled;
+
+    internal bool IsTrayIconVisible => _notifyIcon.Visible;
+
+    internal bool IsNativeSubmitHookReady => _controller.IsNativeSubmitHookReady;
 
     public WindowsTrayApplicationContext(TrayProtectionController controller)
         : this(controller, DefaultStorageLayout.CreateDefault(), new WindowsTrayLocalCommandLauncher())

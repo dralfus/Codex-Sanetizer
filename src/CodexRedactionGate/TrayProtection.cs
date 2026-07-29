@@ -125,6 +125,8 @@ internal sealed class TrayProtectionController
 
     public TrayProtectionState State => ReadSnapshot().State;
 
+    internal bool IsNativeSubmitHookReady => ReadSnapshot().HookReady;
+
     public bool Start()
     {
         var snapshot = ReadSnapshot();

@@ -102,11 +102,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Test only the helper class in isolation; rely on mock mutexes; or skip testing the exit code path for second launches.
 
-- [ ] Test verifies second launch detects existing instance via `IsAnotherInstanceRunning("tray")`
-- [ ] Test verifies second launch calls `ActivateExistingInstance("tray")` before exiting
-- [ ] Test verifies second launch exits with code 0 (raw-free) not 1 (error)
-- [ ] Test verifies first instance retains hook ownership and tray icon
-- [ ] Test verifies behavior on abnormal first-instance termination (mutex cleanup)
+- [x] Test verifies second launch detects existing instance via `IsAnotherInstanceRunning("tray")`
+- [x] Test verifies second launch calls `ActivateExistingInstance("tray")` before exiting
+- [x] Test verifies second launch exits with code 0 (raw-free) not 1 (error)
+- [x] Test verifies first instance retains hook ownership and tray icon
+- [x] Test verifies behavior on abnormal first-instance termination (mutex cleanup)
 
 ## 257. Implement actual window activation in ActivateExistingInstance
 
@@ -288,6 +288,18 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [x] An unrelated cached target continues normally when the fallback throws or has no identity.
 - [x] The callback records only a stable raw-free status; it does not expose exception text.
 - [x] Tests inject the failure at the hook-host boundary for both keyboard and pointer input.
+
+## 279. Correct the native mouse-hook entry point
+
+**What to build:** Register the low-level mouse Send hook through the real Win32 `SetWindowsHookEx` API so selected-app mouse Send interception can start without crashing the tray process.
+
+**Blocked by:** None.
+
+**Do not:** Catch and hide a missing Win32 entry point, degrade startup to raw pass-through, or claim mouse Send is protected when the hook was never registered.
+
+- [x] Mouse hook registration invokes the actual `user32!SetWindowsHookEx` entry point with the low-level mouse callback signature.
+- [x] Tray startup reaches the first-instance native-hook path without `EntryPointNotFoundException`.
+- [x] Regression tests cover tray startup with the production mouse-hook host.
 
 ## 270. Make second-instance activation visibly useful
 
