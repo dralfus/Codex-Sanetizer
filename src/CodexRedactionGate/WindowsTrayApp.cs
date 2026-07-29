@@ -304,7 +304,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _commandLauncher = commandLauncher ?? throw new ArgumentNullException(nameof(commandLauncher));
         _disableConfirmation = disableConfirmation ?? throw new ArgumentNullException(nameof(disableConfirmation));
         _buildVersion = BuildVersion.Current;
-        _crashDiagnostics = LocalCrashDiagnostics.CreateDefault();
+        _crashDiagnostics = LocalCrashDiagnostics.Bootstrap();
         _singleInstanceEnforcement = singleInstanceEnforcement;
         _nativeSubmitRuntimeFactory = nativeSubmitRuntimeFactory;
         _firstRunSetupControllerFactory = firstRunSetupControllerFactory ?? (() => new FirstRunSetupController());

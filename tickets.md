@@ -304,10 +304,10 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 254.
 
-- [ ] CLI, UI-thread, and readiness crash capture call one shared initialization path.
-- [ ] A capture failure never changes the protected-send decision or prints raw exception text.
-- [ ] Crash-view CLI resolves its reports directory through the same shared default path API.
-- [ ] Focused tests cover the shared bootstrap path.
+- [x] CLI, UI-thread, and readiness crash capture call one shared initialization path.
+- [x] A capture failure never changes the protected-send decision or prints raw exception text.
+- [x] Crash-view CLI resolves its reports directory through the same shared default path API.
+- [x] Focused tests cover the shared bootstrap path.
 
 ## 272. Replace setup-form control discovery with typed profile-card state
 

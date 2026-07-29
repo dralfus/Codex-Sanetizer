@@ -21,6 +21,8 @@ public sealed record CrashReport(
 /// </summary>
 public sealed class LocalCrashDiagnostics
 {
+    private static readonly Lazy<LocalCrashDiagnostics> DefaultInstance = new(
+        () => new LocalCrashDiagnostics(DefaultReportsDirectory()));
     private readonly string _reportsDirectory;
 
     public LocalCrashDiagnostics(string reportsDirectory)
@@ -31,12 +33,17 @@ public sealed class LocalCrashDiagnostics
 
     public static void CaptureDefault(Exception ex, string component, string statusCode)
     {
-        CreateDefault().Capture(ex, component, statusCode);
+        Bootstrap().Capture(ex, component, statusCode);
     }
 
     public static LocalCrashDiagnostics CreateDefault()
     {
-        return new LocalCrashDiagnostics(DefaultReportsDirectory());
+        return Bootstrap();
+    }
+
+    public static LocalCrashDiagnostics Bootstrap()
+    {
+        return DefaultInstance.Value;
     }
 
     public static string DefaultReportsDirectory()

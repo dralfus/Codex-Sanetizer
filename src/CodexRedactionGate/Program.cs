@@ -986,10 +986,7 @@ public static class Program
 
     private static int RunCrashReports()
     {
-        var crashDiag = new LocalCrashDiagnostics(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CodexRedactionGate",
-            "crashes"));
+        var crashDiag = LocalCrashDiagnostics.Bootstrap();
         var reports = crashDiag.LoadReports();
 
         if (reports.Count == 0)

@@ -6433,6 +6433,33 @@ public class CrashDiagnosticsTests
     }
 
     [Test]
+    public void CrashDiagnostics_BootstrapReturnsTheSharedDefaultInstance()
+    {
+        Assert.That(LocalCrashDiagnostics.Bootstrap(), Is.SameAs(LocalCrashDiagnostics.CreateDefault()));
+    }
+
+    [Test]
+    public void CrashDiagnostics_CaptureFailureDoesNotEscapeTheCrashBoundary()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var reportsPath = Path.Combine(tempDirectory, "reports-file");
+            File.WriteAllText(reportsPath, "not a directory");
+            var crashDiag = new LocalCrashDiagnostics(reportsPath);
+
+            Assert.DoesNotThrow(() => crashDiag.Capture(
+                new InvalidOperationException("PROMPT_SECRET_123"),
+                "test_component",
+                "test_failure"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
     public void CrashDiagnostics_CapturesAndLoadsReports()
     {
         var tempDirectory = CreateTempDirectory();
