@@ -1653,6 +1653,22 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         return IsSelectedTarget(targetWindow, targetProcessId);
     }
 
+    internal bool InvokeKeyboardFallbackForTest(
+        NativeKeyGesture gesture,
+        Func<NativeKeyGesture, bool> fallback)
+    {
+        _shouldSuppressKeyboardClassificationFailure = fallback;
+        return ShouldSuppressKeyboardClassificationFailure(gesture);
+    }
+
+    internal bool InvokePointerFallbackForTest(
+        NativePointerGesture gesture,
+        Func<NativePointerGesture, bool> fallback)
+    {
+        _shouldSuppressPointerClassificationFailure = fallback;
+        return ShouldSuppressPointerClassificationFailure(gesture);
+    }
+
     private static NativeSubmitInterceptionResult ClassificationUnavailableResult(string inputType)
     {
         return new NativeSubmitInterceptionResult(

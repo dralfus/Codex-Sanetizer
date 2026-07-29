@@ -1841,6 +1841,34 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
+    public void WindowsNativeSubmitHookHost_FaultedFallbackBlocksOnlyCachedSelectedTarget()
+    {
+        var host = new WindowsNativeSubmitHookHost();
+        var selected = new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.SurfaceUnverified, true, false, false,
+            new Dictionary<string, string> { ["profile_id"] = "codex-desktop" });
+        host.RememberSelectedTargetForTest(new IntPtr(42), 7, selected);
+
+        var keyboardSelected = host.InvokeKeyboardFallbackForTest(
+            new NativeKeyGesture("Enter", TargetWindow: new IntPtr(42), TargetProcessId: 7),
+            _ => throw new InvalidOperationException("synthetic"));
+        var keyboardUnrelated = host.InvokeKeyboardFallbackForTest(
+            new NativeKeyGesture("Enter", TargetWindow: new IntPtr(43), TargetProcessId: 7),
+            _ => throw new InvalidOperationException("synthetic"));
+        var pointerSelected = host.InvokePointerFallbackForTest(
+            new NativePointerGesture(0, 0, "left", new IntPtr(42), 7),
+            _ => throw new InvalidOperationException("synthetic"));
+        var pointerUnrelated = host.InvokePointerFallbackForTest(
+            new NativePointerGesture(0, 0, "left", new IntPtr(43), 7),
+            _ => throw new InvalidOperationException("synthetic"));
+
+        Assert.That(keyboardSelected, Is.True);
+        Assert.That(pointerSelected, Is.True);
+        Assert.That(keyboardUnrelated, Is.False);
+        Assert.That(pointerUnrelated, Is.False);
+    }
+
+    [Test]
     public void TrayProtectionController_FocusedSendUsesCapturedWindowWhenFocusChanges()
     {
         var hook = new FakeNativeSubmitHookHost();

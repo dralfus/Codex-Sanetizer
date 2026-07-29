@@ -286,7 +286,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [x] A selected cached target remains suppressed when its bounded fallback throws.
 - [x] An unrelated cached target continues normally when the fallback throws or has no identity.
 - [x] The callback records only a stable raw-free status; it does not expose exception text.
-- [ ] Tests inject the failure at the hook-host boundary for both keyboard and pointer input.
+- [x] Tests inject the failure at the hook-host boundary for both keyboard and pointer input.
 
 ## 270. Make second-instance activation visibly useful
 
