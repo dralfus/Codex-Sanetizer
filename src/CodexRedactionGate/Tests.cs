@@ -6237,13 +6237,31 @@ public class CliTests
     [Test]
     public void PublicFailureText_NeverIncludesExceptionMessage()
     {
-        var exception = new DpapiSecretLoadFailureException(new InvalidOperationException("PROMPT_SECRET_123 C:\\Users\\alexey.andreev"));
+        var exception = new DpapiSecretLoadFailureException(new InvalidOperationException(
+            "PROMPT_SECRET_123 C:\\Users\\alexey.andreev WINDOW_TITLE_123 RULE_VALUE_123"));
 
         var text = PublicFailureText.Format(exception, "Local restore");
 
         Assert.That(text, Does.Contain(DpapiSecretLoadFailureException.PublicStatusCode));
         Assert.That(text, Does.Not.Contain("PROMPT_SECRET_123"));
         Assert.That(text, Does.Not.Contain("alexey.andreev"));
+        Assert.That(text, Does.Not.Contain("WINDOW_TITLE_123"));
+        Assert.That(text, Does.Not.Contain("RULE_VALUE_123"));
+    }
+
+    [Test]
+    public void PublicFailureText_StorageFailureUsesStableRawFreeStatus()
+    {
+        var exception = new UnauthorizedAccessException(
+            "PROMPT_SECRET_123 C:\\Users\\alexey.andreev WINDOW_TITLE_123 RULE_VALUE_123");
+
+        var text = PublicFailureText.Format(exception, "Sensitive terms");
+
+        Assert.That(text, Does.Contain("status=local_operation_failed"));
+        Assert.That(text, Does.Not.Contain("PROMPT_SECRET_123"));
+        Assert.That(text, Does.Not.Contain("alexey.andreev"));
+        Assert.That(text, Does.Not.Contain("WINDOW_TITLE_123"));
+        Assert.That(text, Does.Not.Contain("RULE_VALUE_123"));
     }
 
     [Test]

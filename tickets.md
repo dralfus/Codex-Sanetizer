@@ -263,9 +263,9 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 254.
 
-- [ ] No interactive failure dialog includes an arbitrary exception message, path, prompt, title, or rule value.
-- [ ] DPAPI and other storage exceptions use stable public status codes; raw causes remain only as local inner exceptions.
-- [ ] Tests inject synthetic sensitive values and prove UI output remains raw-free.
+- [x] No interactive failure dialog includes an arbitrary exception message, path, prompt, title, or rule value.
+- [x] DPAPI and other storage exceptions use stable public status codes; raw causes remain only as local inner exceptions.
+- [x] Tests inject synthetic sensitive values and prove UI output remains raw-free.
 
 ## 269. Exercise installed resident runtime paths in release smoke
 
