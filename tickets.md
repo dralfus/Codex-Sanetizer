@@ -75,9 +75,9 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 **Do not:** Classify every foreground window as a composer or Send control, suppress ordinary `Enter` in a skill picker, leave mouse Send unguarded, or permit a raw fallback when control identity is unavailable.
 
 - [x] Focused-control discovery distinguishes verified composer, identifiable selected-app Send control, and non-Send controls using raw-free UI Automation evidence.
-- [ ] Keyboard activation of an identifiable Send control and native mouse Send activation enter the same suppress-first protected flow. Programmatic UI Automation `Invoke()` remains explicitly unsupported until ticket 275 supplies a pre-action boundary.
+- [x] Keyboard activation of an identifiable Send control and native mouse Send activation enter the same suppress-first protected flow. Programmatic UI Automation `Invoke()` remains explicitly unsupported until ticket 275 supplies a pre-action boundary.
 - [x] Non-Send controls and the configured newline shortcut pass through unchanged.
-- [ ] Unknown control identity on a selected protected Send path fails closed without exposing prompt/window/control text.
+- [x] Unknown control identity on a selected protected Send path fails closed without exposing prompt/window/control text.
 - [x] Once the foreground window is identified as a selected AI client, an unrecognized or transiently unavailable Send-control identity cannot release the original click.
 - [x] Tests cover composer, skill picker, Send button, mouse activation, selected versus unselected apps, and overlay-originated replay.
 

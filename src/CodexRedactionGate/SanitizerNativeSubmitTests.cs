@@ -1484,8 +1484,9 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(submitCalls, Is.EqualTo(2));
     }
 
-    [Test]
-    public void TrayProtectionController_RoutesFocusedKeyboardSendThroughTheProtectedFlow()
+    [TestCase("Enter")]
+    [TestCase("Space")]
+    public void TrayProtectionController_RoutesFocusedKeyboardSendThroughTheProtectedFlow(string key)
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
@@ -1503,7 +1504,7 @@ public class HandleButtonClickTests : SanitizerTests
                 new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
 
         Assert.That(tray.Start(), Is.True);
-        hook.Trigger(new NativeKeyGesture("Enter"));
+        hook.Trigger(new NativeKeyGesture(key));
 
         Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
         Assert.That(submitCalls, Is.EqualTo(1));
@@ -1663,6 +1664,7 @@ public class HandleButtonClickTests : SanitizerTests
     [Test]
     public void TrayProtectionController_SuppressesUncertainSelectedSendControl()
     {
+        const string sensitiveControlValue = "SEND_CONTROL_C195C3D8E8F3";
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
         var submitCalls = 0;
@@ -1672,7 +1674,11 @@ public class HandleButtonClickTests : SanitizerTests
                 SendControlClassification.SelectedClientUncertain,
                 TextSurfaceDiscoveryResult.Failure(
                     OsInteractionStatusIds.SurfaceUnverified,
-                    new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }))),
+                    new Dictionary<string, string>
+                    {
+                        ["profile_id"] = "codex-desktop",
+                        ["control_name"] = sensitiveControlValue
+                    }))),
             profile,
             () => submitCalls++);
 
@@ -1681,6 +1687,7 @@ public class HandleButtonClickTests : SanitizerTests
 
         Assert.That(hook.LastPointerClassification?.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
         Assert.That(hook.LastPointerClassification?.SuppressOriginalInput, Is.True);
+        Assert.That(System.Text.Json.JsonSerializer.Serialize(hook.LastPointerClassification), Does.Not.Contain(sensitiveControlValue));
         Assert.That(submitCalls, Is.EqualTo(0));
     }
 
