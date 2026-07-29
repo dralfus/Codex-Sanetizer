@@ -185,11 +185,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Rely on actual process termination (flaky tests); skip testing mutex cleanup timing; or assume immediate cleanup after process exit.
 
-- [ ] Test simulates crash by letting OS clean up mutex on process exit
-- [ ] Test verifies second launch successfully detects new single instance
-- [ ] Test verifies `IsFirstInstance` is true for the new instance
-- [ ] Test verifies no stale state persists between crashes
-- [ ] Test covers multiple rapid crash-restart cycles
+- [x] Test simulates crash by letting Windows clean up mutex ownership when the owner thread exits
+- [x] Test verifies the next launch successfully detects the available single-instance slot
+- [x] Test verifies `IsFirstInstance` is true for the recovered launch
+- [x] Test verifies no stale ownership persists between cycles
+- [x] Test covers multiple rapid crash-restart cycles
 - [x] The abandoned-mutex regression waits through a bounded recovery window instead of assuming immediate kernel handoff after the owner thread exits.
 
 ## 263. Improve ActivateExistingInstance documentation and limitations

@@ -6729,6 +6729,28 @@ public class SingleInstanceEnforcementTests
         Assert.That(recovered.IsFirstInstance, Is.True);
     }
 
+    [Test]
+    public void SingleInstanceEnforcement_RecoversAcrossRapidAbandonRestartCycles()
+    {
+        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+
+        for (var cycle = 0; cycle < 3; cycle++)
+        {
+            AbandonOwnedMutex(instanceId);
+
+            Assert.That(
+                SpinWait.SpinUntil(
+                    () => !SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId),
+                    TimeSpan.FromSeconds(2)),
+                Is.True,
+                $"Cycle {cycle}: abandoned mutex was not released within the bounded recovery window.");
+
+            using var recovered = new SingleInstanceEnforcement(instanceId);
+            Assert.That(recovered.IsFirstInstance, Is.True, $"Cycle {cycle}: recovered launch was not the first instance.");
+            Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId), Is.False, $"Cycle {cycle}: stale ownership remained after recovery.");
+        }
+    }
+
     [TestCase(null, "balloon")]
     [TestCase("toast", "toast")]
     [TestCase("balloon", "balloon")]
@@ -7010,6 +7032,39 @@ public class SingleInstanceEnforcementTests
         {
             Directory.Delete(tempDirectory, recursive: true);
         }
+    }
+
+    private static void AbandonOwnedMutex(string instanceId)
+    {
+        using var ready = new ManualResetEventSlim(false);
+        Exception? failure = null;
+        var owner = new Thread(() =>
+        {
+            try
+            {
+                // Intentionally leave ownership to Windows when this owner thread exits.
+                var mutex = new Mutex(
+                    initiallyOwned: false,
+                    name: SingleInstanceEnforcement.BuildMutexName(instanceId, false));
+                if (!mutex.WaitOne(TimeSpan.FromSeconds(2)))
+                {
+                    throw new InvalidOperationException("test_mutex_unavailable");
+                }
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+            finally
+            {
+                ready.Set();
+            }
+        });
+
+        owner.Start();
+        Assert.That(ready.Wait(TimeSpan.FromSeconds(2)), Is.True, "Abandoned mutex owner did not start.");
+        owner.Join();
+        Assert.That(failure, Is.Null, "Abandoned mutex owner failed.");
     }
 
     private sealed class ExternalMutexOwner : IDisposable
