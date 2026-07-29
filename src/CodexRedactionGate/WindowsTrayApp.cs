@@ -58,13 +58,10 @@ public static class WindowsTrayApp
         if (SingleInstanceEnforcement.IsAnotherInstanceRunning("tray", useGlobalMutex))
         {
             var activationSucceeded = SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
-            if (ShouldNotifySecondInstance())
-            {
-                ShowAlreadyRunningNotification(
-                    secondInstanceNotificationSettings ?? SingleInstanceNotificationSettings.Load(),
-                    activationSucceeded,
-                    secondInstanceNotificationPresenter);
-            }
+            NotifyBlockedSecondInstance(
+                secondInstanceNotificationSettings,
+                activationSucceeded,
+                secondInstanceNotificationPresenter);
             return 0; // Exit cleanly - existing instance will handle everything
         }
 
@@ -72,13 +69,10 @@ public static class WindowsTrayApp
         if (!enforcement.IsFirstInstance)
         {
             var activationSucceeded = SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
-            if (ShouldNotifySecondInstance())
-            {
-                ShowAlreadyRunningNotification(
-                    secondInstanceNotificationSettings ?? SingleInstanceNotificationSettings.Load(),
-                    activationSucceeded,
-                    secondInstanceNotificationPresenter);
-            }
+            NotifyBlockedSecondInstance(
+                secondInstanceNotificationSettings,
+                activationSucceeded,
+                secondInstanceNotificationPresenter);
             return 0;
         }
 
@@ -94,6 +88,22 @@ public static class WindowsTrayApp
             () => CreateNativeSubmitRuntimeSet(sanitizer, layout));
         runMessageLoop(context);
         return 0;
+    }
+
+    private static void NotifyBlockedSecondInstance(
+        SingleInstanceNotificationSettings? configuredSettings,
+        bool activationSucceeded,
+        Action<SecondInstanceNotification>? presenter)
+    {
+        if (!ShouldNotifySecondInstance())
+        {
+            return;
+        }
+
+        // The second process exits after this handoff, so one load is both a cache
+        // and the complete configuration lifetime for that launch.
+        var settings = configuredSettings ?? SingleInstanceNotificationSettings.Load();
+        ShowAlreadyRunningNotification(settings, activationSucceeded, presenter);
     }
 
     private static void ShowAlreadyRunningNotification(

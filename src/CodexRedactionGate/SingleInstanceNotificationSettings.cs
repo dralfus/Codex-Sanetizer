@@ -12,17 +12,26 @@ internal sealed record SingleInstanceNotificationSettings(bool Enabled, string T
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RegistryPath, writable: false);
-            if (key?.GetValue("DisableNotification") is int disabled && disabled != 0)
-            {
-                return new SingleInstanceNotificationSettings(false, "none");
-            }
-
-            return new SingleInstanceNotificationSettings(true, NormalizeType(key?.GetValue("NotificationType") as string));
+            return FromRegistryValues(
+                key?.GetValue("DisableNotification"),
+                key?.GetValue("NotificationType") as string);
         }
         catch (Exception exception) when (exception is UnauthorizedAccessException or System.Security.SecurityException)
         {
-            return new SingleInstanceNotificationSettings(true, "balloon");
+            return FromRegistryValues(disableNotification: null, notificationType: null);
         }
+    }
+
+    internal static SingleInstanceNotificationSettings FromRegistryValues(
+        object? disableNotification,
+        string? notificationType)
+    {
+        if (disableNotification is int disabled && disabled != 0)
+        {
+            return new SingleInstanceNotificationSettings(false, "none");
+        }
+
+        return new SingleInstanceNotificationSettings(true, NormalizeType(notificationType));
     }
 
     internal static string NormalizeType(string? value)

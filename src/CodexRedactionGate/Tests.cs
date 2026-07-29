@@ -6740,6 +6740,27 @@ public class SingleInstanceEnforcementTests
         Assert.That(SingleInstanceNotificationSettings.NormalizeType(configured), Is.EqualTo(expected));
     }
 
+    [Test]
+    public void SingleInstanceNotificationSettings_UsesBalloonByDefault()
+    {
+        var settings = SingleInstanceNotificationSettings.FromRegistryValues(
+            disableNotification: null,
+            notificationType: null);
+
+        Assert.That(settings, Is.EqualTo(new SingleInstanceNotificationSettings(true, "balloon")));
+    }
+
+    [TestCase(1)]
+    [TestCase(-1)]
+    public void SingleInstanceNotificationSettings_DisableNotificationSuppressesEveryPresentation(int disabledValue)
+    {
+        var settings = SingleInstanceNotificationSettings.FromRegistryValues(
+            disabledValue,
+            notificationType: "toast");
+
+        Assert.That(settings, Is.EqualTo(new SingleInstanceNotificationSettings(false, "none")));
+    }
+
     [TestCase(true)]
     [TestCase(false)]
     public void WindowsTrayApp_SecondInstanceCreatesNonModalNotificationForEveryActivationOutcome(bool activationSucceeded)

@@ -171,11 +171,11 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Hard-code notification behavior; require recompilation for configuration changes; or expose setting to end users without clear documentation.
 
-- [ ] Add registry key `HKEY_CURRENT_USER\Software\CodexRedactionGate\SingleInstance` with notification settings
-- [ ] Setting `DisableNotification` (DWORD) suppresses all user notifications
-- [ ] Setting `NotificationType` (REG_SZ) allows: `toast`, `balloon`, `none`; a legacy `messagebox` value is treated as `balloon` and never opens a modal dialog
-- [ ] Default value shows a balloon notification
-- [ ] Configuration is read once at startup and cached
+- [x] Add registry key `HKEY_CURRENT_USER\Software\CodexRedactionGate\SingleInstance` with notification settings
+- [x] Setting `DisableNotification` (DWORD) suppresses all user notifications
+- [x] Setting `NotificationType` (REG_SZ) allows: `toast`, `balloon`, `none`; a legacy `messagebox` value is treated as `balloon` and never opens a modal dialog
+- [x] Default value shows a balloon notification
+- [x] Configuration is read once for the short-lived second-launch process and retained for its notification decision
 
 ## 262. Add unit tests for SingleInstanceEnforcement crash recovery
 

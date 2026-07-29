@@ -133,7 +133,7 @@ The hotkey above is only a secondary `manual scan/apply` feature. It is not proo
 
 The installed tray app normally enforces one resident instance for the current Windows user. For an elevated, multi-user deployment only, start it with `--tray-app --global`; this uses a `Global\` mutex and does not grant cross-session UI control.
 
-Second-launch notifications can be configured under `HKCU\Software\CodexRedactionGate\SingleInstance`: set `DisableNotification` to a non-zero DWORD to suppress them, or set `NotificationType` to `balloon`, `toast`, `messagebox`, or `none`. `toast` uses the native balloon fallback in this Windows Forms release.
+Second-launch notifications can be configured under `HKCU\Software\CodexRedactionGate\SingleInstance`: set `DisableNotification` to a non-zero DWORD to suppress them, or set `NotificationType` to `balloon`, `toast`, or `none`. The default is `balloon`; `toast` uses the native balloon fallback in this Windows Forms release. A legacy `messagebox` value is treated as `balloon`, so a second launch never requires a modal acknowledgement.
 
 ## Windows Desktop Flow
 
