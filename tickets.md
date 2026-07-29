@@ -381,3 +381,16 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [x] Tracked ad-hoc `test_*.txt` and `all_tests_output*.txt` files are removed and ignored as generated evidence.
 - [x] Build has zero new nullable warnings in production and test code.
 - [x] Full tests, installer smoke, and the final release smoke pass with raw-free artifacts.
+
+## 280. Isolate self-test from user-local DPAPI protection state
+
+**What to build:** Make `--self-test` validate the deterministic sanitizer and restore workflows without reading, creating, rotating, or deleting the current user's production DPAPI secret or mapping vault. A failed production DPAPI readiness check belongs to `--doctor`; it must not make the isolated self-test unavailable.
+
+**Blocked by:** None — can start immediately.
+
+**Do not:** Delete, replace, or silently rotate a user-local DPAPI secret or mapping vault; downgrade production DPAPI protection; treat an isolated self-test pass as proof that the installed user's vault is ready; or emit raw paths, exception text, prompt data, or protected values.
+
+- [x] `--self-test` uses an isolated in-memory test vault and succeeds even when the production sanitizer factory would fail with a DPAPI error.
+- [x] The self-test path does not call the production sanitizer factory or touch the default storage layout.
+- [x] Production `--doctor` continues to report a raw-free DPAPI readiness failure instead of being hidden by self-test isolation.
+- [x] Tests prove both the isolated self-test success and raw-free production DPAPI failure reporting.

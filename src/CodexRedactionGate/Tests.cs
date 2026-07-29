@@ -6293,18 +6293,43 @@ public class CliTests
     }
 
     [Test]
-    public void Main_SelfTest_DpapiFailureIsRawFree()
+    public void Main_SelfTest_IsolatedFromProductionDpapiFailure()
     {
         var (exitCode, stdout, stderr) = CaptureProgramOutput(() =>
             Program.Main(
                 new[] { "--self-test" },
                 () => throw new DpapiSecretLoadFailureException("PROMPT_SECRET_123 C:\\Users\\alexey.andreev")));
 
-        Assert.That(exitCode, Is.EqualTo(1));
-        Assert.That(stdout, Does.Contain("self_test_unavailable"));
+        Assert.That(exitCode, Is.EqualTo(0));
+        Assert.That(stdout, Does.Contain("Self-test passed."));
         Assert.That(stdout, Does.Not.Contain("PROMPT_SECRET_123"));
         Assert.That(stdout, Does.Not.Contain("C:\\Users\\alexey.andreev"));
         Assert.That(stderr, Is.Empty);
+    }
+
+    [Test]
+    public void ReadinessDoctor_ReportsProductionDpapiFailureWithoutRawExceptionData()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var report = ReadinessDoctor.Check(
+                DefaultStorageLayout.Create(tempDirectory),
+                vaultSecretProbe: () => throw new DpapiSecretLoadFailureException(
+                    "PROMPT_SECRET_123 C:\\Users\\alexey.andreev"));
+            var rendered = System.Text.Json.JsonSerializer.Serialize(report);
+
+            Assert.That(report.Ready, Is.False);
+            Assert.That(
+                report.Items.Single(item => item.Component == "vault_secret").Code,
+                Is.EqualTo("vault_secret_dpapi_failed"));
+            Assert.That(rendered, Does.Not.Contain("PROMPT_SECRET_123"));
+            Assert.That(rendered, Does.Not.Contain("C:\\Users\\alexey.andreev"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
     }
 
     [Test]

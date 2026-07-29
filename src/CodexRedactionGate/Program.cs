@@ -96,7 +96,7 @@ public static class Program
         {
             try
             {
-                return RunSelfTest(() => runtime.SanitizerFactory(Array.Empty<DictionaryTerm>()));
+                return RunSelfTest(CreateIsolatedSelfTestSanitizer);
             }
             catch (Exception exception) when (exception is InvalidOperationException or DpapiSecretLoadFailureException)
             {
@@ -1732,6 +1732,12 @@ public static class Program
 
         Console.WriteLine("Self-test passed.");
         return 0;
+    }
+
+    private static Sanitizer CreateIsolatedSelfTestSanitizer()
+    {
+        return new Sanitizer(
+            new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("codex-redaction-gate-self-test")));
     }
 
     private static SanitizeRequest CreatePromptRequest(string text)

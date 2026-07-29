@@ -47,6 +47,8 @@ dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseApp
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --self-test
 ```
 
+`--self-test` uses an isolated in-memory vault and never changes the current user's DPAPI secret or mapping vault. Use `--doctor` to verify the installed user's local DPAPI readiness.
+
 Run the product smoke:
 
 ```powershell
