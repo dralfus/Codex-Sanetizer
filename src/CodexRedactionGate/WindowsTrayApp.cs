@@ -40,7 +40,8 @@ public static class WindowsTrayApp
             useGlobalMutex,
             Application.Run,
             secondInstanceNotificationSettings: null,
-            localProtectionStatus: LocalProtectionRecovery.RecoveryRequiredCode);
+            localProtectionStatus: LocalProtectionRecovery.RecoveryRequiredCode,
+            recoveredRuntimeFactory: () => CreateResidentProtectionRuntime(Sanitizer.CreateProduction(layout), layout));
     }
 
     internal static int Run(
@@ -50,7 +51,8 @@ public static class WindowsTrayApp
         Action<WindowsTrayApplicationContext> runMessageLoop,
         SingleInstanceNotificationSettings? secondInstanceNotificationSettings,
         Action<SecondInstanceNotification>? secondInstanceNotificationPresenter = null,
-        string localProtectionStatus = LocalProtectionRecovery.ReadyCode)
+        string localProtectionStatus = LocalProtectionRecovery.ReadyCode,
+        Func<ResidentProtectionRuntime>? recoveredRuntimeFactory = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
@@ -98,7 +100,8 @@ public static class WindowsTrayApp
             new MessageBoxTrayProtectionDisableConfirmation(),
             enforcement,
             () => CreateNativeSubmitRuntimeSet(sanitizer, layout),
-            localProtectionStatus: localProtectionStatus);
+            localProtectionStatus: localProtectionStatus,
+            recoveredRuntimeFactory: recoveredRuntimeFactory ?? (() => CreateResidentProtectionRuntime(sanitizer, layout)));
         runMessageLoop(context);
         return 0;
     }
@@ -181,24 +184,17 @@ public static class WindowsTrayApp
 
         var settings = HotkeySettingsStore.Load(layout ?? DefaultStorageLayout.CreateDefault());
         var resolvedLayout = layout ?? DefaultStorageLayout.CreateDefault();
-        var runtimeSet = CreateNativeSubmitRuntimeSet(sanitizer, resolvedLayout);
+        var residentRuntime = CreateResidentProtectionRuntime(sanitizer, resolvedLayout);
+        var runtimeSet = residentRuntime.NativeSubmitRuntimeSet;
         var runtime = runtimeSet?.Runtimes.FirstOrDefault();
         var nativeProfile = runtime?.Profile;
-        var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
         var activeSurfaceDiscovery = WindowsFocusedComposerDiscovery.CreateDefault();
-        var orchestrator = new OsInteractionOrchestrator(
-            sanitizer,
-            WindowsFocusedComposerDiscovery.CreateDefault(),
-            liveAdapter,
-            liveAdapter,
-            liveAdapter,
-            new WindowsConfirmationOverlay());
 
         return new TrayProtectionController(
             settings.Usable
                 ? new WindowsTrayHotkeyHost(settings.Settings.ProtectionHotkey)
                 : new UnavailableTrayHotkeyHost(settings.Settings.ProtectionHotkey.Binding, settings.Code),
-            () => orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly),
+            residentRuntime.ApplyOnlyRunner,
             runtime?.HookHost,
             runtime?.Controller,
             runtime?.Runner,
@@ -207,6 +203,26 @@ public static class WindowsTrayApp
             sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault(resolvedLayout),
             nativeSubmitRuntimes: runtimeSet?.Runtimes,
             activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface);
+    }
+
+    internal static ResidentProtectionRuntime CreateResidentProtectionRuntime(
+        ISanitizer sanitizer,
+        DefaultStorageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(sanitizer);
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
+        var orchestrator = new OsInteractionOrchestrator(
+            sanitizer,
+            WindowsFocusedComposerDiscovery.CreateDefault(),
+            liveAdapter,
+            liveAdapter,
+            liveAdapter,
+            new WindowsConfirmationOverlay());
+        return new ResidentProtectionRuntime(
+            () => orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly),
+            CreateNativeSubmitRuntimeSet(sanitizer, layout));
     }
 
     internal static NativeSubmitRuntime? CreateNativeSubmitRuntime(ISanitizer sanitizer, DefaultStorageLayout layout)
@@ -327,10 +343,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _toggleItem;
     private readonly ToolStripMenuItem _versionItem;
     private readonly SingleInstanceEnforcement? _singleInstanceEnforcement;
-    private readonly Func<NativeSubmitRuntimeSet?>? _nativeSubmitRuntimeFactory;
+    private Func<NativeSubmitRuntimeSet?>? _nativeSubmitRuntimeFactory;
     private readonly Func<IFirstRunSetupController> _firstRunSetupControllerFactory;
     private readonly Action<FirstRunSetupResult?>? _firstRunSetupCompleted;
-    private readonly string _localProtectionStatus;
+    private readonly Func<ResidentProtectionRuntime> _recoveredRuntimeFactory;
+    private string _localProtectionStatus;
     private LocalProtectionStatusForm? _localProtectionStatusForm;
     private int _firstRunSetupScheduled;
     private int _profileVerificationInProgress;
@@ -368,7 +385,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         Func<NativeSubmitRuntimeSet?>? nativeSubmitRuntimeFactory = null,
         Func<IFirstRunSetupController>? firstRunSetupControllerFactory = null,
         Action<FirstRunSetupResult?>? firstRunSetupCompleted = null,
-        string localProtectionStatus = LocalProtectionRecovery.ReadyCode)
+        string localProtectionStatus = LocalProtectionRecovery.ReadyCode,
+        Func<ResidentProtectionRuntime>? recoveredRuntimeFactory = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
@@ -381,6 +399,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _firstRunSetupControllerFactory = firstRunSetupControllerFactory ?? (() => new FirstRunSetupController());
         _firstRunSetupCompleted = firstRunSetupCompleted;
         _localProtectionStatus = localProtectionStatus;
+        _recoveredRuntimeFactory = recoveredRuntimeFactory ?? (() =>
+            WindowsTrayApp.CreateResidentProtectionRuntime(Sanitizer.CreateProduction(_layout), _layout));
 
         _activationWindow = new Form
         {
@@ -561,10 +581,14 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private void RefreshStatus()
     {
         _versionItem.Text = TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion);
-        if (string.Equals(_localProtectionStatus, LocalProtectionRecovery.RecoveryRequiredCode, StringComparison.Ordinal))
+        if (!string.Equals(_localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
             _notifyIcon.Text = TrayStatusFormatter.FormatRecoveryRequiredNotifyIconText(_localProtectionStatus);
-            _statusItem.Text = $"local_protection={_localProtectionStatus} protected_send=blocked repair_required=true";
+            var repairRequired = string.Equals(
+                _localProtectionStatus,
+                LocalProtectionRecovery.RecoveryRequiredCode,
+                StringComparison.Ordinal);
+            _statusItem.Text = $"local_protection={_localProtectionStatus} protected_send=blocked repair_required={repairRequired.ToString().ToLowerInvariant()}";
         }
         else
         {
@@ -593,10 +617,15 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private LocalProtectionStatusView CreateLocalProtectionStatusView()
     {
-        var inspection = LocalProtectionRecovery.Inspect(_layout);
-        var localProtectionStatus = inspection.Succeeded
-            ? LocalProtectionRecovery.ReadyCode
-            : inspection.Code;
+        var localProtectionStatus = _localProtectionStatus;
+        if (string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
+        {
+            var inspection = LocalProtectionRecovery.Inspect(_layout);
+            localProtectionStatus = inspection.Succeeded
+                ? LocalProtectionRecovery.ReadyCode
+                : inspection.Code;
+        }
+
         var state = _controller.State;
         return LocalProtectionStatusView.Create(
             localProtectionStatus,
@@ -663,9 +692,13 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             return;
         }
 
+        _localProtectionStatus = "local_protection_reloading";
+        RefreshStatus();
         var result = LocalProtectionRecovery.Recover(_layout, confirmed: true);
         if (!result.Succeeded)
         {
+            _localProtectionStatus = LocalProtectionRecovery.RecoveryRequiredCode;
+            RefreshStatus();
             MessageBox.Show(
                 $"Local protection repair could not be completed. status={result.Code}",
                 "Codex Redaction Gate - Repair local protection",
@@ -674,13 +707,46 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             return;
         }
 
-        MessageBox.Show(
-            "Local protection was repaired. Code Sanitizer will restart before protected Send is re-enabled.",
-            "Codex Redaction Gate - Repair local protection",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Information);
-        Application.Restart();
-        ExitThread();
+        try
+        {
+            var runtime = _recoveredRuntimeFactory();
+            if (runtime.NativeSubmitRuntimeSet is null || !_controller.ReloadResidentRuntime(runtime))
+            {
+                _localProtectionStatus = LocalProtectionRecovery.RecoveryRequiredCode;
+                RefreshStatus();
+                MessageBox.Show(
+                    "Local protection was repaired, but protected Send could not be reactivated. It remains blocked.",
+                    "Codex Redaction Gate - Repair local protection",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            _nativeSubmitRuntimeFactory = () =>
+                _recoveredRuntimeFactory().NativeSubmitRuntimeSet;
+            _localProtectionStatus = LocalProtectionRecovery.ReadyCode;
+            RefreshStatus();
+            var protectedSendActive = _controller.State.NativeSubmitEnabled
+                && _controller.State.ComposerProtected;
+            MessageBox.Show(
+                protectedSendActive
+                    ? "Local protection was repaired and protected Send is active again."
+                    : "Local protection was repaired. Protected Send remains blocked until profile verification succeeds.",
+                "Codex Redaction Gate - Repair local protection",
+                MessageBoxButtons.OK,
+                protectedSendActive ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "local_protection_recovery", "runtime_reload_failed");
+            _localProtectionStatus = LocalProtectionRecovery.RecoveryRequiredCode;
+            RefreshStatus();
+            MessageBox.Show(
+                "Local protection was repaired, but protected Send could not be reactivated. It remains blocked.",
+                "Codex Redaction Gate - Repair local protection",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
     }
 
     private void OpenCommand(TrayLocalCommand command)

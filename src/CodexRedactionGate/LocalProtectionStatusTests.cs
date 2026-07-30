@@ -126,6 +126,31 @@ public sealed class LocalProtectionStatusTests
         Assert.That(view.Rows[2].Consequence, Does.Contain("live ingress"));
     }
 
+    [Test]
+    public void StatusView_ReportsRecoveryRuntimeReplacementAsBlockedUntilTheReadyStateIsPublished()
+    {
+        var state = ProtectedTrayState() with
+        {
+            NativeSubmitEnabled = false,
+            ComposerProtected = false,
+            LastStatus = "test.secret.com"
+        };
+
+        var replacing = LocalProtectionStatusView.Create(
+            "local_protection_reloading",
+            state,
+            ProjectFileProtectionStatusValues.NotConfigured);
+        var ready = LocalProtectionStatusView.Create(
+            LocalProtectionRecovery.ReadyCode,
+            ProtectedTrayState(),
+            ProjectFileProtectionStatusValues.NotConfigured);
+
+        Assert.That(replacing.Rows[0].OperationalState, Is.EqualTo("unavailable"));
+        Assert.That(replacing.Rows[0].Consequence, Does.Contain("unavailable"));
+        Assert.That(replacing.RenderText(), Does.Not.Contain("test.secret.com"));
+        Assert.That(ready.Rows[0].OperationalState, Is.EqualTo("ready"));
+    }
+
     private static TrayProtectionState ProtectedTrayState()
     {
         return new TrayProtectionState(

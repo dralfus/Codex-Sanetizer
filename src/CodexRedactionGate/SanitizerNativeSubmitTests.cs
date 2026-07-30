@@ -1171,17 +1171,26 @@ public partial class SanitizerTests
 
     internal sealed class FakeTrayHotkeyHost : ITrayHotkeyHost
     {
+        private Action? _onTriggered;
+
         public HotkeyBinding Binding { get; } = new("fake-hotkey", "Ctrl+Enter", "test");
 
         public string? LastErrorCode { get; private set; }
 
         public bool Start(Action onTriggered)
         {
+            _onTriggered = onTriggered;
             return true;
         }
 
         public void Stop()
         {
+            _onTriggered = null;
+        }
+
+        public void Trigger()
+        {
+            _onTriggered?.Invoke();
         }
     }
 
@@ -2631,6 +2640,146 @@ public class HandleButtonClickTests : SanitizerTests
 
         Assert.That(controller.GetCurrentSnapshot().State, Is.EqualTo(controller.State));
         Assert.That(controller.GetCurrentSnapshot().Generation, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TrayProtectionController_ReloadResidentRuntimeSwapsApplyOnlyAndNativeSubmitTogether()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var candidateHook = new FakeNativeSubmitHookHost();
+        var hotkey = new FakeTrayHotkeyHost();
+        var profile = CreateProtectedProfile();
+        var oldApplyCalls = 0;
+        var candidateApplyCalls = 0;
+        var candidateSubmitCalls = 0;
+        var controller = new TrayProtectionController(
+            hotkey,
+            () =>
+            {
+                oldApplyCalls++;
+                return CreateSubmittedResult(profile.ProfileId);
+            },
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var candidateRuntime = new NativeSubmitRuntime(
+            candidateHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                candidateSubmitCalls++;
+                return CreateSubmittedResult(profile.ProfileId);
+            },
+            profile);
+        var replacement = new ResidentProtectionRuntime(
+            () =>
+            {
+                candidateApplyCalls++;
+                return CreateSubmittedResult(profile.ProfileId);
+            },
+            new NativeSubmitRuntimeSet(candidateHook, new[] { candidateRuntime }));
+
+        controller.Start();
+
+        Assert.That(controller.ReloadResidentRuntime(replacement), Is.True);
+
+        hotkey.Trigger();
+        candidateHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(oldApplyCalls, Is.EqualTo(0));
+        Assert.That(candidateApplyCalls, Is.EqualTo(1));
+        Assert.That(candidateSubmitCalls, Is.EqualTo(1));
+        Assert.That(oldHook.Started, Is.False);
+        Assert.That(controller.GetCurrentSnapshot().Generation, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TrayProtectionController_FailedResidentRuntimeReloadRetainsTheExistingBlockedRuntime()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var failedHook = new FakeNativeSubmitHookHost { StartResult = false };
+        var hotkey = new FakeTrayHotkeyHost();
+        var profile = CreateProtectedProfile();
+        var oldApplyCalls = 0;
+        var candidateApplyCalls = 0;
+        var controller = new TrayProtectionController(
+            hotkey,
+            () =>
+            {
+                oldApplyCalls++;
+                return CreateSubmittedResult(profile.ProfileId);
+            },
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var failedRuntime = new NativeSubmitRuntime(
+            failedHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var replacement = new ResidentProtectionRuntime(
+            () =>
+            {
+                candidateApplyCalls++;
+                return CreateSubmittedResult(profile.ProfileId);
+            },
+            new NativeSubmitRuntimeSet(failedHook, new[] { failedRuntime }));
+
+        controller.Start();
+
+        Assert.That(controller.ReloadResidentRuntime(replacement), Is.False);
+
+        hotkey.Trigger();
+
+        Assert.That(oldApplyCalls, Is.EqualTo(1));
+        Assert.That(candidateApplyCalls, Is.EqualTo(0));
+        Assert.That(oldHook.Started, Is.True);
+        Assert.That(controller.GetCurrentSnapshot().Generation, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void TrayProtectionController_InFlightApplyOnlyCannotOverwriteAResidentRuntimeReplacement()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var candidateHook = new FakeNativeSubmitHookHost();
+        var hotkey = new FakeTrayHotkeyHost();
+        var profile = CreateProtectedProfile();
+        using var applyStarted = new ManualResetEventSlim(false);
+        using var releaseApply = new ManualResetEventSlim(false);
+        var controller = new TrayProtectionController(
+            hotkey,
+            () =>
+            {
+                applyStarted.Set();
+                releaseApply.Wait();
+                return CreateSubmittedResult(profile.ProfileId);
+            },
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var candidateRuntime = new NativeSubmitRuntime(
+            candidateHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var replacement = new ResidentProtectionRuntime(
+            () => CreateSubmittedResult(profile.ProfileId),
+            new NativeSubmitRuntimeSet(candidateHook, new[] { candidateRuntime }));
+
+        controller.Start();
+        var applyTask = System.Threading.Tasks.Task.Run(hotkey.Trigger);
+        Assert.That(applyStarted.Wait(TimeSpan.FromSeconds(2)), Is.True);
+
+        Assert.That(controller.ReloadResidentRuntime(replacement), Is.True);
+        releaseApply.Set();
+        applyTask.Wait();
+
+        Assert.That(controller.GetCurrentSnapshot().Generation, Is.EqualTo(1));
+        Assert.That(controller.GetCurrentSnapshot().State.LastStatus, Is.EqualTo("native_submit_runtime_reloaded"));
+        Assert.That(candidateHook.Started, Is.True);
     }
 
     [Test]

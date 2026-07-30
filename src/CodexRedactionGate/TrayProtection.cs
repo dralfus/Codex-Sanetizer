@@ -15,6 +15,7 @@ namespace CodexRedactionGate;
 internal sealed record ProtectionSnapshot(
     long Generation,
     TrayProtectionState State,
+    Func<OsInteractionResult> ApplyOnlyRunner,
     NativeSubmitRuntimeSet? RuntimeSet,
     bool HookReady,
     ISendControlDiscovery? SendControlDiscovery,
@@ -116,6 +117,7 @@ internal sealed class TrayProtectionController
         _currentSnapshot = new ProtectionSnapshot(
             0,
             state,
+            _applyOnlyRunner,
             nativeSubmitHookHost is null ? null : new NativeSubmitRuntimeSet(nativeSubmitHookHost, runtimes.ToArray()),
             HookReady: false,
             sendControlDiscovery,
@@ -225,34 +227,57 @@ internal sealed class TrayProtectionController
         lock (_reloadGate)
         {
             var previous = ReadSnapshot();
-            var candidate = TryBuildCandidateSnapshot(previous, runtimeSet);
-            if (candidate is null)
-            {
-                return false;
-            }
+            return ReloadRuntime(previous, runtimeSet, previous.ApplyOnlyRunner);
+        }
+    }
 
-            if (!previous.State.Enabled)
-            {
-                previous.RuntimeSet?.HookHost.Stop();
-                PublishSnapshot(candidate);
-                return true;
-            }
+    public bool ReloadResidentRuntime(ResidentProtectionRuntime runtime)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        if (runtime.NativeSubmitRuntimeSet is null)
+        {
+            return false;
+        }
 
-            if (!StartNativeSubmitHook(candidate.RuntimeSet!))
-            {
-                candidate.RuntimeSet!.HookHost.Stop();
-                return false;
-            }
+        lock (_reloadGate)
+        {
+            var previous = ReadSnapshot();
+            return ReloadRuntime(previous, runtime.NativeSubmitRuntimeSet, runtime.ApplyOnlyRunner);
+        }
+    }
 
+    private bool ReloadRuntime(
+        ProtectionSnapshot previous,
+        NativeSubmitRuntimeSet runtimeSet,
+        Func<OsInteractionResult> applyOnlyRunner)
+    {
+        var candidate = TryBuildCandidateSnapshot(previous, runtimeSet, applyOnlyRunner);
+        if (candidate is null)
+        {
+            return false;
+        }
+
+        if (!previous.State.Enabled)
+        {
+            previous.RuntimeSet?.HookHost.Stop();
             PublishSnapshot(candidate);
-            if (previous.RuntimeSet is not null
-                && !ReferenceEquals(previous.RuntimeSet.HookHost, candidate.RuntimeSet!.HookHost))
-            {
-                previous.RuntimeSet.HookHost.Stop();
-            }
-
             return true;
         }
+
+        if (!StartNativeSubmitHook(candidate.RuntimeSet!))
+        {
+            candidate.RuntimeSet!.HookHost.Stop();
+            return false;
+        }
+
+        PublishSnapshot(candidate);
+        if (previous.RuntimeSet is not null
+            && !ReferenceEquals(previous.RuntimeSet.HookHost, candidate.RuntimeSet!.HookHost))
+        {
+            previous.RuntimeSet.HookHost.Stop();
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -270,10 +295,12 @@ internal sealed class TrayProtectionController
     /// </summary>
     private ProtectionSnapshot? TryBuildCandidateSnapshot(
         ProtectionSnapshot previous,
-        NativeSubmitRuntimeSet runtimeSet)
+        NativeSubmitRuntimeSet runtimeSet,
+        Func<OsInteractionResult> applyOnlyRunner)
     {
         try
         {
+            ArgumentNullException.ThrowIfNull(applyOnlyRunner);
             var runtimes = runtimeSet.Runtimes?.ToArray() ?? Array.Empty<NativeSubmitRuntime>();
             if (runtimeSet.HookHost is null
                 || runtimes.Length == 0
@@ -301,6 +328,7 @@ internal sealed class TrayProtectionController
             return new ProtectionSnapshot(
                 previous.Generation + 1,
                 state,
+                applyOnlyRunner,
                 candidateRuntimeSet,
                 HookReady: previous.State.Enabled,
                 previous.SendControlDiscovery,
@@ -346,7 +374,7 @@ internal sealed class TrayProtectionController
     private void RunApplyOnlyOnce()
     {
         var snapshot = ReadSnapshot();
-        var result = _applyOnlyRunner();
+        var result = snapshot.ApplyOnlyRunner();
         var state = new TrayProtectionState(
             Enabled: true,
             Mode: "ApplyOnly",
@@ -370,7 +398,7 @@ internal sealed class TrayProtectionController
             ProjectFileStatus: snapshot.State.ProjectFileStatus,
             ResidentProcess: snapshot.State.ResidentProcess,
             SetupRequired: snapshot.State.SetupRequired);
-        PublishSnapshot(snapshot with { State = state });
+        PublishSnapshotIfCurrent(snapshot, snapshot with { State = state });
     }
 
     private bool StartNativeSubmitHook(NativeSubmitRuntimeSet runtimeSet)
@@ -987,6 +1015,17 @@ internal sealed class TrayProtectionController
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private bool PublishSnapshotIfCurrent(ProtectionSnapshot expected, ProtectionSnapshot replacement)
+    {
+        if (!ReferenceEquals(Interlocked.CompareExchange(ref _currentSnapshot, replacement, expected), expected))
+        {
+            return false;
+        }
+
+        StateChanged?.Invoke(this, EventArgs.Empty);
+        return true;
+    }
+
     private NativeSubmitInterceptionResult RememberSnapshot(
         ProtectionSnapshot snapshot,
         NativeSubmitInterceptionResult classification,
@@ -1059,6 +1098,10 @@ internal sealed record NativeSubmitRuntime(
 internal sealed record NativeSubmitRuntimeSet(
     INativeSubmitHookHost HookHost,
     IReadOnlyList<NativeSubmitRuntime> Runtimes);
+
+internal sealed record ResidentProtectionRuntime(
+    Func<OsInteractionResult> ApplyOnlyRunner,
+    NativeSubmitRuntimeSet? NativeSubmitRuntimeSet);
 
 internal static class TrayStatusFormatter
 {

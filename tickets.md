@@ -499,20 +499,20 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **What to build:** After a confirmed local DPAPI repair, keep Code Sanitizer resident and safely replace the complete sanitizer, local mapping vault, apply-only path, and native-submit runtime as one fail-closed transaction. The tray status must then report the new ready state without requiring an application restart.
 
-**Blocked by:** 285. Show local protection capabilities and active state in the tray UI; 288. Keep DPAPI recovery fail-closed across incomplete and concurrent attempts.
+**Blocked by:** 288. Keep DPAPI recovery fail-closed across incomplete and concurrent attempts.
 
 **Do not:** Re-enable only one hook while another path still holds the old recovery-blocked sanitizer; permit a prompt during replacement; silently use a partially created vault; claim recovery is ready if the new runtime cannot be fully activated; or expose raw paths, prompts, mappings, exception text, or protected values.
 
-- [ ] Resident recovery enters a visible raw-free replacement state that blocks selected-app Send until the entire new runtime is ready.
-- [ ] A successful repair constructs a fresh production sanitizer and atomically swaps every resident submission path, then updates the tray and local-status view to `ready` without restarting the process.
-- [ ] A failed reload leaves the previous fail-closed runtime active and reports one stable raw-free degraded or recovery-required state.
-- [ ] Tests prove apply-only and native-submit paths both use the same new vault after recovery, no in-flight send bypasses replacement, and UI status updates remain raw-free.
+- [x] Resident recovery enters a visible raw-free replacement state that blocks selected-app Send until the entire new runtime is ready.
+- [x] A successful repair constructs a fresh production sanitizer and atomically swaps every resident submission path, then updates the tray and local-status view to `ready` without restarting the process.
+- [x] A failed reload leaves the previous fail-closed runtime active and reports one stable raw-free degraded or recovery-required state.
+- [x] Tests prove apply-only and native-submit paths both use the same new vault after recovery, no in-flight send bypasses replacement, and UI status updates remain raw-free.
 
 ## 290. Make tray profile remediation an explicit verification or retry workflow
 
 **What to build:** Make the local-status action truthful for both `setup required` and `degraded` prompt protection. When setup is required it must run the focused verification flow; when setup is already complete but the live hook is degraded it must clearly retry activation rather than claim that the profile was re-verified.
 
-**Blocked by:** 285. Show local protection capabilities and active state in the tray UI.
+**Blocked by:** 289. Atomically replace the resident protection runtime after confirmed DPAPI recovery.
 
 **Do not:** Freeze the tray UI during focused verification; say a profile was verified when only a runtime reload occurred; create parallel setup flows; or enable protected Send after a failed retry.
 
@@ -525,7 +525,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **What to build:** Add deterministic WinForms/tray integration coverage for the local protection status view so status rendering and refresh behavior are verified through the tray context rather than only through an injected row mapper.
 
-**Blocked by:** 285. Show local protection capabilities and active state in the tray UI.
+**Blocked by:** 289. Atomically replace the resident protection runtime after confirmed DPAPI recovery.
 
 **Do not:** Depend on a real Codex or ChatGPT window, user focus, timers, raw status diagnostics, or nondeterministic desktop timing in automated tests.
 
