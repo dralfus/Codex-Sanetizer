@@ -331,7 +331,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly Func<IFirstRunSetupController> _firstRunSetupControllerFactory;
     private readonly Action<FirstRunSetupResult?>? _firstRunSetupCompleted;
     private readonly string _localProtectionStatus;
+    private LocalProtectionStatusForm? _localProtectionStatusForm;
     private int _firstRunSetupScheduled;
+    private int _profileVerificationInProgress;
 
     internal bool IsTrayIconVisible => _notifyIcon.Visible;
 
@@ -402,6 +404,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         menu.Items.Add(_statusItem);
         menu.Items.Add(_toggleItem);
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new ToolStripMenuItem("Open local protection status", null, (_, _) => OpenLocalProtectionStatus()));
         menu.Items.Add(new ToolStripMenuItem("Open local restore", null, (_, _) => OpenLocalRestore()));
         menu.Items.Add(new ToolStripMenuItem("Open sensitive terms", null, (_, _) => OpenDictionaryManagement()));
         menu.Items.Add(new ToolStripMenuItem("Verify Codex Desktop profile", null, (_, _) => OpenCommand(TrayMenuContent.VerifyCodexProfileCommand)));
@@ -527,6 +530,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             StopProtectionAndHideIcon();
             SingleInstanceEnforcement.ClearActivationWindow("tray");
             _activationWindow.Dispose();
+            _localProtectionStatusForm?.Dispose();
             _notifyIcon.Dispose();
         }
 
@@ -569,6 +573,82 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
 
         _toggleItem.Text = _controller.State.Enabled ? "Stop protection" : "Start protection";
+        _localProtectionStatusForm?.RefreshView();
+    }
+
+    private void OpenLocalProtectionStatus()
+    {
+        if (_localProtectionStatusForm is { IsDisposed: false })
+        {
+            _localProtectionStatusForm.Activate();
+            return;
+        }
+
+        _localProtectionStatusForm = new LocalProtectionStatusForm(
+            CreateLocalProtectionStatusView,
+            RunLocalProtectionStatusAction);
+        _localProtectionStatusForm.FormClosed += (_, _) => _localProtectionStatusForm = null;
+        _localProtectionStatusForm.Show();
+    }
+
+    private LocalProtectionStatusView CreateLocalProtectionStatusView()
+    {
+        var inspection = LocalProtectionRecovery.Inspect(_layout);
+        var localProtectionStatus = inspection.Succeeded
+            ? LocalProtectionRecovery.ReadyCode
+            : inspection.Code;
+        var state = _controller.State;
+        return LocalProtectionStatusView.Create(
+            localProtectionStatus,
+            state,
+            ProjectFileProtectionStatusInspector.Inspect(_layout));
+    }
+
+    private void RunLocalProtectionStatusAction(LocalProtectionStatusAction action)
+    {
+        switch (action)
+        {
+            case LocalProtectionStatusAction.VerifyProfiles:
+                VerifyProfilesFromTray();
+                break;
+            case LocalProtectionStatusAction.RepairLocalProtection:
+                RepairLocalProtection();
+                break;
+        }
+    }
+
+    private void VerifyProfilesFromTray()
+    {
+        if (Interlocked.Exchange(ref _profileVerificationInProgress, 1) != 0)
+        {
+            return;
+        }
+
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            var result = FirstRunSetupBackgroundRunner.Run(
+                _layout,
+                _firstRunSetupControllerFactory,
+                exception => _crashDiagnostics.Capture(exception, "tray_profile_verification", "verification_failed"));
+            try
+            {
+                _activationWindow.BeginInvoke(new MethodInvoker(() =>
+                {
+                    try
+                    {
+                        CompleteFirstRunSetup(result);
+                    }
+                    finally
+                    {
+                        Volatile.Write(ref _profileVerificationInProgress, 0);
+                    }
+                }));
+            }
+            catch (InvalidOperationException)
+            {
+                Volatile.Write(ref _profileVerificationInProgress, 0);
+            }
+        });
     }
 
     private void RepairLocalProtection()

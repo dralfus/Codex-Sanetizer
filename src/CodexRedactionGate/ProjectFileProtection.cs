@@ -83,6 +83,13 @@ public static class ProtectedWorkspaceStore
             path);
     }
 
+    internal static bool HasProtectedWorkspace(DefaultStorageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        return LoadDocument(DefaultPath(layout)).Workspaces.Any(record => record.Enabled);
+    }
+
     private static ProtectedWorkspaceDocument LoadDocument(string path)
     {
         if (!File.Exists(path))
@@ -105,6 +112,25 @@ public static class ProtectedWorkspaceStore
     {
         var json = JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true });
         AtomicFileWriter.WriteAllBytes(path, Encoding.UTF8.GetBytes(json));
+    }
+}
+
+internal static class ProjectFileProtectionStatusInspector
+{
+    public static string Inspect(DefaultStorageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
+        try
+        {
+            return ProtectedWorkspaceStore.HasProtectedWorkspace(layout)
+                ? ProjectFileProtectionStatusValues.BrokerDemoOnly
+                : ProjectFileProtectionStatusValues.NotConfigured;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return ProjectFileProtectionStatusValues.UnprotectedNoBroker;
+        }
     }
 }
 

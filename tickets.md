@@ -450,9 +450,9 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Present DPAPI as an unsafe on/off switch; claim that a successful self-test proves production DPAPI readiness; collapse `broker demo`, `unsupported`, and `live protected` into one green file-protection label; or include raw paths, sensitive terms, prompts, mappings, or exception details in the status view.
 
-- [ ] The tray offers a dedicated local status view with separate rows for `Local DPAPI protection`, `Automatic prompt protection`, and `Project-file protection`.
-- [ ] Each row shows a stable capability state and an operational state: DPAPI is `ready`, `recovery required`, or `unavailable`; prompt protection is `active`, `setup required`, `degraded`, or `disabled`; project-file protection is `live protected`, `broker demo only`, `unsupported`, or `not configured`.
-- [ ] The view explains the immediate consequence of every non-green state and offers only safe relevant actions, such as profile verification, opening recovery, or opening protected-file management.
+- [x] The tray offers a dedicated local status view with separate rows for `Local DPAPI protection`, `Automatic prompt protection`, and `Project-file protection`.
+- [x] Each row shows a stable capability state and an operational state: DPAPI is `ready`, `recovery required`, or `unavailable`; prompt protection is `active`, `setup required`, `degraded`, or `disabled`; project-file protection is `live protected`, `broker demo only`, `unsupported`, or `not configured`.
+- [x] The view explains the immediate consequence of every non-green state and offers only safe relevant actions, such as profile verification, opening recovery, or opening protected-file management.
 - [ ] Tray status updates after profile verification, protection enable/disable, DPAPI recovery, and file-policy changes without requiring a restart; tests prove the displayed states remain raw-free and truthful.
 
 ## 286. Exclude selected files, including .env, from cloud file context
@@ -494,3 +494,42 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 - [x] `--doctor`, tray startup, and the protected Send gate report one raw-free recovery-required status when an incomplete transaction or recovery backup accompanies an incomplete normal state; they do not create fresh local protection implicitly. A backup retained after a verified successful recovery remains locally discoverable without disabling the fresh ready state.
 - [x] Cleanup and restore failures, including unexpected local file-operation failures, are contained and return one raw-free recovery-failed result rather than escaping an exception.
 - [x] Automated tests prove byte-for-byte preservation of both secret and vault, failed-rollback follow-up inspection/Send blocking, and a competing recovery invocation that cannot initialize state without the completed confirmed transaction.
+
+## 289. Atomically replace the resident protection runtime after confirmed DPAPI recovery
+
+**What to build:** After a confirmed local DPAPI repair, keep Code Sanitizer resident and safely replace the complete sanitizer, local mapping vault, apply-only path, and native-submit runtime as one fail-closed transaction. The tray status must then report the new ready state without requiring an application restart.
+
+**Blocked by:** 285. Show local protection capabilities and active state in the tray UI; 288. Keep DPAPI recovery fail-closed across incomplete and concurrent attempts.
+
+**Do not:** Re-enable only one hook while another path still holds the old recovery-blocked sanitizer; permit a prompt during replacement; silently use a partially created vault; claim recovery is ready if the new runtime cannot be fully activated; or expose raw paths, prompts, mappings, exception text, or protected values.
+
+- [ ] Resident recovery enters a visible raw-free replacement state that blocks selected-app Send until the entire new runtime is ready.
+- [ ] A successful repair constructs a fresh production sanitizer and atomically swaps every resident submission path, then updates the tray and local-status view to `ready` without restarting the process.
+- [ ] A failed reload leaves the previous fail-closed runtime active and reports one stable raw-free degraded or recovery-required state.
+- [ ] Tests prove apply-only and native-submit paths both use the same new vault after recovery, no in-flight send bypasses replacement, and UI status updates remain raw-free.
+
+## 290. Make tray profile remediation an explicit verification or retry workflow
+
+**What to build:** Make the local-status action truthful for both `setup required` and `degraded` prompt protection. When setup is required it must run the focused verification flow; when setup is already complete but the live hook is degraded it must clearly retry activation rather than claim that the profile was re-verified.
+
+**Blocked by:** 285. Show local protection capabilities and active state in the tray UI.
+
+**Do not:** Freeze the tray UI during focused verification; say a profile was verified when only a runtime reload occurred; create parallel setup flows; or enable protected Send after a failed retry.
+
+- [ ] The status view exposes distinct safe actions and wording for setup verification and degraded-hook retry.
+- [ ] Each action runs without blocking the tray UI and prevents duplicate concurrent attempts.
+- [ ] The relevant status is refreshed after completion and always reflects actual hook activation, not only the persisted profile record.
+- [ ] Tests cover setup required, verified-but-degraded, retry failure, cancellation, and raw-free public failure text.
+
+## 291. Add end-to-end tray local-status lifecycle coverage
+
+**What to build:** Add deterministic WinForms/tray integration coverage for the local protection status view so status rendering and refresh behavior are verified through the tray context rather than only through an injected row mapper.
+
+**Blocked by:** 285. Show local protection capabilities and active state in the tray UI.
+
+**Do not:** Depend on a real Codex or ChatGPT window, user focus, timers, raw status diagnostics, or nondeterministic desktop timing in automated tests.
+
+- [ ] Tests prove the status command is reachable from the tray and opens one modeless status window.
+- [ ] Tests prove enabling/disabling protection and a persisted project-file policy change refresh the rendered rows without recreating the tray process.
+- [ ] Tests exercise disposal/close behavior so repeated status refreshes do not retain controls or timers.
+- [ ] Raw-free tests prove no rendered UI string contains synthetic paths, prompts, sensitive terms, mappings, or exception text.
