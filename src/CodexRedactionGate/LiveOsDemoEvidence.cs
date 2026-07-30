@@ -80,6 +80,13 @@ public static class LiveOsDemoEvidence
         var settingEnabled = ReadSendModeSetting(resolvedLayout);
 
         var diagnostics = CreateDiagnostics(resolvedLayout, evidence, settingEnabled);
+        if (LocalProtectionRecovery.Inspect(resolvedLayout).RecoveryRequired)
+        {
+            return new LiveOsDemoSendGateResult(
+                false,
+                LocalProtectionRecovery.RecoveryRequiredCode,
+                diagnostics);
+        }
 
         if (!settingEnabled)
         {

@@ -414,9 +414,16 @@ public partial class SanitizerTests
             Assert.That(enabled.Status, Is.EqualTo("send_gate_enabled"));
             Assert.That(enabled.Diagnostics["send_mode_setting_enabled"], Is.EqualTo("true"));
 
+            var recoveryDirectory = Path.Combine(layout.RootDirectory, "recovery");
+            Directory.CreateDirectory(recoveryDirectory);
+            File.WriteAllText(Path.Combine(recoveryDirectory, "incomplete-recovery"), "incomplete");
+            var recoveryRequired = LiveOsDemoEvidence.Check(layout);
+            Assert.That(recoveryRequired.Enabled, Is.False);
+            Assert.That(recoveryRequired.Status, Is.EqualTo(LocalProtectionRecovery.RecoveryRequiredCode));
+
             var disabledAgain = LiveOsDemoEvidence.DisableSendMode(layout);
             Assert.That(disabledAgain.Enabled, Is.False);
-            Assert.That(disabledAgain.Status, Is.EqualTo(OsInteractionStatusIds.SafetyDisabled));
+            Assert.That(disabledAgain.Status, Is.EqualTo(LocalProtectionRecovery.RecoveryRequiredCode));
         }
         finally
         {

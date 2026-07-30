@@ -26,6 +26,8 @@ public sealed class Sanitizer : ISanitizer
     private readonly SanitizedTextRenderer _renderer;
     private readonly SanitizedOutputVerifier _verifier;
     private readonly SanitizationResultAssembler _resultAssembler;
+    private readonly DefaultStorageLayout? _localProtectionLayout;
+    private readonly bool _permanentlyRecoveryBlocked;
 
     public Sanitizer()
         : this(DefaultStorageLayout.CreateDefault())
@@ -36,7 +38,9 @@ public sealed class Sanitizer : ISanitizer
         : this(
             CreateProductionVault(layout),
             new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout)).LoadTerms(),
-            LoadProductionPolicy(layout).ActivePolicy)
+            LoadProductionPolicy(layout).ActivePolicy,
+            CreateProductionSecretScanner(),
+            localProtectionLayout: layout)
     {
     }
 
@@ -63,7 +67,9 @@ public sealed class Sanitizer : ISanitizer
         IReadOnlyList<DictionaryTerm> dictionaryTerms,
         RedactionPolicy policy,
         ISecretScanner? secretScanner,
-        IAuditSink? auditSink = null)
+        IAuditSink? auditSink = null,
+        DefaultStorageLayout? localProtectionLayout = null,
+        bool permanentlyRecoveryBlocked = false)
     {
         ArgumentNullException.ThrowIfNull(mappingVault);
         ArgumentNullException.ThrowIfNull(dictionaryTerms);
@@ -79,6 +85,8 @@ public sealed class Sanitizer : ISanitizer
         _renderer = new SanitizedTextRenderer();
         _verifier = new SanitizedOutputVerifier();
         _resultAssembler = new SanitizationResultAssembler(auditSink);
+        _localProtectionLayout = localProtectionLayout;
+        _permanentlyRecoveryBlocked = permanentlyRecoveryBlocked;
     }
 
     public static Sanitizer CreateProduction(IReadOnlyList<DictionaryTerm> dictionaryTerms)
@@ -86,11 +94,10 @@ public sealed class Sanitizer : ISanitizer
         var layout = DefaultStorageLayout.CreateDefault();
         var managedTerms = new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout)).LoadTerms();
         var managedPolicy = LoadProductionPolicy(layout);
-        return new Sanitizer(
-            CreateProductionVault(layout),
+        return CreateProductionSanitizer(
+            layout,
             managedTerms.Concat(dictionaryTerms).ToArray(),
-            managedPolicy.ActivePolicy,
-            CreateProductionSecretScanner());
+            managedPolicy.ActivePolicy);
     }
 
     internal static Sanitizer CreateProduction(ManagedPolicyLoadResult managedPolicy)
@@ -99,11 +106,7 @@ public sealed class Sanitizer : ISanitizer
 
         var layout = DefaultStorageLayout.CreateDefault();
         var managedTerms = new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout)).LoadTerms();
-        return new Sanitizer(
-            CreateProductionVault(layout),
-            managedTerms,
-            managedPolicy.ActivePolicy,
-            CreateProductionSecretScanner());
+        return CreateProductionSanitizer(layout, managedTerms, managedPolicy.ActivePolicy);
     }
 
     public static Sanitizer CreateProduction(
@@ -114,11 +117,10 @@ public sealed class Sanitizer : ISanitizer
 
         var managedTerms = new ManagedSensitiveDictionary(ManagedSensitiveDictionary.DefaultPath(layout)).LoadTerms();
         var managedPolicy = LoadProductionPolicy(layout);
-        return new Sanitizer(
-            CreateProductionVault(layout),
+        return CreateProductionSanitizer(
+            layout,
             managedTerms.Concat(dictionaryTerms ?? Array.Empty<DictionaryTerm>()).ToArray(),
-            managedPolicy.ActivePolicy,
-            CreateProductionSecretScanner());
+            managedPolicy.ActivePolicy);
     }
 
     internal static ManagedPolicyLoadResult LoadProductionPolicy(DefaultStorageLayout layout)
@@ -130,6 +132,20 @@ public sealed class Sanitizer : ISanitizer
     public SanitizationResult Sanitize(SanitizeRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        if (_permanentlyRecoveryBlocked)
+        {
+            return new RecoveryRequiredSanitizer().Sanitize(request);
+        }
+
+        using var recoveryLock = _localProtectionLayout is null
+            ? null
+            : LocalProtectionRecovery.AcquireTransactionLock(_localProtectionLayout);
+        if (_localProtectionLayout is not null
+            && LocalProtectionRecovery.InspectWhenTransactionLockHeld(_localProtectionLayout).RecoveryRequired)
+        {
+            return new RecoveryRequiredSanitizer().Sanitize(request);
+        }
 
         var stopwatch = Stopwatch.StartNew();
         var trace = new SanitizerDecisionTrace();
@@ -291,6 +307,11 @@ public sealed class Sanitizer : ISanitizer
     private static IMappingVault CreateProductionVault(DefaultStorageLayout layout)
     {
         ArgumentNullException.ThrowIfNull(layout);
+        if (LocalProtectionRecovery.Inspect(layout).RecoveryRequired)
+        {
+            throw new LocalProtectionRecoveryRequiredException();
+        }
+
         Directory.CreateDirectory(layout.RootDirectory);
         Directory.CreateDirectory(layout.VaultDirectory);
         FileMappingVault.MigrateLegacyDefaultVaultIfNeeded(layout);
@@ -309,6 +330,12 @@ public sealed class Sanitizer : ISanitizer
         failureReason = null;
         try
         {
+            if (LocalProtectionRecovery.Inspect(layout).RecoveryRequired)
+            {
+                failureReason = LocalProtectionRecovery.RecoveryRequiredCode;
+                return null;
+            }
+
             var secretProvider = new DpapiProtectedHmacSecretProvider(
                 Path.Combine(layout.RootDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName),
                 new WindowsDpapiDataProtector());
@@ -330,6 +357,30 @@ public sealed class Sanitizer : ISanitizer
             LocalCrashDiagnostics.CaptureDefault(ex, "vault_creation", "vault_creation_failed");
             return null;
         }
+    }
+
+    private static Sanitizer CreateProductionSanitizer(
+        DefaultStorageLayout layout,
+        IReadOnlyList<DictionaryTerm> dictionaryTerms,
+        RedactionPolicy policy)
+    {
+        if (LocalProtectionRecovery.Inspect(layout).RecoveryRequired)
+        {
+            return new Sanitizer(
+                new InMemoryHmacMappingVault(new byte[DpapiProtectedHmacSecretProvider.SecretSizeBytes]),
+                dictionaryTerms,
+                policy,
+                secretScanner: null,
+                localProtectionLayout: layout,
+                permanentlyRecoveryBlocked: true);
+        }
+
+        return new Sanitizer(
+            CreateProductionVault(layout),
+            dictionaryTerms,
+            policy,
+            CreateProductionSecretScanner(),
+            localProtectionLayout: layout);
     }
 
     private static void CaptureLocalCrash(string component, Exception ex)

@@ -490,7 +490,7 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Auto-initialize a fresh secret or vault merely because an incomplete recovery temporarily leaves both normal paths absent; let a second recovery bypass the original confirmation; expose file paths, exception details, mappings, prompts, or protected values; or enable protected Send after any incomplete recovery state.
 
-- [ ] A local recovery transaction is serialized across CLI and tray invocations, records incomplete recovery durably before moving artifacts, and clears that state only after a fully successful confirmed recovery.
-- [ ] `--doctor`, tray startup, and the protected Send gate report one raw-free recovery-required status when an incomplete transaction or retained recovery backup exists; they do not create fresh local protection implicitly.
-- [ ] Cleanup and restore failures, including unexpected local file-operation failures, are contained and return one raw-free recovery-failed result rather than escaping an exception.
-- [ ] Automated tests prove byte-for-byte preservation of both secret and vault, failed-rollback follow-up inspection/Send blocking, and a competing recovery invocation that cannot initialize state without the completed confirmed transaction.
+- [x] A local recovery transaction is serialized across CLI and tray invocations, records incomplete recovery durably before moving artifacts, and clears that state only after a fully successful confirmed recovery.
+- [x] `--doctor`, tray startup, and the protected Send gate report one raw-free recovery-required status when an incomplete transaction or recovery backup accompanies an incomplete normal state; they do not create fresh local protection implicitly. A backup retained after a verified successful recovery remains locally discoverable without disabling the fresh ready state.
+- [x] Cleanup and restore failures, including unexpected local file-operation failures, are contained and return one raw-free recovery-failed result rather than escaping an exception.
+- [x] Automated tests prove byte-for-byte preservation of both secret and vault, failed-rollback follow-up inspection/Send blocking, and a competing recovery invocation that cannot initialize state without the completed confirmed transaction.

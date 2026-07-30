@@ -134,6 +134,14 @@ public sealed class DpapiSecretLoadFailureException : InvalidOperationException
     }
 }
 
+internal sealed class LocalProtectionRecoveryRequiredException : InvalidOperationException
+{
+    public LocalProtectionRecoveryRequiredException()
+        : base("Local protection recovery is required.")
+    {
+    }
+}
+
 public sealed class WindowsDpapiDataProtector : IDataProtector
 {
     private const int CryptProtectUiForbidden = 0x1;

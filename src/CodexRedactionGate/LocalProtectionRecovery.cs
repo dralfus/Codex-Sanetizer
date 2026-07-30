@@ -18,6 +18,10 @@ public sealed record LocalProtectionRecoveryResult(
 
 public static class LocalProtectionRecovery
 {
+    private const string RecoveryDirectoryName = "recovery";
+    private const string RecoveryMarkerFileName = "incomplete-recovery";
+    private const string RecoveryLockFileName = "local-protection-recovery";
+
     public const string ReadyCode = "local_protection_ready";
     public const string RecoveryRequiredCode = "local_protection_recovery_required";
     public const string ConfirmationRequiredCode = "local_protection_recovery_confirmation_required";
@@ -33,26 +37,10 @@ public static class LocalProtectionRecovery
 
         try
         {
-            layout.EnsureDirectories();
-            var protector = dataProtector ?? new WindowsDpapiDataProtector();
-            var secretPath = SecretPath(layout);
-            var vaultPath = VaultPath(layout);
-            if (!File.Exists(secretPath) && File.Exists(vaultPath))
-            {
-                return RecoveryRequired();
-            }
-
-            var secret = new DpapiProtectedHmacSecretProvider(secretPath, protector).GetOrCreateSecret();
-            _ = FileMappingVault.CreateProtected(vaultPath, secret, protector);
-            return new LocalProtectionRecoveryResult(
-                Succeeded: true,
-                Code: ReadyCode,
-                RecoveryRequired: false,
-                ConfirmationRequired: false,
-                PreviousArtifactsPreserved: false,
-                VaultInitialized: File.Exists(vaultPath));
+            using var recoveryLock = AcquireTransactionLock(layout);
+            return InspectUnderLock(layout, dataProtector);
         }
-        catch (Exception exception) when (IsRecoverable(exception))
+        catch (Exception)
         {
             return RecoveryRequired();
         }
@@ -75,23 +63,6 @@ public static class LocalProtectionRecovery
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(fileOperations);
 
-        var inspection = Inspect(layout, dataProtector);
-        if (!inspection.RecoveryRequired)
-        {
-            return inspection with { Code = RecoveryNotRequiredCode };
-        }
-
-        if (!confirmed)
-        {
-            return new LocalProtectionRecoveryResult(
-                Succeeded: false,
-                Code: ConfirmationRequiredCode,
-                RecoveryRequired: true,
-                ConfirmationRequired: true,
-                PreviousArtifactsPreserved: false,
-                VaultInitialized: false);
-        }
-
         var protector = dataProtector ?? new WindowsDpapiDataProtector();
         var secretPath = SecretPath(layout);
         var vaultPath = VaultPath(layout);
@@ -100,12 +71,31 @@ public static class LocalProtectionRecovery
 
         try
         {
+            using var recoveryLock = AcquireTransactionLock(layout);
+            var inspection = InspectUnderLock(layout, dataProtector);
+            if (!inspection.RecoveryRequired)
+            {
+                return inspection with { Code = RecoveryNotRequiredCode };
+            }
+
+            if (!confirmed)
+            {
+                return new LocalProtectionRecoveryResult(
+                    Succeeded: false,
+                    Code: ConfirmationRequiredCode,
+                    RecoveryRequired: true,
+                    ConfirmationRequired: true,
+                    PreviousArtifactsPreserved: false,
+                    VaultInitialized: false);
+            }
+
             layout.EnsureDirectories();
             var recoveryDirectory = Path.Combine(
                 layout.RootDirectory,
-                "recovery",
+                RecoveryDirectoryName,
                 $"{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}");
             Directory.CreateDirectory(recoveryDirectory);
+            WriteIncompleteRecoveryMarker(layout);
             MoveToRecoveryIfPresent(secretPath, recoveryDirectory, moved, fileOperations);
             MoveToRecoveryIfPresent(vaultPath, recoveryDirectory, moved, fileOperations);
 
@@ -122,6 +112,13 @@ public static class LocalProtectionRecovery
                 created.Add(new CreatedArtifact(vaultPath, createdVault));
             }
 
+            if (!FreshProtectedStateIsReady(secretPath, vaultPath, protector))
+            {
+                throw new InvalidOperationException("Fresh local protection validation failed.");
+            }
+
+            File.Delete(RecoveryMarkerPath(layout));
+
             return new LocalProtectionRecoveryResult(
                 Succeeded: true,
                 Code: RecoveredCode,
@@ -130,7 +127,7 @@ public static class LocalProtectionRecovery
                 PreviousArtifactsPreserved: moved.Count > 0,
                 VaultInitialized: File.Exists(vaultPath));
         }
-        catch (Exception exception) when (IsRecoverable(exception))
+        catch (Exception)
         {
             DeleteCreatedArtifacts(created, fileOperations);
             RestoreMovedArtifacts(moved, fileOperations);
@@ -139,9 +136,41 @@ public static class LocalProtectionRecovery
                 Code: RecoveryFailedCode,
                 RecoveryRequired: true,
                 ConfirmationRequired: false,
-                PreviousArtifactsPreserved: moved.All(item =>
-                    fileOperations.FileExists(item.Source) || fileOperations.FileExists(item.Backup)),
+                PreviousArtifactsPreserved: PreviousArtifactsAreDiscoverable(moved, fileOperations),
                 VaultInitialized: false);
+        }
+    }
+
+    private static LocalProtectionRecoveryResult InspectUnderLock(
+        DefaultStorageLayout layout,
+        IDataProtector? dataProtector)
+    {
+        try
+        {
+            layout.EnsureDirectories();
+            var protector = dataProtector ?? new WindowsDpapiDataProtector();
+            var secretPath = SecretPath(layout);
+            var vaultPath = VaultPath(layout);
+            if (File.Exists(RecoveryMarkerPath(layout))
+                || (!File.Exists(secretPath) || !File.Exists(vaultPath)) && HasRecoveryBackup(layout)
+                || !File.Exists(secretPath) && File.Exists(vaultPath))
+            {
+                return RecoveryRequired();
+            }
+
+            var secret = new DpapiProtectedHmacSecretProvider(secretPath, protector).GetOrCreateSecret();
+            _ = FileMappingVault.CreateProtected(vaultPath, secret, protector);
+            return new LocalProtectionRecoveryResult(
+                Succeeded: true,
+                Code: ReadyCode,
+                RecoveryRequired: false,
+                ConfirmationRequired: false,
+                PreviousArtifactsPreserved: false,
+                VaultInitialized: File.Exists(vaultPath));
+        }
+        catch (Exception exception) when (IsRecoverable(exception))
+        {
+            return RecoveryRequired();
         }
     }
 
@@ -164,6 +193,61 @@ public static class LocalProtectionRecovery
     private static string VaultPath(DefaultStorageLayout layout)
     {
         return Path.Combine(layout.VaultDirectory, FileMappingVault.DefaultVaultFileName);
+    }
+
+    private static string RecoveryMarkerPath(DefaultStorageLayout layout)
+    {
+        return Path.Combine(layout.RootDirectory, RecoveryDirectoryName, RecoveryMarkerFileName);
+    }
+
+    internal static VaultFileLock AcquireTransactionLock(DefaultStorageLayout layout)
+    {
+        return VaultFileLock.Acquire(Path.Combine(layout.RootDirectory, RecoveryLockFileName));
+    }
+
+    internal static LocalProtectionRecoveryResult InspectWhenTransactionLockHeld(
+        DefaultStorageLayout layout,
+        IDataProtector? dataProtector = null)
+    {
+        return InspectUnderLock(layout, dataProtector);
+    }
+
+    private static void WriteIncompleteRecoveryMarker(DefaultStorageLayout layout)
+    {
+        using var stream = new FileStream(
+            RecoveryMarkerPath(layout),
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 1,
+            FileOptions.WriteThrough);
+        stream.WriteByte(1);
+        stream.Flush(flushToDisk: true);
+    }
+
+    private static bool HasRecoveryBackup(DefaultStorageLayout layout)
+    {
+        var recoveryDirectory = Path.Combine(layout.RootDirectory, RecoveryDirectoryName);
+        return Directory.Exists(recoveryDirectory)
+            && Directory.EnumerateFiles(recoveryDirectory, "*", SearchOption.AllDirectories)
+                .Select(Path.GetFileName)
+                .Any(fileName => string.Equals(fileName, DpapiProtectedHmacSecretProvider.DefaultSecretFileName, StringComparison.Ordinal)
+                    || string.Equals(fileName, FileMappingVault.DefaultVaultFileName, StringComparison.Ordinal));
+    }
+
+    private static bool FreshProtectedStateIsReady(
+        string secretPath,
+        string vaultPath,
+        IDataProtector dataProtector)
+    {
+        if (!File.Exists(secretPath) || !File.Exists(vaultPath))
+        {
+            return false;
+        }
+
+        var secret = new DpapiProtectedHmacSecretProvider(secretPath, dataProtector).GetOrCreateSecret();
+        _ = FileMappingVault.CreateProtected(vaultPath, secret, dataProtector);
+        return File.Exists(secretPath) && File.Exists(vaultPath);
     }
 
     private static void MoveToRecoveryIfPresent(
@@ -196,7 +280,7 @@ public static class LocalProtectionRecovery
                     fileOperations.Delete(artifact.Path);
                 }
             }
-            catch (Exception exception) when (IsRecoverable(exception))
+            catch (Exception)
             {
                 // The original artifact remains at its source or in quarantine.
             }
@@ -216,7 +300,7 @@ public static class LocalProtectionRecovery
                     fileOperations.Move(item.Backup, item.Source);
                 }
             }
-            catch (Exception exception) when (IsRecoverable(exception))
+            catch (Exception)
             {
                 // The original artifact remains in the quarantine directory.
             }
@@ -233,6 +317,21 @@ public static class LocalProtectionRecovery
             or UnauthorizedAccessException
             or SecurityException
             or InvalidOperationException;
+    }
+
+    private static bool PreviousArtifactsAreDiscoverable(
+        IEnumerable<(string Source, string Backup)> moved,
+        RecoveryFileOperations fileOperations)
+    {
+        try
+        {
+            return moved.All(item =>
+                fileOperations.FileExists(item.Source) || fileOperations.FileExists(item.Backup));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private sealed record CreatedArtifact(string Path, byte[] Contents);

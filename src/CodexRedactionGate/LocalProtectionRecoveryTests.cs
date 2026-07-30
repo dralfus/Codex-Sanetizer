@@ -61,6 +61,30 @@ public sealed class LocalProtectionRecoveryTests
     }
 
     [Test]
+    public void Inspect_LegacyRecoveryBackupsWithMissingNormalState_RemainsRecoveryRequired()
+    {
+        var state = CreateUnreadableState();
+        try
+        {
+            var legacyRecoveryDirectory = Path.Combine(state.Layout.RootDirectory, "recovery", "legacy");
+            Directory.CreateDirectory(legacyRecoveryDirectory);
+            File.Move(state.SecretPath, Path.Combine(legacyRecoveryDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName));
+            File.Move(state.VaultPath, Path.Combine(legacyRecoveryDirectory, FileMappingVault.DefaultVaultFileName));
+
+            var result = LocalProtectionRecovery.Inspect(state.Layout, new DeterministicDataProtector());
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryRequiredCode));
+            Assert.That(File.Exists(state.SecretPath), Is.False);
+            Assert.That(File.Exists(state.VaultPath), Is.False);
+        }
+        finally
+        {
+            Directory.Delete(state.Layout.RootDirectory, recursive: true);
+        }
+    }
+
+    [Test]
     public void Recover_WithoutConfirmation_PreservesUnreadableArtifacts()
     {
         var tempDirectory = CreateTempDirectory();
@@ -166,8 +190,8 @@ public sealed class LocalProtectionRecoveryTests
 
             Assert.That(result.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryFailedCode));
             Assert.That(result.ToString(), Does.Not.Contain(state.Layout.RootDirectory));
-            Assert.That(File.ReadAllBytes(state.SecretPath), Is.EqualTo(state.Secret));
-            Assert.That(File.ReadAllText(state.VaultPath), Is.EqualTo(state.Vault));
+            Assert.That(ReadPreservedArtifact(state.SecretPath, state.Layout, DpapiProtectedHmacSecretProvider.DefaultSecretFileName), Is.EqualTo(state.Secret));
+            Assert.That(ReadPreservedArtifact(state.VaultPath, state.Layout, FileMappingVault.DefaultVaultFileName), Is.EqualTo(state.Vault));
         }
         finally
         {
@@ -200,7 +224,7 @@ public sealed class LocalProtectionRecoveryTests
             Assert.That(result.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryFailedCode));
             Assert.That(result.ToString(), Does.Not.Contain(state.Layout.RootDirectory));
             Assert.That(File.ReadAllBytes(state.SecretPath), Is.EqualTo(state.Secret));
-            Assert.That(File.ReadAllText(state.VaultPath), Is.EqualTo(state.Vault));
+            Assert.That(File.ReadAllBytes(state.VaultPath), Is.EqualTo(state.Vault));
         }
         finally
         {
@@ -223,7 +247,7 @@ public sealed class LocalProtectionRecoveryTests
             Assert.That(result.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryFailedCode));
             Assert.That(result.ToString(), Does.Not.Contain(state.Layout.RootDirectory));
             Assert.That(ReadPreservedArtifact(state.SecretPath, state.Layout, DpapiProtectedHmacSecretProvider.DefaultSecretFileName), Is.EqualTo(state.Secret));
-            Assert.That(ReadPreservedArtifactText(state.VaultPath, state.Layout, FileMappingVault.DefaultVaultFileName), Is.EqualTo(state.Vault));
+            Assert.That(ReadPreservedArtifact(state.VaultPath, state.Layout, FileMappingVault.DefaultVaultFileName), Is.EqualTo(state.Vault));
         }
         finally
         {
@@ -238,30 +262,201 @@ public sealed class LocalProtectionRecoveryTests
         try
         {
             var movesToQuarantine = 0;
-            var recoveryDirectoryPrefix = Path.Combine(state.Layout.RootDirectory, "recovery") + Path.DirectorySeparatorChar;
             var result = LocalProtectionRecovery.Recover(
                 state.Layout,
                 confirmed: true,
                 new FailingProtectDataProtector(),
-                new RecoveryFileOperations(move: (source, destination) =>
-                {
-                    if (source.StartsWith(recoveryDirectoryPrefix, StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new IOException("Test restore failure.");
-                    }
-
-                    movesToQuarantine++;
-                    File.Move(source, destination);
-                }));
+                FailRestoreOperations(state.Layout, () => movesToQuarantine++));
 
             Assert.That(result.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryFailedCode));
             Assert.That(result.ToString(), Does.Not.Contain(state.Layout.RootDirectory));
             Assert.That(movesToQuarantine, Is.EqualTo(2));
             Assert.That(ReadPreservedArtifact(state.SecretPath, state.Layout, DpapiProtectedHmacSecretProvider.DefaultSecretFileName), Is.EqualTo(state.Secret));
-            Assert.That(ReadPreservedArtifactText(state.VaultPath, state.Layout, FileMappingVault.DefaultVaultFileName), Is.EqualTo(state.Vault));
+            Assert.That(ReadPreservedArtifact(state.VaultPath, state.Layout, FileMappingVault.DefaultVaultFileName), Is.EqualTo(state.Vault));
         }
         finally
         {
+            Directory.Delete(state.Layout.RootDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Recover_WhenRollbackCleanupThrowsUnexpectedException_ReturnsRawFreeFailure()
+    {
+        var state = CreateUnreadableState();
+        try
+        {
+            var result = LocalProtectionRecovery.Recover(
+                state.Layout,
+                confirmed: true,
+                new FailOnSecondProtectDataProtector(),
+                new RecoveryFileOperations(delete: _ => throw new ApplicationException("Unexpected cleanup failure.")));
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryFailedCode));
+            Assert.That(result.ToString(), Does.Not.Contain("Unexpected cleanup failure."));
+            Assert.That(ReadPreservedArtifact(state.SecretPath, state.Layout, DpapiProtectedHmacSecretProvider.DefaultSecretFileName), Is.EqualTo(state.Secret));
+            Assert.That(ReadPreservedArtifact(state.VaultPath, state.Layout, FileMappingVault.DefaultVaultFileName), Is.EqualTo(state.Vault));
+        }
+        finally
+        {
+            Directory.Delete(state.Layout.RootDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Inspect_AfterRollbackRestoreFailure_RemainsRecoveryRequiredWithoutInitializingNewState()
+    {
+        var state = CreateUnreadableState();
+        try
+        {
+            var recovery = LocalProtectionRecovery.Recover(
+                state.Layout,
+                confirmed: true,
+                new FailingProtectDataProtector(),
+                FailRestoreOperations(state.Layout));
+            var inspection = LocalProtectionRecovery.Inspect(state.Layout, new DeterministicDataProtector());
+            var scannerManifest = ScannerPackageManifestResolver.CreateDefault(state.Layout.RootDirectory);
+            var safeDisabledScanner = new DefaultScannerPackageResolution(
+                scannerManifest,
+                ScannerRuntimeConfigurationReport.SafeDisabledLocalPackageMissing,
+                AnyScannerArtifactPresent: false);
+            var report = ReadinessDoctor.Check(
+                state.Layout,
+                defaultScannerPackageProbe: () => safeDisabledScanner);
+
+            Assert.That(recovery.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryFailedCode));
+            Assert.That(inspection.Succeeded, Is.False);
+            Assert.That(inspection.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryRequiredCode));
+            Assert.That(report.Items.Single(item => item.Component == "vault_secret"),
+                Is.EqualTo(new ReadinessItem("vault_secret", "recovery_required", LocalProtectionRecovery.RecoveryRequiredCode)));
+            Assert.That(File.Exists(state.SecretPath), Is.False);
+            Assert.That(File.Exists(state.VaultPath), Is.False);
+        }
+        finally
+        {
+            Directory.Delete(state.Layout.RootDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Recover_AfterIncompleteTransaction_RequiresConfirmationWithoutInitializingNewState()
+    {
+        var state = CreateUnreadableState();
+        try
+        {
+            _ = LocalProtectionRecovery.Recover(
+                state.Layout,
+                confirmed: true,
+                new FailingProtectDataProtector(),
+                FailRestoreOperations(state.Layout));
+
+            var competingRecovery = LocalProtectionRecovery.Recover(
+                state.Layout,
+                confirmed: false,
+                new DeterministicDataProtector());
+
+            Assert.That(competingRecovery.Succeeded, Is.False);
+            Assert.That(competingRecovery.Code, Is.EqualTo(LocalProtectionRecovery.ConfirmationRequiredCode));
+            Assert.That(File.Exists(state.SecretPath), Is.False);
+            Assert.That(File.Exists(state.VaultPath), Is.False);
+        }
+        finally
+        {
+            Directory.Delete(state.Layout.RootDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void SanitizerProduction_AfterIncompleteTransaction_BlocksPromptWithoutInitializingNewState()
+    {
+        const string prompt = "INCOMPLETE_RECOVERY_PROMPT";
+        var state = CreateUnreadableState();
+        try
+        {
+            _ = LocalProtectionRecovery.Recover(
+                state.Layout,
+                confirmed: true,
+                new FailingProtectDataProtector(),
+                FailRestoreOperations(state.Layout));
+
+            var sanitizer = Sanitizer.CreateProduction(state.Layout);
+            var request = new SanitizeRequest(
+                new[] { new ContentPart("prompt", ContentSources.PromptText, prompt, new System.Collections.Generic.Dictionary<string, string>()) },
+                new SanitizationContext("chatgpt-desktop", null, null, null, "default"),
+                new SanitizationOptions(false, false, "os-adapter"));
+            var result = sanitizer.Sanitize(request);
+            var rendered = System.Text.Json.JsonSerializer.Serialize(result);
+            Assert.That(File.Exists(state.SecretPath), Is.False);
+            Assert.That(File.Exists(state.VaultPath), Is.False);
+
+            var recovered = LocalProtectionRecovery.Recover(state.Layout, confirmed: true);
+            var afterRecovery = sanitizer.Sanitize(request);
+
+            Assert.That(result.Decision, Is.EqualTo(SanitizeDecision.Block));
+            Assert.That(rendered, Does.Contain(LocalProtectionRecovery.RecoveryRequiredCode));
+            Assert.That(rendered, Does.Not.Contain(prompt));
+            Assert.That(recovered.Succeeded, Is.True);
+            Assert.That(afterRecovery.Decision, Is.EqualTo(SanitizeDecision.Block));
+        }
+        finally
+        {
+            Directory.Delete(state.Layout.RootDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Recover_WhenAnotherTransactionIsInProgress_DoesNotMoveArtifactsUntilItCompletes()
+    {
+        var state = CreateUnreadableState();
+        using var firstMoveStarted = new ManualResetEventSlim();
+        using var releaseFirstMove = new ManualResetEventSlim();
+        using var competingCallStarted = new ManualResetEventSlim();
+        using var competingMoveStarted = new ManualResetEventSlim();
+        try
+        {
+            var firstMoveCount = 0;
+            var first = Task.Run(() => LocalProtectionRecovery.Recover(
+                state.Layout,
+                confirmed: true,
+                new FailingProtectDataProtector(),
+                new RecoveryFileOperations(move: (source, destination) =>
+                {
+                    firstMoveCount++;
+                    if (firstMoveCount == 1)
+                    {
+                        firstMoveStarted.Set();
+                        releaseFirstMove.Wait();
+                    }
+
+                    File.Move(source, destination);
+                })));
+            Assert.That(firstMoveStarted.Wait(TimeSpan.FromSeconds(5)), Is.True);
+            Assert.That(File.Exists(Path.Combine(state.Layout.RootDirectory, "recovery", "incomplete-recovery")), Is.True);
+
+            var competing = Task.Run(() =>
+            {
+                competingCallStarted.Set();
+                return LocalProtectionRecovery.Recover(
+                    state.Layout,
+                    confirmed: true,
+                    new FailingProtectDataProtector(),
+                    new RecoveryFileOperations(move: (source, destination) =>
+                    {
+                        competingMoveStarted.Set();
+                        File.Move(source, destination);
+                    }));
+            });
+            Assert.That(competingCallStarted.Wait(TimeSpan.FromSeconds(5)), Is.True);
+            Assert.That(competingMoveStarted.Wait(TimeSpan.FromMilliseconds(250)), Is.False);
+
+            releaseFirstMove.Set();
+            Assert.That(first.Result.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryFailedCode));
+            Assert.That(competing.Result.Code, Is.EqualTo(LocalProtectionRecovery.RecoveryFailedCode));
+        }
+        finally
+        {
+            releaseFirstMove.Set();
             Directory.Delete(state.Layout.RootDirectory, recursive: true);
         }
     }
@@ -392,9 +587,9 @@ public sealed class LocalProtectionRecoveryTests
         var secretPath = Path.Combine(layout.RootDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName);
         var vaultPath = Path.Combine(layout.VaultDirectory, FileMappingVault.DefaultVaultFileName);
         var secret = new DeterministicDataProtector().Protect(new byte[16]);
-        const string vault = "not-a-vault";
+        var vault = new byte[] { 0x00, 0xff, 0x6a, 0x73, 0x6f, 0x6e };
         File.WriteAllBytes(secretPath, secret);
-        File.WriteAllText(vaultPath, vault);
+        File.WriteAllBytes(vaultPath, vault);
         return new UnreadableLocalProtectionState(layout, secretPath, vaultPath, secret, vault);
     }
 
@@ -407,13 +602,21 @@ public sealed class LocalProtectionRecoveryTests
         return File.ReadAllBytes(path);
     }
 
-    private static string ReadPreservedArtifactText(string sourcePath, DefaultStorageLayout layout, string fileName)
+    private static RecoveryFileOperations FailRestoreOperations(
+        DefaultStorageLayout layout,
+        Action? movedToQuarantine = null)
     {
-        var recoveryFiles = Directory.Exists(Path.Combine(layout.RootDirectory, "recovery"))
-            ? Directory.GetFiles(Path.Combine(layout.RootDirectory, "recovery"), fileName, SearchOption.AllDirectories)
-            : Array.Empty<string>();
-        var path = recoveryFiles.SingleOrDefault() ?? sourcePath;
-        return File.ReadAllText(path);
+        var recoveryDirectoryPrefix = Path.Combine(layout.RootDirectory, "recovery") + Path.DirectorySeparatorChar;
+        return new RecoveryFileOperations(move: (source, destination) =>
+        {
+            if (source.StartsWith(recoveryDirectoryPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("Test restore failure.");
+            }
+
+            movedToQuarantine?.Invoke();
+            File.Move(source, destination);
+        });
     }
 
     private sealed record UnreadableLocalProtectionState(
@@ -421,7 +624,7 @@ public sealed class LocalProtectionRecoveryTests
         string SecretPath,
         string VaultPath,
         byte[] Secret,
-        string Vault);
+        byte[] Vault);
 
     private sealed class FailingProtectDataProtector : IDataProtector
     {
