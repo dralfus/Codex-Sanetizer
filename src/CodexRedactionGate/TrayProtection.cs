@@ -48,7 +48,8 @@ public sealed record TrayProtectionState(
     string ProjectFileStatus = ProjectFileProtectionStatusValues.NotConfigured,
     bool ResidentProcess = false,
     bool SetupRequired = false,
-    string ProgrammaticUiaInvokeStatus = OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported);
+    string ProgrammaticUiaInvokeStatus = OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported,
+    string LocalProtectionStatus = LocalProtectionRecovery.ReadyCode);
 
 public sealed record ProtectionDisableResult(
     bool Succeeded,
@@ -130,6 +131,85 @@ internal sealed class TrayProtectionController
 
     internal bool IsNativeSubmitHookReady => ReadSnapshot().HookReady;
 
+    internal void PublishLocalProtectionStatus(string localProtectionStatus)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localProtectionStatus);
+        if (string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("local_protection_ready_requires_active_runtime");
+        }
+
+        while (true)
+        {
+            var snapshot = ReadSnapshot();
+            var replacement = snapshot with
+            {
+                Generation = snapshot.Generation + 1,
+                State = snapshot.State with
+                {
+                    LastStatus = localProtectionStatus,
+                    NativeSubmitEnabled = false,
+                    NativeSubmitStatus = localProtectionStatus,
+                    ProtectedSendBinding = "not_configured",
+                    ReadinessStatus = localProtectionStatus,
+                    ComposerProtected = false,
+                    LocalProtectionStatus = localProtectionStatus
+                }
+            };
+            if (PublishSnapshotIfCurrent(snapshot, replacement))
+            {
+                return;
+            }
+        }
+    }
+
+    internal bool TryPublishLocalProtectionReady()
+    {
+        while (true)
+        {
+            var snapshot = ReadSnapshot();
+            if (!snapshot.State.Enabled
+                || !snapshot.HookReady
+                || snapshot.RuntimeSet is null
+                || snapshot.RuntimeSet.Runtimes.Count == 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (IsAnySelectedProfileSetupRequired(snapshot.RuntimeSet))
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            var replacement = snapshot with
+            {
+                Generation = snapshot.Generation + 1,
+                State = snapshot.State with
+                {
+                    LastStatus = LocalProtectionRecovery.ReadyCode,
+                    NativeSubmitEnabled = true,
+                    NativeSubmitStatus = OsInteractionStatusIds.Protected,
+                    ProtectedSendBinding = ProtectedSendBindingText(snapshot, OsInteractionStatusIds.Protected),
+                    ReadinessStatus = OsInteractionStatusIds.Protected,
+                    ComposerProtected = true,
+                    SetupRequired = false,
+                    LocalProtectionStatus = LocalProtectionRecovery.ReadyCode
+                }
+            };
+            if (PublishSnapshotIfCurrent(snapshot, replacement))
+            {
+                return true;
+            }
+        }
+    }
+
     public bool Start()
     {
         var snapshot = ReadSnapshot();
@@ -161,7 +241,8 @@ internal sealed class TrayProtectionController
                     enabled: false,
                     lastStatus: NativeSubmitUnavailableStatus(snapshot),
                     runtimes: snapshot.RuntimeSet.Runtimes,
-                    setupRequired: setupRequired)
+                    setupRequired: setupRequired,
+                    localProtectionStatus: snapshot.State.LocalProtectionStatus)
             });
             return false;
         }
@@ -171,10 +252,11 @@ internal sealed class TrayProtectionController
             PublishSnapshot(snapshot with
             {
                 State = CreateState(
-                enabled: false,
+                    enabled: false,
                     lastStatus: _hotkeyHost.LastErrorCode ?? NativeSubmitUnavailableStatus(snapshot),
                     runtimes: snapshot.RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>(),
-                    setupRequired: setupRequired)
+                    setupRequired: setupRequired,
+                    localProtectionStatus: snapshot.State.LocalProtectionStatus)
             });
             return false;
         }
@@ -191,7 +273,8 @@ internal sealed class TrayProtectionController
                 runtimes: snapshot.RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>(),
                 nativeSubmitEnabled: nativeStarted && !setupRequired,
                 nativeSubmitStatus: nativeStatus,
-                setupRequired: setupRequired),
+                setupRequired: setupRequired,
+                localProtectionStatus: snapshot.State.LocalProtectionStatus),
             HookReady = nativeStarted
         });
         return true;
@@ -204,7 +287,11 @@ internal sealed class TrayProtectionController
         _hotkeyHost.Stop();
         PublishSnapshot(snapshot with
         {
-            State = CreateState(enabled: false, lastStatus: "disabled", runtimes: Array.Empty<NativeSubmitRuntime>()),
+            State = CreateState(
+                enabled: false,
+                lastStatus: "disabled",
+                runtimes: Array.Empty<NativeSubmitRuntime>(),
+                localProtectionStatus: snapshot.State.LocalProtectionStatus),
             RuntimeSet = null,
             HookReady = false
         });
@@ -259,8 +346,12 @@ internal sealed class TrayProtectionController
 
         if (!previous.State.Enabled)
         {
+            if (!TryPublishRuntimeCandidate(previous, candidate))
+            {
+                return false;
+            }
+
             previous.RuntimeSet?.HookHost.Stop();
-            PublishSnapshot(candidate);
             return true;
         }
 
@@ -270,7 +361,12 @@ internal sealed class TrayProtectionController
             return false;
         }
 
-        PublishSnapshot(candidate);
+        if (!TryPublishRuntimeCandidate(previous, candidate))
+        {
+            candidate.RuntimeSet!.HookHost.Stop();
+            return false;
+        }
+
         if (previous.RuntimeSet is not null
             && !ReferenceEquals(previous.RuntimeSet.HookHost, candidate.RuntimeSet!.HookHost))
         {
@@ -278,6 +374,23 @@ internal sealed class TrayProtectionController
         }
 
         return true;
+    }
+
+    private bool TryPublishRuntimeCandidate(ProtectionSnapshot previous, ProtectionSnapshot candidate)
+    {
+        while (true)
+        {
+            var current = ReadSnapshot();
+            if (current.Generation != previous.Generation)
+            {
+                return false;
+            }
+
+            if (PublishSnapshotIfCurrent(current, candidate))
+            {
+                return true;
+            }
+        }
     }
 
     /// <summary>
@@ -323,7 +436,8 @@ internal sealed class TrayProtectionController
                 nativeSubmitStatus: previous.State.Enabled
                     ? (setupRequired ? OsInteractionStatusIds.NativeSubmitSetupRequired : OsInteractionStatusIds.Protected)
                     : OsInteractionStatusIds.NotConfigured,
-                setupRequired: setupRequired);
+                setupRequired: setupRequired,
+                localProtectionStatus: previous.State.LocalProtectionStatus);
 
             return new ProtectionSnapshot(
                 previous.Generation + 1,
@@ -397,7 +511,9 @@ internal sealed class TrayProtectionController
             ProjectFilesProtected: snapshot.State.ProjectFilesProtected,
             ProjectFileStatus: snapshot.State.ProjectFileStatus,
             ResidentProcess: snapshot.State.ResidentProcess,
-            SetupRequired: snapshot.State.SetupRequired);
+            SetupRequired: snapshot.State.SetupRequired,
+            ProgrammaticUiaInvokeStatus: snapshot.State.ProgrammaticUiaInvokeStatus,
+            LocalProtectionStatus: snapshot.State.LocalProtectionStatus);
         PublishSnapshotIfCurrent(snapshot, snapshot with { State = state });
     }
 
@@ -443,9 +559,11 @@ internal sealed class TrayProtectionController
         var result = discovery.Classification switch
         {
             SendControlClassification.IdentifiedSend when runtime is not null
-                => runtime.Controller.HandleIdentifiedSendControl(discovery.ComposerDiscovery),
-            SendControlClassification.SelectedClientUncertain when runtime is not null
-                => SuppressUncertainSelectedSend(runtime.Profile.ProfileId),
+                => IsLocalProtectionReady(snapshot)
+                    ? runtime.Controller.HandleIdentifiedSendControl(discovery.ComposerDiscovery)
+                    : SuppressLocalProtectionRecoverySubmit(runtime.Profile.ProfileId),
+            SendControlClassification.SelectedClientUncertain
+                => SuppressUncertainSelectedSend(SelectedClientProfileId(discovery.ComposerDiscovery, runtime)),
             _ => PassThroughPointer()
         };
         return RememberSnapshot(
@@ -543,6 +661,10 @@ internal sealed class TrayProtectionController
         }
 
         var snapshot = execution.Snapshot;
+        if (!IsLocalProtectionReady(snapshot))
+        {
+            return;
+        }
 
         var runtime = ResolveClassifiedRuntime(snapshot, classification);
         if (runtime is null)
@@ -603,6 +725,30 @@ internal sealed class TrayProtectionController
             });
     }
 
+    private static string SelectedClientProfileId(
+        TextSurfaceDiscoveryResult discovery,
+        NativeSubmitRuntime? runtime)
+    {
+        return runtime?.Profile.ProfileId
+            ?? discovery.Surface?.ProfileId
+            ?? (discovery.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null)
+            ?? "selected_client";
+    }
+
+    private static NativeSubmitInterceptionResult SuppressLocalProtectionRecoverySubmit(string profileId)
+    {
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitGuarded,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["profile_id"] = profileId,
+                ["local_protection"] = "unavailable"
+            });
+    }
+
     private void RunNativeSubmitOnce(NativeKeyGesture gesture, NativeSubmitInterceptionResult classification)
     {
         if (!TryTakeExecutionContext(classification, out var execution))
@@ -611,6 +757,10 @@ internal sealed class TrayProtectionController
         }
 
         var snapshot = execution.Snapshot;
+        if (!IsLocalProtectionReady(snapshot))
+        {
+            return;
+        }
 
         var runtime = ResolveClassifiedRuntime(snapshot, classification);
         if (runtime is null)
@@ -660,7 +810,8 @@ internal sealed class TrayProtectionController
         bool submitted,
         bool setupRequired = false)
     {
-        if (!ReferenceEquals(ReadSnapshot(), eventSnapshot))
+        if (!IsLocalProtectionReady(eventSnapshot)
+            || !ReferenceEquals(ReadSnapshot(), eventSnapshot))
         {
             return;
         }
@@ -685,8 +836,11 @@ internal sealed class TrayProtectionController
             ComposerProtected: readinessStatus == OsInteractionStatusIds.Protected,
             ProjectFilesProtected: false,
             ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
-            ResidentProcess: true);
-        PublishSnapshot(eventSnapshot with { State = state });
+            ResidentProcess: true,
+            SetupRequired: setupRequired,
+            ProgrammaticUiaInvokeStatus: eventSnapshot.State.ProgrammaticUiaInvokeStatus,
+            LocalProtectionStatus: eventSnapshot.State.LocalProtectionStatus);
+        PublishSnapshotIfCurrent(eventSnapshot, eventSnapshot with { State = state });
     }
 
     private static string NativeSubmitReadinessStatusAfterFlow(string flowStatus)
@@ -717,8 +871,16 @@ internal sealed class TrayProtectionController
         IReadOnlyList<NativeSubmitRuntime> runtimes,
         bool nativeSubmitEnabled = false,
         string nativeSubmitStatus = OsInteractionStatusIds.NotConfigured,
-        bool setupRequired = false)
+        bool setupRequired = false,
+        string localProtectionStatus = LocalProtectionRecovery.ReadyCode)
     {
+        var localProtectionReady = string.Equals(
+            localProtectionStatus,
+            LocalProtectionRecovery.ReadyCode,
+            StringComparison.Ordinal);
+        var effectiveNativeSubmitStatus = localProtectionReady
+            ? nativeSubmitStatus
+            : localProtectionStatus;
         return new TrayProtectionState(
             Enabled: enabled,
             Mode: "ApplyOnly",
@@ -729,17 +891,20 @@ internal sealed class TrayProtectionController
             LastProfileId: null,
             LastApplied: false,
             LastSubmitted: false,
-            NativeSubmitEnabled: nativeSubmitEnabled,
-            NativeSubmitStatus: nativeSubmitStatus,
-            ProtectedSendBinding: ProtectedSendBindingText(runtimes, nativeSubmitStatus),
+            NativeSubmitEnabled: nativeSubmitEnabled && localProtectionReady,
+            NativeSubmitStatus: effectiveNativeSubmitStatus,
+            ProtectedSendBinding: ProtectedSendBindingText(runtimes, effectiveNativeSubmitStatus),
             NewlineBinding: NewlineBindingText(runtimes),
             ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
-            ReadinessStatus: ReadinessStatus(runtimes, nativeSubmitStatus),
-            ComposerProtected: nativeSubmitStatus == OsInteractionStatusIds.Protected,
+            ReadinessStatus: localProtectionReady
+                ? ReadinessStatus(runtimes, effectiveNativeSubmitStatus)
+                : localProtectionStatus,
+            ComposerProtected: localProtectionReady && effectiveNativeSubmitStatus == OsInteractionStatusIds.Protected,
             ProjectFilesProtected: false,
             ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
             ResidentProcess: enabled,
-            SetupRequired: setupRequired);
+            SetupRequired: setupRequired,
+            LocalProtectionStatus: localProtectionStatus);
     }
 
     private bool EnterprisePolicyBlocksDisable()
@@ -819,9 +984,15 @@ internal sealed class TrayProtectionController
         var focusedControlResult = ClassifyFocusedSendControl(snapshot, discovery, gesture, out var focusedComposerDiscovery);
         if (focusedControlResult is not null)
         {
+            var focusedRuntime = ResolveRuntime(snapshot, focusedComposerDiscovery)
+                ?? ResolveRuntimeByProfileIdentity(snapshot, focusedComposerDiscovery ?? discovery);
             return RememberSnapshot(
                 snapshot,
-                focusedControlResult,
+                !IsLocalProtectionReady(snapshot)
+                    && focusedControlResult.SuppressOriginalInput
+                    && focusedRuntime is not null
+                    ? SuppressLocalProtectionRecoverySubmit(focusedRuntime.Profile.ProfileId)
+                    : focusedControlResult,
                 NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, focusedComposerDiscovery?.Surface));
         }
 
@@ -830,6 +1001,17 @@ internal sealed class TrayProtectionController
             ? discovery
             : null;
         runtime ??= ResolveRuntimeByProfileIdentity(snapshot, discovery);
+        if (!IsLocalProtectionReady(snapshot)
+            && runtime is not null
+            && (discovery.Succeeded || HasProfileIdentity(discovery))
+            && runtime.Profile.SubmitBinding?.Matches(gesture) == true)
+        {
+            return RememberSnapshot(
+                snapshot,
+                SuppressLocalProtectionRecoverySubmit(runtime.Profile.ProfileId),
+                NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, discovery.Surface));
+        }
+
         var result = runtime is null
             ? (snapshot.RuntimeSet?.Runtimes.Count > 1
                 ? PassThroughPointer()
@@ -966,6 +1148,14 @@ internal sealed class TrayProtectionController
     {
         return !string.IsNullOrWhiteSpace(discovery.Surface?.ProfileId)
             || discovery.Diagnostics.ContainsKey("profile_id");
+    }
+
+    private static bool IsLocalProtectionReady(ProtectionSnapshot snapshot)
+    {
+        return string.Equals(
+            snapshot.State.LocalProtectionStatus,
+            LocalProtectionRecovery.ReadyCode,
+            StringComparison.Ordinal);
     }
 
     private static bool IsFocusedSendActivation(SubmitBindingProfile profile, NativeKeyGesture gesture)

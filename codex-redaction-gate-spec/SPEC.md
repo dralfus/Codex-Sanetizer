@@ -109,6 +109,7 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Selecting a different binding pair invalidates the old protected binding until delayed focused verification succeeds. A cancelled, failed, or timed-out change must leave the profile unprotected rather than retaining a stale protected binding.
 - The native hook must pass through non-Send keys and keyboard use of non-Send controls, including ordinary `Enter` when `Ctrl+Enter` is the configured Send binding. It may suppress the configured binding fail-closed only for the verified composer or an identifiable selected-app Send control.
 - Resident protection state is an immutable, versioned snapshot published atomically. A snapshot contains the selected profile set and verified bindings, hook readiness, controller/runner needed to guard a submit, and the target identity contract. A native input event reads exactly one snapshot; it must never assemble a decision from separately mutable profile, controller, runner, or hook fields.
+- The resident protection state is the sole authority for whether protection is active, degraded, setup-required, or recovery-required. Tray UI, notification text, and local protection-status rows are read-only projections of that published resident state. They may request an explicit remediation command, but must not combine local flags or persisted profile data to decide that a cloud-bound path is protected.
 - Reload is transactional: build and verify a candidate snapshot first, then publish it in one operation. A failed candidate preserves the previous complete snapshot. No event may observe a controller from one generation with bindings, profiles, or a hook from another generation.
 - The selected-client decision contract is explicit. For a selected AI client, a verified non-Send control passes through, a verified Send control is suppressed and guarded, and uncertainty in composer identity, Send-control identity, hook health, UI Automation, or target validity blocks the submission with raw-free status. Input outside a selected AI client remains outside the protected boundary and continues normally.
 - Deferred sanitize/confirm/replay work must receive the snapshot generation and the composer/window target identity captured for the original gesture. It must not rediscover the foreground target later. If the captured target is invalid, changed, or cannot be verified before replay, it aborts raw-free and does not submit.
@@ -172,6 +173,7 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Security regression tests should include near-miss samples and false-positive samples.
 - The highest-value seam is the redaction engine API: it can be tested without depending on Codex UI internals.
 - A second seam is the gateway adapter contract: adapter receives a prompt event and must either allow, block or replace with explicit user confirmation.
+- UI tests must obtain status through the same resident-state projection used by the tray. They must drive remediation through deterministic dispatch seams, not timer polling, foreground focus, or a live cloud submission.
 
 ## Out of Scope
 

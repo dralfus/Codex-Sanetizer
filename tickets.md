@@ -6,6 +6,17 @@ All tickets 238-250 completed. The convergence frontier starts with ticket 273.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
+## Required Contract For Every New Ticket
+
+Every ticket added after this section must state these four items before implementation begins:
+
+- **State owner:** the one component that publishes the authoritative state for this behavior. UI and persisted records may project it, but cannot independently decide protection.
+- **Fail-closed state:** the exact externally visible state and cloud-submission behavior when evidence, activation, recovery, or storage is uncertain.
+- **Allowed transitions:** the permitted state changes, their triggering commands/events, and the condition for publishing each new state.
+- **Deterministic proof:** the highest available test seam and the assertions that prove the transition without timer polling, foreground focus, or a live cloud submission.
+
+If one of these cannot be stated, the work is an architecture-discovery ticket and must be resolved before a feature ticket is implemented.
+
 ## 273. Publish atomic resident protection snapshots
 
 **What to build:** Make the resident native adapter execute every interception event from one immutable, versioned protection snapshot rather than separately mutable profile, binding, hook, controller, runner, and reload fields. The snapshot is the only runtime source for classification and guarded completion; display state remains derived from that runtime state rather than a competing copy.
@@ -540,6 +551,14 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** 290. Make tray profile remediation an explicit verification or retry workflow.
 
+**State owner:** The published resident protection snapshot; the tray action executor only requests remediation and projects the resulting state.
+
+**Fail-closed state:** A cancellation, worker failure, activation failure, or dispatcher shutdown leaves the selected Send path blocked or degraded and exposes only a raw-free status.
+
+**Allowed transitions:** `setup_required` may enter verification; `degraded` may enter retry; either publishes only the resident result after the worker completes. Duplicate requests do not create a second transition.
+
+**Deterministic proof:** Injected background and UI dispatch queues prove single-flight execution and each completion outcome without timers, focus, or cloud submission.
+
 - [ ] Profile verification and prompt-protection retry use one tested single-flight action executor while preserving their distinct remediation behavior and public status text.
 - [ ] The shared executor releases its guard and refreshes truthful raw-free status after cancellation, runtime-creation failure, activation failure, and UI-dispatch shutdown.
 
@@ -549,8 +568,17 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** None - can start immediately.
 
-- [ ] A confirmed successful recovery reloads the resident runtime and renders local protection as ready only after the new runtime is active.
-- [ ] A failed recovery keeps the status recovery-required or degraded, leaves protected Send fail-closed, and exposes only raw-free public text.
+**State owner:** The resident protection snapshot, including recovery/readiness and native runtime activation; the tray status is a projection of it.
+
+**Fail-closed state:** `recovery_required` or `degraded` blocks protected Send until both confirmed recovery and resident-runtime activation succeed.
+
+**Allowed transitions:** `recovery_required` -> `reloading` -> `ready` only after atomic runtime publication; any recovery or reload failure returns to `recovery_required` or `degraded`.
+
+**Deterministic proof:** An injected recovery operation and resident-runtime factory drive the real tray command and assert rendered state without modal UI, timers, focus, or cloud submission.
+
+- [x] A confirmed successful recovery publishes `reloading` through the resident snapshot, clears the protected-Send claim, reloads and starts the native runtime, and only then publishes ready.
+- [x] Recovery, runtime reload, runtime activation, and unexpected recovery-operation failures remain fail-closed: selected-app Send is suppressed while local protection is not ready, while ordinary input remains pass-through, and public text excludes injected raw failure values.
+- [x] Local recovery transitions advance the resident snapshot generation. Runtime replacement and native-flow state use compare-and-publish semantics so an older in-flight event cannot overwrite `reloading`, recovery-required, runtime-degraded, or ready state.
 
 ## 294. Complete tray status redraw disposal and raw-free coverage
 
@@ -558,5 +586,30 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** None - can start immediately.
 
+**State owner:** The resident-state projection supplied to the local-status form; the form owns only disposable visual controls and its refresh timer.
+
+**Fail-closed state:** Any unclassifiable or unsafe status renders a stable raw-free non-green state and never a protected claim.
+
+**Allowed transitions:** A published resident-state change replaces the current rendered rows; closing the form disposes its timer and all current/replaced controls.
+
+**Deterministic proof:** Direct tray-context refreshes retain old controls for disposal assertions and inject synthetic raw values without timers, focus, or cloud submission.
+
 - [ ] Tests retain a replaced row control across an explicit refresh and prove it was disposed; closing each status window disposes its refresh timer.
 - [ ] Tray-context tests inject every raw-value class into state/diagnostics and prove rendered rows remain raw-free.
+- [ ] Remove the direct `ProjectFileProtectionStatusInspector.Inspect` call from the tray view factory. Publish project-file protection into the resident snapshot first, then render only that snapshot so the status form complies with the sole-state-owner rule.
+
+## 295. Make second-instance activation proof match Windows foreground rules
+
+**What to build:** Replace the environment-sensitive expectation that Windows must foreground an existing tray window with a deterministic activation seam. The product must still attempt activation and always show a raw-free local outcome when foregrounding is refused.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The single-instance activation result returned by `SingleInstanceEnforcement`; the second-launch notification projects that result.
+
+**Fail-closed state:** An absent, stale, inaccessible, or foreground-refused window publishes `activation_succeeded=false` and exits without starting a second hook-owning resident instance.
+
+**Allowed transitions:** A detected existing mutex triggers one activation attempt, followed by either `activation_succeeded=true` or the raw-free fallback notification. Neither result enters the normal tray message loop.
+
+**Deterministic proof:** Injected activation-window operations return accepted/refused outcomes without relying on `SetForegroundWindow`, interactive desktop focus, or timing.
+
+- [ ] Refactor the single-instance activation dependency behind an injectable seam and cover both accepted and foreground-refused outcomes deterministically.

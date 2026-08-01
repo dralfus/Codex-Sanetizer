@@ -7769,6 +7769,185 @@ public class ResidentFirstRunSetupLaunchTests
         }
     }
 
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_ConfirmedLocalRecoveryPublishesReadyOnlyAfterNativeRuntimeActivates()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var protection = CreateManualOnlyTrayProtection();
+            var messages = new List<string>();
+            TrayProtectionState? stateDuringRecovery = null;
+            TrayProtectionState? stateWhenReplacementHookStarted = null;
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                localProtectionStatus: LocalProtectionRecovery.RecoveryRequiredCode,
+                recoveredRuntimeFactory: () => CreateRecoveredProtectedRuntime(
+                    () => stateWhenReplacementHookStarted = protection.State),
+                localProtectionRecovery: () =>
+                {
+                    stateDuringRecovery = protection.State;
+                    return new LocalProtectionRecoveryResult(
+                        Succeeded: true,
+                        Code: LocalProtectionRecovery.RecoveredCode,
+                        RecoveryRequired: false,
+                        ConfirmationRequired: false,
+                        PreviousArtifactsPreserved: true,
+                        VaultInitialized: true);
+                },
+                recoveryMessagePresenter: (message, _) => messages.Add(message),
+                scheduleFirstRunSetup: false);
+
+            context.OpenLocalProtectionStatus();
+            var form = context.LocalProtectionStatusForm;
+            Assert.That(form, Is.Not.Null);
+            Assert.That(form!.CurrentRows[0].OperationalState, Is.EqualTo("recovery required"));
+
+            context.RepairLocalProtectionConfirmed();
+
+            Assert.That(stateDuringRecovery, Is.Not.Null);
+            Assert.That(stateDuringRecovery!.LocalProtectionStatus, Is.EqualTo("local_protection_reloading"));
+            Assert.That(stateDuringRecovery.NativeSubmitEnabled, Is.False);
+            Assert.That(stateDuringRecovery.ComposerProtected, Is.False);
+            Assert.That(stateWhenReplacementHookStarted, Is.Not.Null);
+            Assert.That(stateWhenReplacementHookStarted!.LocalProtectionStatus, Is.EqualTo("local_protection_reloading"));
+            Assert.That(stateWhenReplacementHookStarted.ComposerProtected, Is.False);
+            Assert.That(protection.State.LocalProtectionStatus, Is.EqualTo(LocalProtectionRecovery.ReadyCode));
+            Assert.That(context.IsNativeSubmitHookReady, Is.True);
+            Assert.That(protection.State.NativeSubmitEnabled, Is.True);
+            Assert.That(protection.State.ComposerProtected, Is.True);
+            Assert.That(form.CurrentRows[0].OperationalState, Is.EqualTo("ready"));
+            Assert.That(messages.Single(), Does.Contain("protected Send is active"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_FailedLocalRecoveryStaysBlockedAndDoesNotExposeFailureCode()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            const string rawFailureCode = "DOMAIN_C195C3D8E8F3";
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var protection = CreateManualOnlyTrayProtection();
+            var messages = new List<string>();
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                localProtectionStatus: LocalProtectionRecovery.RecoveryRequiredCode,
+                localProtectionRecovery: () => new LocalProtectionRecoveryResult(
+                    Succeeded: false,
+                    Code: rawFailureCode,
+                    RecoveryRequired: true,
+                    ConfirmationRequired: false,
+                    PreviousArtifactsPreserved: true,
+                    VaultInitialized: false),
+                recoveryMessagePresenter: (message, _) => messages.Add(message),
+                scheduleFirstRunSetup: false);
+
+            context.OpenLocalProtectionStatus();
+            context.RepairLocalProtectionConfirmed();
+
+            var form = context.LocalProtectionStatusForm;
+            Assert.That(protection.State.LocalProtectionStatus, Is.EqualTo(LocalProtectionRecovery.RecoveryRequiredCode));
+            Assert.That(context.IsNativeSubmitHookReady, Is.False);
+            Assert.That(protection.State.ComposerProtected, Is.False);
+            Assert.That(form!.CurrentRows[0].OperationalState, Is.EqualTo("recovery required"));
+            Assert.That(messages.Single(), Does.Contain("Protected Send remains blocked"));
+            Assert.That(messages.All(message => !message.Contains(rawFailureCode, StringComparison.Ordinal)), Is.True);
+            Assert.That(form.CurrentRows.All(row =>
+                !row.ToString().Contains(rawFailureCode, StringComparison.Ordinal)), Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_RecoveryExceptionReturnsToRecoveryRequiredWithoutExposingException()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            const string rawExceptionMessage = "DOMAIN_C195C3D8E8F3";
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var protection = CreateManualOnlyTrayProtection();
+            var messages = new List<string>();
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                localProtectionStatus: LocalProtectionRecovery.RecoveryRequiredCode,
+                localProtectionRecovery: () => throw new InvalidOperationException(rawExceptionMessage),
+                recoveryMessagePresenter: (message, _) => messages.Add(message),
+                scheduleFirstRunSetup: false);
+
+            context.RepairLocalProtectionConfirmed();
+
+            Assert.That(protection.State.LocalProtectionStatus, Is.EqualTo(LocalProtectionRecovery.RecoveryRequiredCode));
+            Assert.That(protection.State.ComposerProtected, Is.False);
+            Assert.That(messages.All(message => !message.Contains(rawExceptionMessage, StringComparison.Ordinal)), Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void TrayProtectionController_LocalRecoveryStatusBlocksSelectedSendButPassesOrdinaryInput()
+    {
+        var profile = CreateProtectedSetupProfile() with
+        {
+            SubmitBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding!
+        };
+        var hook = new SanitizerTests.FakeNativeSubmitHookHost();
+        var submitted = 0;
+        var controller = new TrayProtectionController(
+            new SanitizerTests.FakeTrayHotkeyHost(),
+            CreateProtectedInteractionResult,
+            hook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateSetupTestSurface())),
+            () =>
+            {
+                submitted++;
+                return CreateProtectedInteractionResult();
+            },
+            profile,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateSetupTestSurface()));
+        Assert.That(controller.Start(), Is.True);
+
+        controller.PublishLocalProtectionStatus("local_protection_reloading");
+        hook.Trigger(new NativeKeyGesture("Enter"));
+
+        Assert.That(hook.LastClassification!.SuppressOriginalInput, Is.False);
+
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(hook.LastClassification!.SuppressOriginalInput, Is.True);
+        Assert.That(submitted, Is.EqualTo(0));
+        Assert.That(controller.State.ComposerProtected, Is.False);
+
+    }
+
     private static void LaunchFirstRunSetupIfRequiredWithController(DefaultStorageLayout layout, IFirstRunSetupController setupController)
     {
         FirstRunSetupBackgroundRunner.Run(layout, () => setupController, _ => { });
@@ -7791,6 +7970,23 @@ public class ResidentFirstRunSetupLaunchTests
             Applied: false,
             Submitted: false,
             Diagnostics: new Dictionary<string, string>());
+    }
+
+    private static ResidentProtectionRuntime CreateRecoveredProtectedRuntime(Action? onHookStarted = null)
+    {
+        var profile = CreateProtectedSetupProfile();
+        var hook = new SanitizerTests.FakeNativeSubmitHookHost
+        {
+            OnStarted = _ => onHookStarted?.Invoke()
+        };
+        var runtime = new NativeSubmitRuntime(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            CreateProtectedInteractionResult,
+            profile);
+        return new ResidentProtectionRuntime(
+            CreateProtectedInteractionResult,
+            new NativeSubmitRuntimeSet(hook, new[] { runtime }));
     }
 
     private static SubmitBindingProfile CreatePendingSetupProfile()

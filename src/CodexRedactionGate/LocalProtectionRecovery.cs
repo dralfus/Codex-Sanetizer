@@ -28,6 +28,7 @@ public static class LocalProtectionRecovery
     public const string RecoveredCode = "local_protection_recovered";
     public const string RecoveryFailedCode = "local_protection_recovery_failed";
     public const string RecoveryNotRequiredCode = "local_protection_recovery_not_required";
+    public const string RuntimeDegradedCode = "local_protection_runtime_degraded";
 
     public static LocalProtectionRecoveryResult Inspect(
         DefaultStorageLayout layout,
