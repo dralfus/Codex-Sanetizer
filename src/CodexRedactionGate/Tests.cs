@@ -1373,11 +1373,20 @@ public partial class SanitizerTests
         Assert.That(started, Is.False);
         Assert.That(controller.State.Enabled, Is.False);
         Assert.That(statusText, Does.Contain("manual_scan_hotkey=Ctrl+Enter"));
-        Assert.That(statusText, Does.Contain("last=hotkey_register_failed:1409"));
+        Assert.That(statusText, Does.Contain("last=unavailable"));
         Assert.That(TrayStatusFormatter.FormatStartupError(controller.State), Does.Contain("manual_scan_hotkey=Ctrl+Enter"));
-        Assert.That(TrayStatusFormatter.FormatStartupError(controller.State), Does.Contain("error=hotkey_register_failed:1409"));
+        Assert.That(TrayStatusFormatter.FormatStartupError(controller.State), Does.Contain("error=unavailable"));
         Assert.That(statusText, Does.Not.Contain("ACME Banking"));
         Assert.That(statusText, Does.Not.Contain("SENSITIVE_MARKER"));
+    }
+
+    [Test]
+    public void TrayStatusFormatter_RecoveryTooltipNormalizesUnknownStatus()
+    {
+        var text = TrayStatusFormatter.FormatRecoveryRequiredNotifyIconText("test.secret.com");
+
+        Assert.That(text, Does.Not.Contain("test.secret.com"));
+        Assert.That(text, Does.Contain("local_protection=local_protection_unavailable"));
     }
 
     [Test]
@@ -7613,7 +7622,7 @@ public class ResidentFirstRunSetupLaunchTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            var protection = CreateManualOnlyTrayProtection();
+            var protection = CreateManualOnlyTrayProtection(layout);
             using var context = new WindowsTrayApplicationContext(
                 protection,
                 layout,
@@ -7629,6 +7638,11 @@ public class ResidentFirstRunSetupLaunchTests
             context.OpenLocalProtectionStatus();
             Assert.That(context.LocalProtectionStatusForm, Is.SameAs(firstForm));
 
+            var replacedControls = firstForm!.RowControls.ToArray();
+            context.RefreshStatus();
+            Assert.That(replacedControls, Is.Not.Empty);
+            Assert.That(replacedControls.All(control => control.IsDisposed), Is.True);
+
             for (var refresh = 0; refresh < 5; refresh++)
             {
                 context.RefreshStatus();
@@ -7640,7 +7654,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(firstForm!.CurrentRows[1].OperationalState, Is.EqualTo("disabled"));
 
             ProtectedWorkspaceStore.Protect(layout, Path.Combine(tempDirectory, "workspace"));
-            context.RefreshStatus();
+            context.RefreshProjectFileProtectionStatus();
             Assert.That(firstForm.CurrentRows[2].OperationalState, Is.EqualTo("broker demo only"));
 
             firstForm.Close();
@@ -7654,6 +7668,73 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(secondForm, Is.Not.SameAs(firstForm));
             secondForm!.Close();
             Assert.That(secondForm.IsRefreshTimerDisposed, Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_StatusViewKeepsSyntheticResidentFailuresRawFree()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var rawValues = new[]
+            {
+                "C:\\Users\\user1\\private\\.env",
+                "test.secret.com",
+                "PROMPT_C195C3D8E8F3",
+                "mapping-value",
+                "exception-detail"
+            };
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var protection = CreateManualOnlyTrayProtection(layout);
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                scheduleFirstRunSetup: false);
+
+            context.OpenLocalProtectionStatus();
+            var form = context.LocalProtectionStatusForm;
+            Assert.That(form, Is.Not.Null);
+            var statusForm = form!;
+
+            protection.PublishSyntheticDiagnosticsForTesting(
+                rawValues[0],
+                rawValues[1],
+                rawValues[2],
+                rawValues[3],
+                rawValues[4]);
+
+            var renderedControls = string.Join(
+                Environment.NewLine,
+                statusForm.RowControls
+                    .SelectMany(row => row.Controls.Cast<Control>())
+                    .Select(control => control.Text));
+            Assert.That(statusForm.CurrentRows.All(row => rawValues.All(raw => !row.ToString().Contains(raw, StringComparison.Ordinal))), Is.True);
+            Assert.That(rawValues.All(raw => !renderedControls.Contains(raw, StringComparison.Ordinal)), Is.True);
+            Assert.That(rawValues.All(raw => !context.TrayTooltipText.Contains(raw, StringComparison.Ordinal)), Is.True);
+            Assert.That(rawValues.All(raw => !context.TrayStatusText.Contains(raw, StringComparison.Ordinal)), Is.True);
+            Assert.That(statusForm.CurrentRows[0].OperationalState, Is.EqualTo("unavailable"));
+            Assert.That(statusForm.CurrentRows[1].OperationalState, Is.EqualTo("unavailable"));
+
+            protection.PublishSyntheticDiagnosticsForTesting(
+                LocalProtectionRecovery.ReadyCode,
+                rawValues[1],
+                rawValues[2],
+                rawValues[3],
+                rawValues[4]);
+
+            Assert.That(rawValues.All(raw => !context.TrayTooltipText.Contains(raw, StringComparison.Ordinal)), Is.True);
+            Assert.That(rawValues.All(raw => !context.TrayStatusText.Contains(raw, StringComparison.Ordinal)), Is.True);
+            Assert.That(statusForm.CurrentRows[0].OperationalState, Is.EqualTo("ready"));
+
+            statusForm.Close();
         }
         finally
         {
@@ -7953,11 +8034,15 @@ public class ResidentFirstRunSetupLaunchTests
         FirstRunSetupBackgroundRunner.Run(layout, () => setupController, _ => { });
     }
 
-    private static TrayProtectionController CreateManualOnlyTrayProtection()
+    private static TrayProtectionController CreateManualOnlyTrayProtection(DefaultStorageLayout? storageLayout = null)
     {
         return new TrayProtectionController(
             new SanitizerTests.FakeTrayHotkeyHost(),
-            CreateProtectedInteractionResult);
+            CreateProtectedInteractionResult,
+            nativeSubmitHookHost: null,
+            nativeSubmitController: null,
+            nativeSubmitRunner: null,
+            storageLayout: storageLayout);
     }
 
     private static OsInteractionResult CreateProtectedInteractionResult()

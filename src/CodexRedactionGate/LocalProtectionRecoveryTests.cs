@@ -572,6 +572,16 @@ public sealed class LocalProtectionRecoveryTests
         Assert.That(tooltip.Length, Is.LessThanOrEqualTo(63));
     }
 
+    [Test]
+    public void RecoveryRequiredTrayTooltip_NormalizesAnUnsafeStatus()
+    {
+        var tooltip = TrayStatusFormatter.FormatRecoveryRequiredNotifyIconText(
+            "C:\\Users\\user1\\private\\.env");
+
+        Assert.That(tooltip, Does.Contain(LocalProtectionRecovery.UnavailableCode));
+        Assert.That(tooltip, Does.Not.Contain("C:\\Users\\user1\\private\\.env"));
+    }
+
     private static string CreateTempDirectory()
     {
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-recovery-tests", Guid.NewGuid().ToString("N"));

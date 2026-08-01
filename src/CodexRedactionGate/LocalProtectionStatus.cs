@@ -24,20 +24,15 @@ internal sealed record LocalProtectionStatusRow(
 internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionStatusRow> Rows)
 {
     public static LocalProtectionStatusView Create(
-        string localProtectionStatus,
-        TrayProtectionState trayState,
-        string projectFileStatus,
-        bool promptProtectionRetryFailed = false)
+        TrayProtectionState trayState)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(localProtectionStatus);
         ArgumentNullException.ThrowIfNull(trayState);
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectFileStatus);
 
         return new LocalProtectionStatusView(new[]
         {
-            CreateDpapiRow(localProtectionStatus),
-            CreatePromptRow(trayState, promptProtectionRetryFailed),
-            CreateProjectFileRow(trayState.ProjectFilesProtected, projectFileStatus)
+            CreateDpapiRow(trayState.LocalProtectionStatus),
+            CreatePromptRow(trayState),
+            CreateProjectFileRow(trayState.ProjectFilesProtected, trayState.ProjectFileStatus)
         });
     }
 
@@ -73,7 +68,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
         };
     }
 
-    private static LocalProtectionStatusRow CreatePromptRow(TrayProtectionState state, bool promptProtectionRetryFailed)
+    private static LocalProtectionStatusRow CreatePromptRow(TrayProtectionState state)
     {
         if (state.SetupRequired || state.NativeSubmitStatus == OsInteractionStatusIds.NativeSubmitSetupRequired)
         {
@@ -83,6 +78,19 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "setup required",
                 "Send from selected AI apps is blocked until profile verification succeeds.",
                 LocalProtectionStatusAction.VerifyProfiles);
+        }
+
+        if (!string.Equals(
+                state.LocalProtectionStatus,
+                LocalProtectionRecovery.ReadyCode,
+                StringComparison.Ordinal))
+        {
+            return new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "unavailable",
+                "Selected AI-app prompts remain blocked until local protection is ready.",
+                LocalProtectionStatusAction.None);
         }
 
         if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
@@ -101,7 +109,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Automatic prompt protection",
                 "Selected-app send interception",
                 "degraded",
-                promptProtectionRetryFailed
+                state.PromptProtectionRetryFailed
                     ? "Protection retry failed. Selected AI-app prompts remain unconfirmed and protected Send stays blocked."
                     : "Selected AI-app prompts are not confirmed as protected; retry protection before sending sensitive data.",
                 LocalProtectionStatusAction.RetryPromptProtection);
@@ -162,6 +170,8 @@ internal sealed class LocalProtectionStatusForm : Form
     internal IReadOnlyList<LocalProtectionStatusRow> CurrentRows { get; private set; } = Array.Empty<LocalProtectionStatusRow>();
 
     internal bool IsRefreshTimerDisposed => _refreshTimerDisposed;
+
+    internal IReadOnlyList<Control> RowControls => _rows.Controls.Cast<Control>().ToArray();
 
     public LocalProtectionStatusForm(
         Func<LocalProtectionStatusView> viewFactory,

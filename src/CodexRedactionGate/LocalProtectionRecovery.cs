@@ -29,6 +29,18 @@ public static class LocalProtectionRecovery
     public const string RecoveryFailedCode = "local_protection_recovery_failed";
     public const string RecoveryNotRequiredCode = "local_protection_recovery_not_required";
     public const string RuntimeDegradedCode = "local_protection_runtime_degraded";
+    public const string ReloadingCode = "local_protection_reloading";
+    public const string UnavailableCode = "local_protection_unavailable";
+
+    public static string ToSafeStatusCode(string code)
+    {
+        return code switch
+        {
+            ReadyCode or RecoveryRequiredCode or ConfirmationRequiredCode or RecoveredCode
+                or RecoveryFailedCode or RecoveryNotRequiredCode or RuntimeDegradedCode or ReloadingCode => code,
+            _ => UnavailableCode
+        };
+    }
 
     public static LocalProtectionRecoveryResult Inspect(
         DefaultStorageLayout layout,

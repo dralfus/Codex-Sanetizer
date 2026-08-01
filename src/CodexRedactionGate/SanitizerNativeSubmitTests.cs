@@ -2553,8 +2553,14 @@ public class HandleButtonClickTests : SanitizerTests
         var profile = CreateProtectedProfile();
         var oldRunnerCalls = 0;
         var candidateRunnerCalls = 0;
-        candidateHook.OnStarted = hook => hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
-        var controller = new TrayProtectionController(
+        string? oldRuntimeStatus = null;
+        TrayProtectionController? controller = null;
+        candidateHook.OnStarted = hook =>
+        {
+            hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+            oldRuntimeStatus = controller!.State.LastStatus;
+        };
+        controller = new TrayProtectionController(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             oldHook,
@@ -2582,6 +2588,7 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(reloaded, Is.True);
         Assert.That(oldRunnerCalls, Is.EqualTo(1));
         Assert.That(candidateRunnerCalls, Is.EqualTo(0));
+        Assert.That(controller.State.LastStatus, Is.EqualTo(oldRuntimeStatus));
         candidateHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
         Assert.That(candidateRunnerCalls, Is.EqualTo(1));
     }
@@ -2614,6 +2621,52 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(controller.State, Is.EqualTo(before.State));
         Assert.That(oldHook.Started, Is.True);
         Assert.That(failedHook.Started, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_RuntimeReloadDoesNotOverwriteNewerProjectFileState()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-reload-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(Path.Combine(directory, "data"));
+        var workspace = Path.Combine(directory, "workspace");
+        Directory.CreateDirectory(workspace);
+
+        try
+        {
+            var oldHook = new FakeNativeSubmitHookHost();
+            var candidateHook = new FakeNativeSubmitHookHost();
+            var profile = CreateProtectedProfile();
+            TrayProtectionController? controller = null;
+            candidateHook.OnStarted = _ =>
+            {
+                ProtectedWorkspaceStore.Protect(layout, workspace);
+                controller!.RefreshProjectFileProtectionStatus();
+            };
+            controller = new TrayProtectionController(
+                new FakeTrayHotkeyHost(),
+                () => throw new InvalidOperationException("Manual scan should not run."),
+                oldHook,
+                new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () => CreateSubmittedResult(profile.ProfileId),
+                profile,
+                storageLayout: layout);
+            var candidateRuntime = new NativeSubmitRuntime(
+                candidateHook,
+                new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () => CreateSubmittedResult(profile.ProfileId),
+                profile);
+
+            Assert.That(controller.Start(), Is.True);
+            Assert.That(controller.State.ProjectFileStatus, Is.EqualTo(ProjectFileProtectionStatusValues.NotConfigured));
+
+            Assert.That(controller.ReloadNativeSubmit(candidateRuntime), Is.True);
+            Assert.That(controller.State.ProjectFileStatus, Is.EqualTo(ProjectFileProtectionStatusValues.BrokerDemoOnly));
+            Assert.That(candidateHook.Started, Is.True);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Test]

@@ -49,7 +49,8 @@ public sealed record TrayProtectionState(
     bool ResidentProcess = false,
     bool SetupRequired = false,
     string ProgrammaticUiaInvokeStatus = OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported,
-    string LocalProtectionStatus = LocalProtectionRecovery.ReadyCode);
+    string LocalProtectionStatus = LocalProtectionRecovery.ReadyCode,
+    bool PromptProtectionRetryFailed = false);
 
 public sealed record ProtectionDisableResult(
     bool Succeeded,
@@ -131,9 +132,37 @@ internal sealed class TrayProtectionController
 
     internal bool IsNativeSubmitHookReady => ReadSnapshot().HookReady;
 
+    internal void RefreshProjectFileProtectionStatus()
+    {
+        while (true)
+        {
+            var snapshot = ReadSnapshot();
+            var (projectFilesProtected, projectFileStatus) = ReadProjectFileProtectionStatus();
+            if (snapshot.State.ProjectFileStatus == projectFileStatus
+                && snapshot.State.ProjectFilesProtected == projectFilesProtected)
+            {
+                return;
+            }
+
+            var replacement = snapshot with
+            {
+                State = snapshot.State with
+                {
+                    ProjectFileStatus = projectFileStatus,
+                    ProjectFilesProtected = projectFilesProtected
+                }
+            };
+            if (PublishSnapshotIfCurrent(snapshot, replacement))
+            {
+                return;
+            }
+        }
+    }
+
     internal void PublishLocalProtectionStatus(string localProtectionStatus)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localProtectionStatus);
+        localProtectionStatus = LocalProtectionRecovery.ToSafeStatusCode(localProtectionStatus);
         if (string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("local_protection_ready_requires_active_runtime");
@@ -154,6 +183,62 @@ internal sealed class TrayProtectionController
                     ReadinessStatus = localProtectionStatus,
                     ComposerProtected = false,
                     LocalProtectionStatus = localProtectionStatus
+                }
+            };
+            if (PublishSnapshotIfCurrent(snapshot, replacement))
+            {
+                return;
+            }
+        }
+    }
+
+    internal void PublishPromptProtectionRetryFailure()
+    {
+        while (true)
+        {
+            var snapshot = ReadSnapshot();
+            if (snapshot.State.PromptProtectionRetryFailed)
+            {
+                return;
+            }
+
+            var replacement = snapshot with
+            {
+                State = snapshot.State with { PromptProtectionRetryFailed = true }
+            };
+            if (PublishSnapshotIfCurrent(snapshot, replacement))
+            {
+                return;
+            }
+        }
+    }
+
+    // Bounded deterministic seam for tray projection tests. Runtime ownership stays unchanged.
+    internal void PublishSyntheticDiagnosticsForTesting(
+        string localProtectionStatus,
+        string projectFileStatus,
+        string lastStatus,
+        string lastProfileId,
+        string protectedSendBinding)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localProtectionStatus);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectFileStatus);
+        ArgumentException.ThrowIfNullOrWhiteSpace(lastStatus);
+        ArgumentException.ThrowIfNullOrWhiteSpace(lastProfileId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(protectedSendBinding);
+
+        while (true)
+        {
+            var snapshot = ReadSnapshot();
+            var replacement = snapshot with
+            {
+                State = snapshot.State with
+                {
+                    LocalProtectionStatus = localProtectionStatus,
+                    ProjectFileStatus = projectFileStatus,
+                    LastStatus = lastStatus,
+                    LastProfileId = lastProfileId,
+                    ProtectedSendBinding = protectedSendBinding
                 }
             };
             if (PublishSnapshotIfCurrent(snapshot, replacement))
@@ -386,7 +471,43 @@ internal sealed class TrayProtectionController
                 return false;
             }
 
-            if (PublishSnapshotIfCurrent(current, candidate))
+            var state = ReferenceEquals(current, previous)
+                ? candidate.State
+                : candidate.State with
+                {
+                    Enabled = current.State.Enabled,
+                    Mode = current.State.Mode,
+                    Hotkey = current.State.Hotkey,
+                    LastStatus = current.State.LastStatus,
+                    LastDecision = current.State.LastDecision,
+                    LastReplacementCount = current.State.LastReplacementCount,
+                    LastProfileId = current.State.LastProfileId,
+                    LastApplied = current.State.LastApplied,
+                    LastSubmitted = current.State.LastSubmitted,
+                    ProjectFilesProtected = current.State.ProjectFilesProtected,
+                    ProjectFileStatus = current.State.ProjectFileStatus,
+                    ResidentProcess = current.State.ResidentProcess,
+                    ProgrammaticUiaInvokeStatus = current.State.ProgrammaticUiaInvokeStatus,
+                    LocalProtectionStatus = current.State.LocalProtectionStatus,
+                    PromptProtectionRetryFailed = current.State.PromptProtectionRetryFailed
+                };
+            if (!string.Equals(
+                    state.LocalProtectionStatus,
+                    LocalProtectionRecovery.ReadyCode,
+                    StringComparison.Ordinal))
+            {
+                state = state with
+                {
+                    LastStatus = state.LocalProtectionStatus,
+                    NativeSubmitEnabled = false,
+                    NativeSubmitStatus = state.LocalProtectionStatus,
+                    ProtectedSendBinding = "not_configured",
+                    ReadinessStatus = state.LocalProtectionStatus,
+                    ComposerProtected = false
+                };
+            }
+
+            if (PublishSnapshotIfCurrent(current, candidate with { State = state }))
             {
                 return true;
             }
@@ -513,7 +634,8 @@ internal sealed class TrayProtectionController
             ResidentProcess: snapshot.State.ResidentProcess,
             SetupRequired: snapshot.State.SetupRequired,
             ProgrammaticUiaInvokeStatus: snapshot.State.ProgrammaticUiaInvokeStatus,
-            LocalProtectionStatus: snapshot.State.LocalProtectionStatus);
+            LocalProtectionStatus: snapshot.State.LocalProtectionStatus,
+            PromptProtectionRetryFailed: snapshot.State.PromptProtectionRetryFailed);
         PublishSnapshotIfCurrent(snapshot, snapshot with { State = state });
     }
 
@@ -834,12 +956,13 @@ internal sealed class TrayProtectionController
             ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
             ReadinessStatus: readinessStatus,
             ComposerProtected: readinessStatus == OsInteractionStatusIds.Protected,
-            ProjectFilesProtected: false,
-            ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
+            ProjectFilesProtected: eventSnapshot.State.ProjectFilesProtected,
+            ProjectFileStatus: eventSnapshot.State.ProjectFileStatus,
             ResidentProcess: true,
             SetupRequired: setupRequired,
             ProgrammaticUiaInvokeStatus: eventSnapshot.State.ProgrammaticUiaInvokeStatus,
-            LocalProtectionStatus: eventSnapshot.State.LocalProtectionStatus);
+            LocalProtectionStatus: eventSnapshot.State.LocalProtectionStatus,
+            PromptProtectionRetryFailed: eventSnapshot.State.PromptProtectionRetryFailed);
         PublishSnapshotIfCurrent(eventSnapshot, eventSnapshot with { State = state });
     }
 
@@ -881,6 +1004,7 @@ internal sealed class TrayProtectionController
         var effectiveNativeSubmitStatus = localProtectionReady
             ? nativeSubmitStatus
             : localProtectionStatus;
+        var (projectFilesProtected, projectFileStatus) = ReadProjectFileProtectionStatus();
         return new TrayProtectionState(
             Enabled: enabled,
             Mode: "ApplyOnly",
@@ -900,11 +1024,19 @@ internal sealed class TrayProtectionController
                 ? ReadinessStatus(runtimes, effectiveNativeSubmitStatus)
                 : localProtectionStatus,
             ComposerProtected: localProtectionReady && effectiveNativeSubmitStatus == OsInteractionStatusIds.Protected,
-            ProjectFilesProtected: false,
-            ProjectFileStatus: ProjectFileProtectionStatusValues.NotConfigured,
+            ProjectFilesProtected: projectFilesProtected,
+            ProjectFileStatus: projectFileStatus,
             ResidentProcess: enabled,
             SetupRequired: setupRequired,
             LocalProtectionStatus: localProtectionStatus);
+    }
+
+    private (bool ProjectFilesProtected, string ProjectFileStatus) ReadProjectFileProtectionStatus()
+    {
+        var projectFileStatus = ProjectFileProtectionStatusInspector.Inspect(_storageLayout);
+        return (
+            ProjectFilesProtected: projectFileStatus == ProjectFileProtectionStatusValues.Protected,
+            ProjectFileStatus: projectFileStatus);
     }
 
     private bool EnterprisePolicyBlocksDisable()
@@ -1303,7 +1435,7 @@ internal static class TrayStatusFormatter
         var replacements = state.LastReplacementCount is null
             ? "n/a"
             : state.LastReplacementCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return $"status={enabled} mode={state.Mode} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} programmatic_uia_invoke={state.ProgrammaticUiaInvokeStatus} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={state.ProjectFileStatus} protected_send_binding={state.ProtectedSendBinding} newline_binding={state.NewlineBinding} manual_scan_hotkey={state.ManualScanHotkey} native_submit={state.NativeSubmitStatus} readiness={state.ReadinessStatus} last={state.LastStatus} replacements={replacements}";
+        return $"status={enabled} mode={DisplayMode(state.Mode)} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} programmatic_uia_invoke={DisplayStatus(state.ProgrammaticUiaInvokeStatus)} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={DisplayProjectFileStatus(state.ProjectFileStatus)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} newline_binding={DisplayBinding(state.NewlineBinding)} manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} native_submit={DisplayStatus(state.NativeSubmitStatus)} readiness={DisplayStatus(state.ReadinessStatus)} last={DisplayStatus(state.LastStatus)} replacements={replacements}";
     }
 
     public static string FormatNotifyIconText(TrayProtectionState state, string? buildVersion = null)
@@ -1314,21 +1446,77 @@ internal static class TrayStatusFormatter
         var product = string.IsNullOrWhiteSpace(buildVersion)
             ? "CodexRG"
             : $"CodexRG {buildVersion}";
-        return TrimNotifyText($"{product} {enabled} {state.Mode} last={state.LastStatus} send={state.ProtectedSendBinding} manual={state.ManualScanHotkey}");
+        return TrimNotifyText($"{product} {enabled} {DisplayMode(state.Mode)} last={DisplayStatus(state.LastStatus)} send={DisplayBinding(state.ProtectedSendBinding)} manual={DisplayManualHotkey(state.ManualScanHotkey)}");
     }
 
     public static string FormatRecoveryRequiredNotifyIconText(string localProtectionStatus)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localProtectionStatus);
 
-        return TrimNotifyText($"CodexRG local_protection={localProtectionStatus}");
+        return TrimNotifyText($"CodexRG local_protection={LocalProtectionRecovery.ToSafeStatusCode(localProtectionStatus)}");
     }
 
     public static string FormatStartupError(TrayProtectionState state)
     {
         ArgumentNullException.ThrowIfNull(state);
 
-        return $"Protection disabled. manual_scan_hotkey={state.ManualScanHotkey} protected_send_binding={state.ProtectedSendBinding} readiness={state.ReadinessStatus} error={state.LastStatus}";
+        return $"Protection disabled. manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} readiness={DisplayStatus(state.ReadinessStatus)} error={DisplayStatus(state.LastStatus)}";
+    }
+
+    private static string DisplayMode(string value)
+    {
+        return value is "ApplyOnly" or "NativeSubmit" ? value : "unavailable";
+    }
+
+    private static string DisplayBinding(string value)
+    {
+        return value is "Enter" or "Ctrl+Enter" or "not_configured" or "unknown"
+            ? value
+            : "unknown";
+    }
+
+    private static string DisplayManualHotkey(string value)
+    {
+        return value is "Ctrl+Shift+F9" or "Ctrl+Enter" or "not_configured"
+            ? value
+            : "configured";
+    }
+
+    private static string DisplayProjectFileStatus(string value)
+    {
+        return ProjectFileProtectionStatusValues.ToSafeDisplayValue(value);
+    }
+
+    private static string DisplayStatus(string value)
+    {
+        return value switch
+        {
+            "enabled" or "disabled" or "enabled_native_submit_manual_hotkey_unavailable"
+                or "native_submit_runtime_reloaded" => value,
+            OsInteractionStatusIds.SupportedSurface or OsInteractionStatusIds.UnsupportedSurface
+                or OsInteractionStatusIds.UnsupportedPlatform or OsInteractionStatusIds.AmbiguousSurface
+                or OsInteractionStatusIds.CaptureFailed or OsInteractionStatusIds.WriteFailed
+                or OsInteractionStatusIds.SubmitFailed or OsInteractionStatusIds.VerificationFailed
+                or OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer
+                or OsInteractionStatusIds.DryRunAllow or OsInteractionStatusIds.DryRunConfirm
+                or OsInteractionStatusIds.Blocked or OsInteractionStatusIds.Canceled
+                or OsInteractionStatusIds.Applied or OsInteractionStatusIds.Submitted
+                or OsInteractionStatusIds.FailedClosed or OsInteractionStatusIds.SafetyDisabled
+                or OsInteractionStatusIds.NotComposer or OsInteractionStatusIds.SupportedComposer
+                or OsInteractionStatusIds.EvidenceMissing or OsInteractionStatusIds.Protected
+                or OsInteractionStatusIds.NotConfigured or OsInteractionStatusIds.BindingUnknown
+                or OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.DegradedHotkeyOnly
+                or OsInteractionStatusIds.NativeSubmitGuarded or OsInteractionStatusIds.NativeSubmitInProgress
+                or OsInteractionStatusIds.NativeSubmitPassThrough or OsInteractionStatusIds.NativeSubmitCrashed
+                or OsInteractionStatusIds.EmergencyDisabled or OsInteractionStatusIds.EnterpriseBlocked
+                or OsInteractionStatusIds.NativeSubmitSetupRequired or OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported
+                or LocalProtectionRecovery.ReadyCode or LocalProtectionRecovery.RecoveryRequiredCode
+                or LocalProtectionRecovery.ConfirmationRequiredCode or LocalProtectionRecovery.RecoveredCode
+                or LocalProtectionRecovery.RecoveryFailedCode or LocalProtectionRecovery.RecoveryNotRequiredCode
+                or LocalProtectionRecovery.RuntimeDegradedCode or LocalProtectionRecovery.ReloadingCode
+                or LocalProtectionRecovery.UnavailableCode => value,
+            _ => "unavailable"
+        };
     }
 
     private static string TrimNotifyText(string text)

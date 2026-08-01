@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using NUnit.Framework;
 using CodexRedactionGate;
 
@@ -11,12 +12,8 @@ public sealed class LocalProtectionStatusTests
     public void StatusForm_RefreshesExplicitlyWithoutLeakingRawValuesOrRequiringTheTimer()
     {
         var state = ProtectedTrayState();
-        var localProtectionStatus = LocalProtectionRecovery.ReadyCode;
         using var form = new LocalProtectionStatusForm(
-            () => LocalProtectionStatusView.Create(
-                localProtectionStatus,
-                state,
-                ProjectFileProtectionStatusValues.NotConfigured),
+            () => LocalProtectionStatusView.Create(state),
             _ => { });
 
         form.RefreshView();
@@ -26,14 +23,19 @@ public sealed class LocalProtectionStatusTests
         Assert.That(form.CurrentRows[1].OperationalState, Is.EqualTo("degraded"));
         Assert.That(string.Join(Environment.NewLine, form.CurrentRows), Does.Not.Contain("test.secret.com"));
 
-        state = state with { NativeSubmitEnabled = true, ComposerProtected = true };
-        localProtectionStatus = LocalProtectionRecovery.RecoveryRequiredCode;
+        state = state with
+        {
+            NativeSubmitEnabled = true,
+            ComposerProtected = true,
+            LocalProtectionStatus = LocalProtectionRecovery.RecoveryRequiredCode
+        };
         form.RefreshView();
 
         Assert.That(form.CurrentRows[0].OperationalState, Is.EqualTo("recovery required"));
-        Assert.That(form.CurrentRows[1].OperationalState, Is.EqualTo("active"));
+        Assert.That(form.CurrentRows[1].OperationalState, Is.EqualTo("unavailable"));
+        Assert.That(form.CurrentRows[1].Action, Is.EqualTo(LocalProtectionStatusAction.None));
 
-        localProtectionStatus = LocalProtectionRecovery.ReadyCode;
+        state = state with { LocalProtectionStatus = LocalProtectionRecovery.ReadyCode };
         form.RefreshView();
 
         Assert.That(form.CurrentRows[0].OperationalState, Is.EqualTo("ready"));
@@ -43,10 +45,10 @@ public sealed class LocalProtectionStatusTests
     [Test]
     public void StatusView_SeparatesReadyDpapiActivePromptAndBrokerOnlyFiles()
     {
-        var view = LocalProtectionStatusView.Create(
-            LocalProtectionRecovery.ReadyCode,
-            ProtectedTrayState(),
-            ProjectFileProtectionStatusValues.BrokerDemoOnly);
+        var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ProjectFileStatus = ProjectFileProtectionStatusValues.BrokerDemoOnly
+        });
 
         Assert.That(view.Rows, Has.Count.EqualTo(3));
         Assert.That(view.Rows[0], Is.EqualTo(new LocalProtectionStatusRow(
@@ -69,13 +71,11 @@ public sealed class LocalProtectionStatusTests
             NativeSubmitEnabled = false,
             NativeSubmitStatus = OsInteractionStatusIds.NativeSubmitSetupRequired,
             ComposerProtected = false,
-            SetupRequired = true
+            SetupRequired = true,
+            LocalProtectionStatus = LocalProtectionRecovery.RecoveryRequiredCode
         };
 
-        var view = LocalProtectionStatusView.Create(
-            LocalProtectionRecovery.RecoveryRequiredCode,
-            state,
-            ProjectFileProtectionStatusValues.NotConfigured);
+        var view = LocalProtectionStatusView.Create(state);
 
         Assert.That(view.Rows[0].OperationalState, Is.EqualTo("recovery required"));
         Assert.That(view.Rows[0].Action, Is.EqualTo(LocalProtectionStatusAction.RepairLocalProtection));
@@ -100,8 +100,8 @@ public sealed class LocalProtectionStatusTests
             ComposerProtected = false
         };
 
-        var setupView = LocalProtectionStatusView.Create(LocalProtectionRecovery.ReadyCode, setup, ProjectFileProtectionStatusValues.NotConfigured);
-        var degradedView = LocalProtectionStatusView.Create(LocalProtectionRecovery.ReadyCode, degraded, ProjectFileProtectionStatusValues.NotConfigured);
+        var setupView = LocalProtectionStatusView.Create(setup);
+        var degradedView = LocalProtectionStatusView.Create(degraded);
 
         Assert.That(setupView.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.VerifyProfiles));
         Assert.That(degradedView.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.RetryPromptProtection));
@@ -112,14 +112,31 @@ public sealed class LocalProtectionStatusTests
     {
         var failure = "DOMAIN_C195C3D8E8F3";
         var view = LocalProtectionStatusView.Create(
-            LocalProtectionRecovery.ReadyCode,
-            ProtectedTrayState() with { NativeSubmitEnabled = false, ComposerProtected = false, LastStatus = failure },
-            ProjectFileProtectionStatusValues.NotConfigured,
-            promptProtectionRetryFailed: true);
+            ProtectedTrayState() with
+            {
+                NativeSubmitEnabled = false,
+                ComposerProtected = false,
+                LastStatus = failure,
+                PromptProtectionRetryFailed = true
+            });
 
         Assert.That(view.Rows[1].Consequence, Does.Contain("retry failed"));
         Assert.That(view.Rows[1].Consequence, Does.Contain("stays blocked"));
         Assert.That(view.RenderText(), Does.Not.Contain(failure));
+    }
+
+    [TestCase(LocalProtectionRecovery.RecoveryRequiredCode)]
+    [TestCase("DOMAIN_C195C3D8E8F3")]
+    public void StatusView_DoesNotClaimPromptProtectionActiveWhenLocalProtectionIsNotReady(string localProtectionStatus)
+    {
+        var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            LocalProtectionStatus = localProtectionStatus
+        });
+
+        Assert.That(view.Rows[0].OperationalState, Is.Not.EqualTo("ready"));
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("unavailable"));
+        Assert.That(view.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.None));
     }
 
     [Test]
@@ -127,10 +144,12 @@ public sealed class LocalProtectionStatusTests
     {
         var sensitivePath = "C:\\Users\\user1\\private\\.env";
         var sensitiveTerm = "test.secret.com";
-        var view = LocalProtectionStatusView.Create(
-            LocalProtectionRecovery.ReadyCode,
-            ProtectedTrayState() with { LastStatus = sensitiveTerm, LastProfileId = sensitivePath },
-            ProjectFileProtectionStatusValues.UnprotectedNoBroker);
+        var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            LastStatus = sensitiveTerm,
+            LastProfileId = sensitivePath,
+            ProjectFileStatus = ProjectFileProtectionStatusValues.UnprotectedNoBroker
+        });
         var rendered = view.RenderText();
 
         Assert.That(rendered, Does.Not.Contain(sensitivePath));
@@ -172,15 +191,13 @@ public sealed class LocalProtectionStatusTests
         {
             Enabled = enabled,
             NativeSubmitEnabled = nativeSubmitEnabled,
-            ComposerProtected = composerProtected
+            ComposerProtected = composerProtected,
+            ProjectFileStatus = ProjectFileProtectionStatusValues.Protected
         };
 
-        var view = LocalProtectionStatusView.Create(
-            "local_protection_unavailable",
-            state,
-            ProjectFileProtectionStatusValues.Protected);
+        var view = LocalProtectionStatusView.Create(state);
 
-        Assert.That(view.Rows[0].OperationalState, Is.EqualTo("unavailable"));
+        Assert.That(view.Rows[0].OperationalState, Is.EqualTo("ready"));
         Assert.That(view.Rows[1].OperationalState, Is.EqualTo(expectedStatus));
         Assert.That(view.Rows[2].OperationalState, Is.EqualTo("unsupported"));
     }
@@ -188,12 +205,13 @@ public sealed class LocalProtectionStatusTests
     [Test]
     public void StatusView_ReportsLiveProjectFileProtectionOnlyWhenTheLiveFlagIsTrue()
     {
-        var liveState = ProtectedTrayState() with { ProjectFilesProtected = true };
+        var liveState = ProtectedTrayState() with
+        {
+            ProjectFilesProtected = true,
+            ProjectFileStatus = ProjectFileProtectionStatusValues.Protected
+        };
 
-        var view = LocalProtectionStatusView.Create(
-            LocalProtectionRecovery.ReadyCode,
-            liveState,
-            ProjectFileProtectionStatusValues.Protected);
+        var view = LocalProtectionStatusView.Create(liveState);
 
         Assert.That(view.Rows[2].OperationalState, Is.EqualTo("live protected"));
         Assert.That(view.Rows[2].Consequence, Does.Contain("live ingress"));
@@ -206,22 +224,104 @@ public sealed class LocalProtectionStatusTests
         {
             NativeSubmitEnabled = false,
             ComposerProtected = false,
-            LastStatus = "test.secret.com"
+            LastStatus = "test.secret.com",
+            LocalProtectionStatus = "local_protection_reloading"
         };
 
-        var replacing = LocalProtectionStatusView.Create(
-            "local_protection_reloading",
-            state,
-            ProjectFileProtectionStatusValues.NotConfigured);
-        var ready = LocalProtectionStatusView.Create(
-            LocalProtectionRecovery.ReadyCode,
-            ProtectedTrayState(),
-            ProjectFileProtectionStatusValues.NotConfigured);
+        var replacing = LocalProtectionStatusView.Create(state);
+        var ready = LocalProtectionStatusView.Create(ProtectedTrayState());
 
         Assert.That(replacing.Rows[0].OperationalState, Is.EqualTo("unavailable"));
         Assert.That(replacing.Rows[0].Consequence, Does.Contain("unavailable"));
         Assert.That(replacing.RenderText(), Does.Not.Contain("test.secret.com"));
         Assert.That(ready.Rows[0].OperationalState, Is.EqualTo("ready"));
+    }
+
+    [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void StatusForm_RefreshDisposesReplacedControlsAndCloseDisposesItsTimer()
+    {
+        var state = ProtectedTrayState();
+        using var form = new LocalProtectionStatusForm(
+            () => LocalProtectionStatusView.Create(state),
+            _ => { });
+
+        form.RefreshView();
+        var replacedControls = form.RowControls.ToArray();
+        state = state with { NativeSubmitEnabled = false, ComposerProtected = false };
+        form.RefreshView();
+
+        Assert.That(replacedControls, Is.Not.Empty);
+        Assert.That(replacedControls.All(control => control.IsDisposed), Is.True);
+
+        form.Close();
+        Assert.That(form.IsRefreshTimerDisposed, Is.True);
+    }
+
+    [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void StatusView_RendersOnlyRawFreeTextFromSyntheticResidentState()
+    {
+        var rawValues = new[]
+        {
+            "C:\\Users\\user1\\private\\.env",
+            "test.secret.com",
+            "PROMPT_C195C3D8E8F3",
+            "mapping-value",
+            "exception-detail"
+        };
+        var state = ProtectedTrayState() with
+        {
+            LocalProtectionStatus = rawValues[0],
+            ProjectFileStatus = rawValues[1],
+            LastStatus = rawValues[2],
+            LastProfileId = rawValues[3],
+            ProtectedSendBinding = rawValues[4]
+        };
+
+        var view = LocalProtectionStatusView.Create(state);
+        var rendered = view.RenderText();
+        using var form = new LocalProtectionStatusForm(() => view, _ => { });
+        form.RefreshView();
+        var renderedControlText = string.Join(
+            Environment.NewLine,
+            form.RowControls.SelectMany(row => row.Controls.Cast<System.Windows.Forms.Control>()).Select(control => control.Text));
+
+        Assert.That(rawValues.All(raw => !rendered.Contains(raw, StringComparison.Ordinal)), Is.True);
+        Assert.That(rawValues.All(raw => !renderedControlText.Contains(raw, StringComparison.Ordinal)), Is.True);
+        Assert.That(rendered, Does.Contain("unavailable"));
+        Assert.That(rendered, Does.Contain("unsupported"));
+    }
+
+    [Test]
+    public void TrayProtectionController_PublishesProjectFileStatusBeforeTheTrayRendersIt()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-status-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(Path.Combine(directory, "data"));
+        var workspace = Path.Combine(directory, "workspace");
+        Directory.CreateDirectory(workspace);
+
+        try
+        {
+            var controller = new TrayProtectionController(
+                new SanitizerTests.FakeTrayHotkeyHost(),
+                () => throw new AssertionException("Manual scan should not run."),
+                nativeSubmitHookHost: null,
+                nativeSubmitController: null,
+                nativeSubmitRunner: null,
+                storageLayout: layout);
+            Assert.That(controller.State.ProjectFileStatus, Is.EqualTo(ProjectFileProtectionStatusValues.NotConfigured));
+
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+            controller.RefreshProjectFileProtectionStatus();
+
+            Assert.That(controller.State.ProjectFileStatus, Is.EqualTo(ProjectFileProtectionStatusValues.BrokerDemoOnly));
+            Assert.That(controller.State.ProjectFilesProtected, Is.False);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static TrayProtectionState ProtectedTrayState()

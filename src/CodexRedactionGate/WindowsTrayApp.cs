@@ -357,9 +357,12 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private int _firstRunSetupScheduled;
     private int _profileVerificationInProgress;
     private int _promptProtectionRetryInProgress;
-    private bool _promptProtectionRetryFailed;
 
     internal bool IsTrayIconVisible => _notifyIcon.Visible;
+
+    internal string TrayTooltipText => _notifyIcon.Text ?? string.Empty;
+
+    internal string TrayStatusText => _statusItem.Text ?? string.Empty;
 
     internal bool IsLocalProtectionStatusOpen => _localProtectionStatusForm is { IsDisposed: false, Visible: true };
 
@@ -613,7 +616,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     internal void RefreshStatus()
     {
         var state = _controller.State;
-        var localProtectionStatus = state.LocalProtectionStatus;
+        var localProtectionStatus = LocalProtectionRecovery.ToSafeStatusCode(state.LocalProtectionStatus);
         _versionItem.Text = TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion);
         if (!string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
@@ -640,6 +643,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     internal void OpenLocalProtectionStatus()
     {
+        RefreshProjectFileProtectionStatus();
         if (_localProtectionStatusForm is { IsDisposed: false })
         {
             _localProtectionStatusForm.Activate();
@@ -653,14 +657,15 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _localProtectionStatusForm.Show();
     }
 
+    internal void RefreshProjectFileProtectionStatus()
+    {
+        _controller.RefreshProjectFileProtectionStatus();
+    }
+
     private LocalProtectionStatusView CreateLocalProtectionStatusView()
     {
         var state = _controller.State;
-        return LocalProtectionStatusView.Create(
-            state.LocalProtectionStatus,
-            state,
-            ProjectFileProtectionStatusInspector.Inspect(_layout),
-            _promptProtectionRetryFailed);
+        return LocalProtectionStatusView.Create(state);
     }
 
     internal void RunLocalProtectionStatusAction(LocalProtectionStatusAction action)
@@ -749,7 +754,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                             _crashDiagnostics.Capture(exception, "tray_prompt_protection_retry", "runtime_activate_failed");
                         }
 
-                        _promptProtectionRetryFailed = !retrySucceeded;
+                        if (!retrySucceeded)
+                        {
+                            _controller.PublishPromptProtectionRetryFailure();
+                        }
 
                         RefreshStatus();
                     }
@@ -778,7 +786,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     internal void RepairLocalProtectionConfirmed()
     {
-        _controller.PublishLocalProtectionStatus("local_protection_reloading");
+        _controller.PublishLocalProtectionStatus(LocalProtectionRecovery.ReloadingCode);
         var localRecoveryCompleted = false;
         try
         {

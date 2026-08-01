@@ -542,8 +542,8 @@ If one of these cannot be stated, the work is an architecture-discovery ticket a
 
 - [x] Tests prove the status command is reachable from the tray and opens one modeless status window.
 - [x] Tests prove enabling/disabling protection and a persisted project-file policy change refresh the rendered rows without recreating the tray process.
-- [ ] Tests exercise disposal/close behavior so repeated status refreshes do not retain controls or timers.
-- [ ] Raw-free tests prove no rendered UI string contains synthetic paths, prompts, sensitive terms, mappings, or exception text.
+- [x] Tests exercise disposal/close behavior so repeated status refreshes do not retain controls or timers.
+- [x] Raw-free tests prove no rendered UI string contains synthetic paths, prompts, sensitive terms, mappings, or exception text.
 
 ## 292. Centralize single-flight execution for tray remediation actions
 
@@ -594,9 +594,9 @@ If one of these cannot be stated, the work is an architecture-discovery ticket a
 
 **Deterministic proof:** Direct tray-context refreshes retain old controls for disposal assertions and inject synthetic raw values without timers, focus, or cloud submission.
 
-- [ ] Tests retain a replaced row control across an explicit refresh and prove it was disposed; closing each status window disposes its refresh timer.
-- [ ] Tray-context tests inject every raw-value class into state/diagnostics and prove rendered rows remain raw-free.
-- [ ] Remove the direct `ProjectFileProtectionStatusInspector.Inspect` call from the tray view factory. Publish project-file protection into the resident snapshot first, then render only that snapshot so the status form complies with the sole-state-owner rule.
+- [x] Tests retain a replaced row control across an explicit refresh and prove it was disposed; closing each status window disposes its refresh timer.
+- [x] Tray-context tests inject every raw-value class into state/diagnostics and prove rendered rows remain raw-free.
+- [x] Remove the direct `ProjectFileProtectionStatusInspector.Inspect` call from the tray view factory. Publish project-file protection into the resident snapshot first, then render only that snapshot so the status form complies with the sole-state-owner rule.
 
 ## 295. Make second-instance activation proof match Windows foreground rules
 

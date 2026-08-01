@@ -16,6 +16,13 @@ public static class ProjectFileProtectionStatusValues
     public const string Protected = "protected";
     public const string BrokerDemoOnly = "broker_demo_only";
     public const string UnprotectedNoBroker = "unprotected_no_broker";
+
+    public static string ToSafeDisplayValue(string value)
+    {
+        return value is Protected or BrokerDemoOnly or NotConfigured or UnprotectedNoBroker
+            ? value
+            : "unsupported";
+    }
 }
 
 public sealed record ProtectedWorkspaceRegistrationResult(
