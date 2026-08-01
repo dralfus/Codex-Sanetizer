@@ -180,6 +180,34 @@ public sealed class LocalProtectionStatusTests
         }
     }
 
+    [Test]
+    public void ProjectFileStatusInspector_ReportsUnsupportedWhenWorkspaceRegistryIsUnreadable()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-status-tests", System.Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(Path.Combine(directory, "data"));
+        var workspace = Path.Combine(directory, "workspace");
+        Directory.CreateDirectory(workspace);
+
+        try
+        {
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+            File.WriteAllText(ProtectedWorkspaceStore.DefaultPath(layout), "{not-json");
+
+            var status = ProjectFileProtectionStatusInspector.Inspect(layout);
+            var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+            {
+                ProjectFileStatus = status
+            });
+
+            Assert.That(status, Is.EqualTo(ProjectFileProtectionStatusValues.UnprotectedNoBroker));
+            Assert.That(view.Rows[2].OperationalState, Is.EqualTo("unsupported"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [TestCase(true, false, false, "degraded")]
     [TestCase(false, false, false, "disabled")]
     public void StatusView_ReportsNonActivePromptStatesTruthfully(

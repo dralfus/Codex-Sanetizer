@@ -115,7 +115,15 @@ public static class ProtectedWorkspaceStore
         Directory.CreateDirectory(layout.SettingsDirectory);
         var path = DefaultPath(layout);
         var workspaceId = RawFreeIdentity.HashPath(workspacePath);
-        var document = LoadDocument(path);
+        if (!TryLoadDocument(path, out var document))
+        {
+            return new ProtectedWorkspaceRegistrationResult(
+                Succeeded: false,
+                Code: "protected_workspace_registry_unavailable",
+                WorkspaceId: workspaceId,
+                StorePath: path);
+        }
+
         var records = document.Workspaces
             .Where(record => !string.Equals(record.WorkspaceId, workspaceId, StringComparison.Ordinal))
             .Append(new ProtectedWorkspaceRecord(workspaceId, Enabled: true, UpdatedAt: DateTimeOffset.UtcNow))
@@ -151,29 +159,23 @@ public static class ProtectedWorkspaceStore
             path);
     }
 
-    internal static bool HasProtectedWorkspace(DefaultStorageLayout layout)
+    internal static bool TryHasProtectedWorkspace(DefaultStorageLayout layout, out bool hasProtectedWorkspace)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        return TryLoadDocument(DefaultPath(layout), out var document)
-            && document.Workspaces.Any(record => record.Enabled);
-    }
+        if (!TryLoadDocument(DefaultPath(layout), out var document))
+        {
+            hasProtectedWorkspace = false;
+            return false;
+        }
 
-    private static ProtectedWorkspaceDocument LoadDocument(string path)
-    {
-        return TryLoadDocument(path, out var document)
-            ? document
-            : new ProtectedWorkspaceDocument(1, Array.Empty<ProtectedWorkspaceRecord>());
+        hasProtectedWorkspace = document.Workspaces.Any(record => record.Enabled);
+        return true;
     }
 
     private static bool TryLoadDocument(string path, out ProtectedWorkspaceDocument document)
     {
         document = new ProtectedWorkspaceDocument(1, Array.Empty<ProtectedWorkspaceRecord>());
-        if (!File.Exists(path))
-        {
-            return true;
-        }
-
         try
         {
             var loaded = JsonSerializer.Deserialize<ProtectedWorkspaceDocument>(File.ReadAllText(path));
@@ -183,6 +185,11 @@ public static class ProtectedWorkspaceStore
             }
 
             document = loaded;
+            return true;
+        }
+        catch (Exception exception) when (exception is FileNotFoundException
+            or DirectoryNotFoundException)
+        {
             return true;
         }
         catch (Exception exception) when (exception is IOException
@@ -209,7 +216,12 @@ internal static class ProjectFileProtectionStatusInspector
 
         try
         {
-            return ProtectedWorkspaceStore.HasProtectedWorkspace(layout)
+            if (!ProtectedWorkspaceStore.TryHasProtectedWorkspace(layout, out var hasProtectedWorkspace))
+            {
+                return ProjectFileProtectionStatusValues.UnprotectedNoBroker;
+            }
+
+            return hasProtectedWorkspace
                 ? ProjectFileProtectionStatusValues.BrokerDemoOnly
                 : ProjectFileProtectionStatusValues.NotConfigured;
         }

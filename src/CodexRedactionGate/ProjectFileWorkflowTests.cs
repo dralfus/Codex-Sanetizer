@@ -548,6 +548,76 @@ public sealed class ProjectFileWorkflowTests
     }
 
     [Test]
+    public void ProjectFileIngressStatusInspector_FailsClosedWhenWorkspaceRegistryCannotBeRead()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            Directory.CreateDirectory(workspace);
+            var registration = ProtectedWorkspaceStore.Protect(layout, workspace);
+            var runtime = CreateRuntime(layout, new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("ingress-status-test-secret")));
+
+            using var lockHandle = new FileStream(registration.StorePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            var inspected = ProjectFileIngressStatusInspector.Inspect(layout, workspace);
+            var bypass = ProjectFileBypassGuard.ReportDirectAttachment(layout, workspace);
+            var output = CaptureProgramOutput(() =>
+                Program.Main(new[] { "--project-file-ingress-status", workspace }, runtime));
+
+            Assert.That(inspected.PreCloudBoundaryAvailable, Is.False);
+            Assert.That(inspected.MustBlockUnroutedContext, Is.True);
+            Assert.That(inspected.Status, Is.EqualTo(ProjectFileIngressStatusValues.Unsupported));
+            Assert.That(inspected.Code, Is.EqualTo("project_file_ingress_unsupported"));
+            Assert.That(bypass.Allowed, Is.False);
+            Assert.That(bypass.Code, Is.EqualTo("project_file_ingress_unsupported"));
+            Assert.That(output.ExitCode, Is.EqualTo(1));
+            Assert.That(output.Stdout, Does.Contain("precloud_ingress_boundary: unsupported"));
+            Assert.That(output.Stdout, Does.Contain("project_files_protected: false"));
+            Assert.That(output.Stdout, Does.Not.Contain(workspace));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void ProtectedWorkspaceStore_RefusesToOverwriteCorruptedRegistry()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var initialWorkspace = Path.Combine(tempDirectory, "initial-workspace");
+            var newWorkspace = Path.Combine(tempDirectory, "new-workspace");
+            Directory.CreateDirectory(initialWorkspace);
+            Directory.CreateDirectory(newWorkspace);
+            var initialRegistration = ProtectedWorkspaceStore.Protect(layout, initialWorkspace);
+            const string corruptedDocument = "{not-json";
+            File.WriteAllText(initialRegistration.StorePath, corruptedDocument);
+            var runtime = CreateRuntime(layout, new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("ingress-status-test-secret")));
+
+            var registration = ProtectedWorkspaceStore.Protect(layout, newWorkspace);
+            var output = CaptureProgramOutput(() =>
+                Program.Main(new[] { "--project-workspace-protect", newWorkspace }, runtime));
+
+            Assert.That(registration.Succeeded, Is.False);
+            Assert.That(registration.Code, Is.EqualTo("protected_workspace_registry_unavailable"));
+            Assert.That(File.ReadAllText(initialRegistration.StorePath), Is.EqualTo(corruptedDocument));
+            Assert.That(output.ExitCode, Is.EqualTo(1));
+            Assert.That(output.Stdout, Does.Contain("status: protected_workspace_registry_unavailable"));
+            Assert.That(output.Stdout, Does.Not.Contain(newWorkspace));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
     public void ProjectFileProductSmokeRunner_ProvesCompleteBrokerWorkflowRawFree()
     {
         var report = ProjectFileProductSmokeRunner.Run(System.Text.Encoding.UTF8.GetBytes("project-file-product-smoke-test-secret"));
