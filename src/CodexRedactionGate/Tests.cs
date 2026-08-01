@@ -7686,8 +7686,10 @@ public class ResidentFirstRunSetupLaunchTests
             }
 
             protection.Stop();
-            context.RefreshStatus();
             Assert.That(firstForm!.CurrentRows[1].OperationalState, Is.EqualTo("disabled"));
+
+            protection.Start();
+            Assert.That(firstForm.CurrentRows[1].OperationalState, Is.Not.EqualTo("disabled"));
 
             ProtectedWorkspaceStore.Protect(layout, Path.Combine(tempDirectory, "workspace"));
             context.RefreshProjectFileProtectionStatus();

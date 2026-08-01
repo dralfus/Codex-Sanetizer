@@ -464,7 +464,7 @@ If one of these cannot be stated, the work is an architecture-discovery ticket a
 - [x] The tray offers a dedicated local status view with separate rows for `Local DPAPI protection`, `Automatic prompt protection`, and `Project-file protection`.
 - [x] Each row shows a stable capability state and an operational state: DPAPI is `ready`, `recovery required`, or `unavailable`; prompt protection is `active`, `setup required`, `degraded`, or `disabled`; project-file protection is `live protected`, `broker demo only`, `unsupported`, or `not configured`.
 - [x] The view explains the immediate consequence of every non-green state and offers only safe relevant actions, such as profile verification, opening recovery, or opening protected-file management.
-- [ ] Tray status updates after profile verification, protection enable/disable, DPAPI recovery, and file-policy changes without requiring a restart; tests prove the displayed states remain raw-free and truthful.
+- [x] Tray status updates after profile verification, protection enable/disable, DPAPI recovery, and file-policy changes without requiring a restart; tests prove the displayed states remain raw-free and truthful.
 
 ## 286. Exclude selected files, including .env, from cloud file context
 
