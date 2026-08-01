@@ -632,7 +632,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             Visible = true
         };
 
-        _controller.StateChanged += (_, _) => RefreshStatus();
+        _controller.StateChanged += (_, _) => RefreshStatusOnUiThread();
         var started = _controller.Start();
         RefreshStatus();
         if (!started)
@@ -793,6 +793,29 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             LocalProtectionRecovery.RecoveryRequiredCode,
             StringComparison.Ordinal);
         _localProtectionStatusForm?.RefreshView();
+    }
+
+    private void RefreshStatusOnUiThread()
+    {
+        if (_activationWindow.IsDisposed)
+        {
+            return;
+        }
+
+        if (!_activationWindow.InvokeRequired)
+        {
+            RefreshStatus();
+            return;
+        }
+
+        try
+        {
+            _uiDispatcher(RefreshStatus);
+        }
+        catch (InvalidOperationException)
+        {
+            // A closing dispatcher cannot render status; the resident snapshot remains authoritative.
+        }
     }
 
     internal void OpenLocalProtectionStatus()
