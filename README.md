@@ -61,6 +61,12 @@ Build the installable release:
 .\scripts\build-release.ps1
 ```
 
+The release command first runs a non-interactive tracked-source whitespace check. It stops before publishing when it finds trailing whitespace or an extra blank line at the end of a source file. You can run that check separately:
+
+```powershell
+.\scripts\Test-SourceWhitespace.ps1
+```
+
 Install and launch the resident tray app for the current user:
 
 ```powershell

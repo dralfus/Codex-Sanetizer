@@ -530,10 +530,10 @@ public partial class SanitizerTests
     {
         // The crash boundary should be at OsInteractionOrchestrator.RunOnce,
         // not in TrayProtectionController.RunNativeSubmitOnce
-        
+
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
-        
+
         // Create a submit runner that throws an exception
         var exceptionThrown = false;
         var controller = new TrayProtectionController(
@@ -1287,7 +1287,7 @@ public partial class SanitizerTests
         // Setup is required for codex-desktop
         var setup = FixedFirstRunSetupController.RequiredFor("codex-desktop");
         var profile = CreateProtectedProfile();
-        
+
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
@@ -1376,14 +1376,14 @@ public partial class SanitizerTests
         // Verify tray and native submit use the same setup state
         var setupController = new FirstRunSetupController();
         var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        
+
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            
+
             // Get status from setup controller directly
             var setupStatus = setupController.GetSetupStatus(layout);
-            
+
             // Create native submit controller with same setup controller
             var controller = new NativeSubmitInterceptionController(
                 CreateProtectedProfile(),
@@ -1392,7 +1392,7 @@ public partial class SanitizerTests
 
             // Verify tray uses same setup state
             var trayUsesSharedState = setupController.IsSetupComplete(layout) == controller.IsSetupRequired(layout);
-            
+
             // If setup is required, IsSetupRequired should return true
             Assert.That(setupStatus.State.Required, Is.EqualTo(controller.IsSetupRequired(layout)));
         }
@@ -3075,7 +3075,7 @@ public class NativeSendBindingSelectionTests : SanitizerTests
         // Test that both supported pairs are valid:
         // 1. Enter Send / Ctrl+Enter newline
         // 2. Ctrl+Enter Send / Enter newline
-        
+
         var profileId = "codex-desktop";
         var surface = CreateNativeSubmitSurface(profileId);
         var discovery = TextSurfaceDiscoveryResult.Success(surface);
@@ -3083,7 +3083,7 @@ public class NativeSendBindingSelectionTests : SanitizerTests
         // Pair 1: Enter as Send, Ctrl+Enter as newline
         var pair1 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             profileId, "Enter", "Ctrl+Enter", discovery);
-        
+
         Assert.That(pair1.BindingSource, Is.EqualTo("user_verified"));
         Assert.That(pair1.SubmitBinding?.DisplayText, Is.EqualTo("Enter"));
         Assert.That(pair1.NewlineBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
@@ -3091,7 +3091,7 @@ public class NativeSendBindingSelectionTests : SanitizerTests
         // Pair 2: Ctrl+Enter as Send, Enter as newline
         var pair2 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             profileId, "Ctrl+Enter", "Enter", discovery);
-        
+
         Assert.That(pair2.BindingSource, Is.EqualTo("user_verified"));
         Assert.That(pair2.SubmitBinding?.DisplayText, Is.EqualTo("Ctrl+Enter"));
         Assert.That(pair2.NewlineBinding?.DisplayText, Is.EqualTo("Enter"));
@@ -3120,7 +3120,7 @@ public class NativeSendBindingSelectionTests : SanitizerTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            
+
             // Create profile with specific binding pair
             var profile = new SubmitBindingProfile(
                 "codex-desktop",
@@ -3153,7 +3153,7 @@ public class NativeSendBindingSelectionTests : SanitizerTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            
+
             // Create profile with Ctrl+Enter as Send, Enter as newline
             var profile = new SubmitBindingProfile(
                 "chatgpt-desktop",
@@ -3408,5 +3408,3 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(metadata.ComposerStatus, Is.Null);
     }
 }
-
-

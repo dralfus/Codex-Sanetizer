@@ -101,7 +101,7 @@ public sealed class SingleInstanceEnforcement : IDisposable
         }
 
         var mutexName = BuildMutexName(instanceId, useGlobalNamespace);
-        
+
         try
         {
             using var mutex = Mutex.OpenExisting(mutexName);

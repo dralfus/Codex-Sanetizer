@@ -429,7 +429,7 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController
         var thread = new Thread(() =>
         {
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-            
+
             using var form = new FirstRunSetupForm(profiles, layout, setupController);
             Application.Run(form);
             result = form.SetupCompleted;

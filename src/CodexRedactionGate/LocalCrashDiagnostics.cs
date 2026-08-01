@@ -66,7 +66,7 @@ public sealed class LocalCrashDiagnostics
         try
         {
             Directory.CreateDirectory(_reportsDirectory);
-            
+
             var report = new CrashReport(
                 ExceptionType: ex.GetType().FullName ?? ex.GetType().Name,
                 Component: component,

@@ -10,6 +10,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$whitespaceCheck = Join-Path $PSScriptRoot "Test-SourceWhitespace.ps1"
+& $whitespaceCheck -RepositoryRoot $repoRoot
 $project = Join-Path $repoRoot "src\CodexRedactionGate\CodexRedactionGate.csproj"
 $trayProject = Join-Path $repoRoot "src\CodexRedactionGate.Tray\CodexRedactionGate.Tray.csproj"
 $output = Join-Path $repoRoot $OutputDirectory

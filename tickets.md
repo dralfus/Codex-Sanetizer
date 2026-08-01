@@ -439,8 +439,8 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Blocked by:** None - can start immediately.
 
-- [ ] Tracked source and test files have no current `git diff --check` whitespace errors.
-- [ ] The documented release verification includes a non-interactive whitespace check that fails before packaging when new defects are introduced.
+- [x] Tracked source and test files have no current `git diff --check` whitespace errors.
+- [x] The documented release verification includes a non-interactive whitespace check that fails before packaging when new defects are introduced.
 
 ## 285. Show local protection capabilities and active state in the tray UI
 
@@ -516,10 +516,10 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Freeze the tray UI during focused verification; say a profile was verified when only a runtime reload occurred; create parallel setup flows; or enable protected Send after a failed retry.
 
-- [ ] The status view exposes distinct safe actions and wording for setup verification and degraded-hook retry.
-- [ ] Each action runs without blocking the tray UI and prevents duplicate concurrent attempts.
-- [ ] The relevant status is refreshed after completion and always reflects actual hook activation, not only the persisted profile record.
-- [ ] Tests cover setup required, verified-but-degraded, retry failure, cancellation, and raw-free public failure text.
+- [x] The status view exposes distinct safe actions and wording for setup verification and degraded-hook retry.
+- [x] Each action runs without blocking the tray UI and prevents duplicate concurrent attempts.
+- [x] The relevant status is refreshed after completion and always reflects actual hook activation, not only the persisted profile record.
+- [x] Tests cover setup required, verified-but-degraded, retry failure, cancellation, and raw-free public failure text.
 
 ## 291. Add end-to-end tray local-status lifecycle coverage
 
@@ -529,7 +529,34 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 **Do not:** Depend on a real Codex or ChatGPT window, user focus, timers, raw status diagnostics, or nondeterministic desktop timing in automated tests.
 
-- [ ] Tests prove the status command is reachable from the tray and opens one modeless status window.
-- [ ] Tests prove enabling/disabling protection and a persisted project-file policy change refresh the rendered rows without recreating the tray process.
+- [x] Tests prove the status command is reachable from the tray and opens one modeless status window.
+- [x] Tests prove enabling/disabling protection and a persisted project-file policy change refresh the rendered rows without recreating the tray process.
 - [ ] Tests exercise disposal/close behavior so repeated status refreshes do not retain controls or timers.
 - [ ] Raw-free tests prove no rendered UI string contains synthetic paths, prompts, sensitive terms, mappings, or exception text.
+
+## 292. Centralize single-flight execution for tray remediation actions
+
+**What to build:** Keep profile verification and prompt-protection retry on one shared tray-action execution path so their background dispatch, UI callback, raw-free failure handling, and release of duplicate-action guards cannot drift apart.
+
+**Blocked by:** 290. Make tray profile remediation an explicit verification or retry workflow.
+
+- [ ] Profile verification and prompt-protection retry use one tested single-flight action executor while preserving their distinct remediation behavior and public status text.
+- [ ] The shared executor releases its guard and refreshes truthful raw-free status after cancellation, runtime-creation failure, activation failure, and UI-dispatch shutdown.
+
+## 293. Prove local status refresh after actual DPAPI recovery
+
+**What to build:** Add a deterministic tray-level recovery seam and tests proving that successful and failed confirmed DPAPI recovery publish the correct local protection row and never enable protected Send early.
+
+**Blocked by:** None - can start immediately.
+
+- [ ] A confirmed successful recovery reloads the resident runtime and renders local protection as ready only after the new runtime is active.
+- [ ] A failed recovery keeps the status recovery-required or degraded, leaves protected Send fail-closed, and exposes only raw-free public text.
+
+## 294. Complete tray status redraw disposal and raw-free coverage
+
+**What to build:** Strengthen deterministic tray-context tests so repeated local-status redraws release old controls and no synthetic path, prompt, sensitive term, mapping, or exception text can reach rendered rows.
+
+**Blocked by:** None - can start immediately.
+
+- [ ] Tests retain a replaced row control across an explicit refresh and prove it was disposed; closing each status window disposes its refresh timer.
+- [ ] Tray-context tests inject every raw-value class into state/diagnostics and prove rendered rows remain raw-free.

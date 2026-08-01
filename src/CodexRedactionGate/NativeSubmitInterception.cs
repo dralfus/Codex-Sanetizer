@@ -2260,4 +2260,3 @@ internal static class SubmitKeyBindingExtensions
         return new NativeKeyGesture(binding.Key, Ctrl: binding.Ctrl, Alt: binding.Alt, Shift: binding.Shift);
     }
 }
-

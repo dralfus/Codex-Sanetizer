@@ -995,13 +995,13 @@ public class HmacSecretProviderTests
         try
         {
             var secretFilePath = Path.Combine(tempDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName);
-            
+
             // Create empty file
             File.WriteAllText(secretFilePath, "");
-            
+
             var protector = new DeterministicDataProtector();
             var provider = new DpapiProtectedHmacSecretProvider(secretFilePath, protector);
-            
+
             // Empty file should throw
             Assert.Throws<InvalidOperationException>(() => provider.GetOrCreateSecret());
         }
@@ -1018,15 +1018,15 @@ public class HmacSecretProviderTests
         try
         {
             var secretFilePath = Path.Combine(tempDirectory, DpapiProtectedHmacSecretProvider.DefaultSecretFileName);
-            
+
             // Create file with wrong length
             var protector = new DeterministicDataProtector();
             var wrongLengthSecret = new byte[16]; // Should be 32
             var protectedBytes = protector.Protect(wrongLengthSecret);
             File.WriteAllBytes(secretFilePath, protectedBytes);
-            
+
             var provider = new DpapiProtectedHmacSecretProvider(secretFilePath, protector);
-            
+
             // Invalid length should throw DpapiSecretLoadFailureException
             var ex = Assert.Throws<DpapiSecretLoadFailureException>(() => provider.GetOrCreateSecret());
             Assert.That(ex!.Message, Is.EqualTo("Local protection initialization failed."));
@@ -1044,15 +1044,15 @@ public class HmacSecretProviderTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            
+
             // Force empty secret file
             var secretPath = Path.Combine(tempDirectory, "hmac-secret.dpapi");
             Directory.CreateDirectory(Path.GetDirectoryName(secretPath)!);
             File.WriteAllText(secretPath, "");
-            
+
             // Override the default path
             var vault = Sanitizer.TryCreateProductionVault(layout, out var failureReason);
-            
+
             Assert.That(vault, Is.Null);
             Assert.That(failureReason, Is.Not.Null);
             Assert.That(failureReason, Does.Not.Contain("192.168.10.25"));
@@ -7295,7 +7295,7 @@ public class ResidentFirstRunSetupLaunchTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            
+
             // Create an unprotected profile
             var profile = new SubmitBindingProfile(
                 "codex-desktop",
@@ -7313,7 +7313,7 @@ public class ResidentFirstRunSetupLaunchTests
             // Verify no protected profile exists
             var stored = SubmitBindingProfileStore.Load(layout);
             Assert.That(stored.Profiles.Any(p => p.IsProtected && p.Enabled), Is.False);
-            
+
             // In a real scenario, this would launch first-run setup
             // For unit test, we verify the setup would be triggered
             Assert.That(stored.Profiles.Count, Is.EqualTo(1));
@@ -7332,7 +7332,7 @@ public class ResidentFirstRunSetupLaunchTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            
+
             // Create a protected profile
             var profile = new SubmitBindingProfile(
                 "codex-desktop",
@@ -7364,7 +7364,7 @@ public class ResidentFirstRunSetupLaunchTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            
+
             // Verify empty store (profiles_default_empty)
             var stored = SubmitBindingProfileStore.Load(layout);
             Assert.That(stored.Profiles, Is.Empty);
@@ -7605,9 +7605,192 @@ public class ResidentFirstRunSetupLaunchTests
         }
     }
 
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_StatusViewIsModelessAndRefreshesWithinOneTrayProcess()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var protection = CreateManualOnlyTrayProtection();
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                scheduleFirstRunSetup: false);
+
+            context.OpenLocalProtectionStatus();
+            var firstForm = context.LocalProtectionStatusForm;
+            Assert.That(firstForm, Is.Not.Null);
+            Assert.That(context.IsLocalProtectionStatusOpen, Is.True);
+
+            context.OpenLocalProtectionStatus();
+            Assert.That(context.LocalProtectionStatusForm, Is.SameAs(firstForm));
+
+            for (var refresh = 0; refresh < 5; refresh++)
+            {
+                context.RefreshStatus();
+                Assert.That(firstForm!.CurrentRows, Has.Count.EqualTo(3));
+            }
+
+            protection.Stop();
+            context.RefreshStatus();
+            Assert.That(firstForm!.CurrentRows[1].OperationalState, Is.EqualTo("disabled"));
+
+            ProtectedWorkspaceStore.Protect(layout, Path.Combine(tempDirectory, "workspace"));
+            context.RefreshStatus();
+            Assert.That(firstForm.CurrentRows[2].OperationalState, Is.EqualTo("broker demo only"));
+
+            firstForm.Close();
+            Assert.That(firstForm.IsRefreshTimerDisposed, Is.True);
+            Assert.That(context.IsLocalProtectionStatusOpen, Is.False);
+            Assert.That(context.LocalProtectionStatusForm, Is.Null);
+
+            context.OpenLocalProtectionStatus();
+            var secondForm = context.LocalProtectionStatusForm;
+            Assert.That(secondForm, Is.Not.Null);
+            Assert.That(secondForm, Is.Not.SameAs(firstForm));
+            secondForm!.Close();
+            Assert.That(secondForm.IsRefreshTimerDisposed, Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_StatusActionsAreSingleFlightAndRemainRawFreeAfterFailure()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Save(layout, new[] { CreatePendingSetupProfile() });
+            var queuedWork = new Queue<Action>();
+            var retryFactoryCalls = 0;
+            var setupAttempts = 0;
+            const string retryFailure = "DOMAIN_C195C3D8E8F3";
+            SanitizerTests.FakeNativeSubmitHookHost? failedRetryHook = null;
+            var protection = CreateManualOnlyTrayProtection();
+            var setupController = new TestSetupController(setupLayout =>
+            {
+                if (++setupAttempts == 1)
+                {
+                    return SetupCancelledResult();
+                }
+
+                SubmitBindingProfileStore.Save(setupLayout, new[] { CreateProtectedSetupProfile() });
+                return SetupCompleteResult();
+            });
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                nativeSubmitRuntimeFactory: () =>
+                {
+                    var profile = CreateProtectedSetupProfile();
+                    if (++retryFactoryCalls == 1)
+                    {
+                        var activeHook = new SanitizerTests.FakeNativeSubmitHookHost();
+                        var activeRuntime = new NativeSubmitRuntime(
+                            activeHook,
+                            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                            CreateProtectedInteractionResult,
+                            profile);
+                        return new NativeSubmitRuntimeSet(activeHook, new[] { activeRuntime });
+                    }
+
+                    failedRetryHook = new SanitizerTests.FakeNativeSubmitHookHost
+                    {
+                        OnStarted = _ => throw new InvalidOperationException(retryFailure)
+                    };
+                    var runtime = new NativeSubmitRuntime(
+                        failedRetryHook,
+                        new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                        CreateProtectedInteractionResult,
+                        profile);
+                    return new NativeSubmitRuntimeSet(failedRetryHook, new[] { runtime });
+                },
+                firstRunSetupControllerFactory: () => setupController,
+                backgroundWorkQueue: work => queuedWork.Enqueue(work),
+                uiDispatcher: work => work(),
+                scheduleFirstRunSetup: false);
+
+            context.OpenLocalProtectionStatus();
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+
+            queuedWork.Dequeue().Invoke();
+            Assert.That(setupController.EnsureSetupCalls, Is.EqualTo(1));
+            Assert.That(context.IsNativeSubmitHookReady, Is.False);
+
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+            Assert.That(setupController.EnsureSetupCalls, Is.EqualTo(2));
+            var form = context.LocalProtectionStatusForm;
+            Assert.That(form!.CurrentRows[1].OperationalState, Is.EqualTo("active"));
+            Assert.That(context.IsNativeSubmitHookReady, Is.True);
+
+            var protectedProfiles = SubmitBindingProfileStore.Load(layout).Profiles;
+            Assert.That(protectedProfiles.Single().IsProtected, Is.True);
+            protection.Stop();
+            protection.Start();
+            context.RefreshStatus();
+            Assert.That(form.CurrentRows[1].OperationalState, Is.EqualTo("degraded"));
+            Assert.That(form.CurrentRows[1].Action, Is.EqualTo(LocalProtectionStatusAction.RetryPromptProtection));
+
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+
+            Assert.That(retryFactoryCalls, Is.EqualTo(2));
+            Assert.That(form.CurrentRows[1].Consequence, Does.Contain("retry failed"));
+            Assert.That(form.CurrentRows[1].Consequence, Does.Contain("stays blocked"));
+            Assert.That(form.CurrentRows.Select(row => row.Consequence), Does.Not.Contain(retryFailure));
+            Assert.That(failedRetryHook, Is.Not.Null);
+            Assert.That(failedRetryHook!.Started, Is.False);
+
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+            Assert.That(retryFactoryCalls, Is.EqualTo(3));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
     private static void LaunchFirstRunSetupIfRequiredWithController(DefaultStorageLayout layout, IFirstRunSetupController setupController)
     {
         FirstRunSetupBackgroundRunner.Run(layout, () => setupController, _ => { });
+    }
+
+    private static TrayProtectionController CreateManualOnlyTrayProtection()
+    {
+        return new TrayProtectionController(
+            new SanitizerTests.FakeTrayHotkeyHost(),
+            CreateProtectedInteractionResult);
+    }
+
+    private static OsInteractionResult CreateProtectedInteractionResult()
+    {
+        return new OsInteractionResult(
+            OsInteractionStatusIds.Protected,
+            Surface: null,
+            SanitizationResult: null,
+            ConfirmationModel: null,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>());
     }
 
     private static SubmitBindingProfile CreatePendingSetupProfile()
@@ -7619,6 +7802,19 @@ public class ResidentFirstRunSetupLaunchTests
             SubmitBinding: null,
             NewlineBinding: null,
             CapabilityStatus: OsInteractionStatusIds.BindingUnknown,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+    }
+
+    private static SubmitBindingProfile CreateProtectedSetupProfile()
+    {
+        return new SubmitBindingProfile(
+            "codex-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
             CompatibilityEvidence: null,
             Diagnostics: new Dictionary<string, string>());
     }
@@ -7650,6 +7846,20 @@ public class ResidentFirstRunSetupLaunchTests
                 Status: "cancelled",
                 VerifiedCodex: false,
                 VerifiedChatGpt: false),
+            Diagnostics: new Dictionary<string, string>());
+    }
+
+    private static FirstRunSetupResult SetupCompleteResult()
+    {
+        return new FirstRunSetupResult(
+            Succeeded: true,
+            Code: "setup_complete",
+            State: new FirstRunSetupState(
+                Required: false,
+                UnprotectedProfileIds: Array.Empty<string>(),
+                Status: "complete",
+                VerifiedCodex: true,
+                VerifiedChatGpt: true),
             Diagnostics: new Dictionary<string, string>());
     }
 
@@ -7726,6 +7936,3 @@ public class ResidentFirstRunSetupLaunchTests
         }
     }
 }
-
-
-

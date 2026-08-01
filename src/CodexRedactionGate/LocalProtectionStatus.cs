@@ -10,6 +10,7 @@ internal enum LocalProtectionStatusAction
 {
     None,
     VerifyProfiles,
+    RetryPromptProtection,
     RepairLocalProtection
 }
 
@@ -25,7 +26,8 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
     public static LocalProtectionStatusView Create(
         string localProtectionStatus,
         TrayProtectionState trayState,
-        string projectFileStatus)
+        string projectFileStatus,
+        bool promptProtectionRetryFailed = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localProtectionStatus);
         ArgumentNullException.ThrowIfNull(trayState);
@@ -34,7 +36,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
         return new LocalProtectionStatusView(new[]
         {
             CreateDpapiRow(localProtectionStatus),
-            CreatePromptRow(trayState),
+            CreatePromptRow(trayState, promptProtectionRetryFailed),
             CreateProjectFileRow(trayState.ProjectFilesProtected, projectFileStatus)
         });
     }
@@ -71,7 +73,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
         };
     }
 
-    private static LocalProtectionStatusRow CreatePromptRow(TrayProtectionState state)
+    private static LocalProtectionStatusRow CreatePromptRow(TrayProtectionState state, bool promptProtectionRetryFailed)
     {
         if (state.SetupRequired || state.NativeSubmitStatus == OsInteractionStatusIds.NativeSubmitSetupRequired)
         {
@@ -90,7 +92,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Selected-app send interception",
                 "active",
                 "Verified selected AI-app prompts are checked before cloud submission.",
-                LocalProtectionStatusAction.VerifyProfiles);
+                LocalProtectionStatusAction.None);
         }
 
         if (state.Enabled)
@@ -99,8 +101,10 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Automatic prompt protection",
                 "Selected-app send interception",
                 "degraded",
-                "Selected AI-app prompts are not confirmed as protected; verify profiles before sending sensitive data.",
-                LocalProtectionStatusAction.VerifyProfiles);
+                promptProtectionRetryFailed
+                    ? "Protection retry failed. Selected AI-app prompts remain unconfirmed and protected Send stays blocked."
+                    : "Selected AI-app prompts are not confirmed as protected; retry protection before sending sensitive data.",
+                LocalProtectionStatusAction.RetryPromptProtection);
         }
 
         return new LocalProtectionStatusRow(
@@ -108,7 +112,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
             "Selected-app send interception",
             "disabled",
             "Selected AI-app prompts are not intercepted while protection is stopped.",
-            LocalProtectionStatusAction.VerifyProfiles);
+            LocalProtectionStatusAction.None);
     }
 
     private static LocalProtectionStatusRow CreateProjectFileRow(bool liveProtected, string projectFileStatus)
@@ -153,6 +157,11 @@ internal sealed class LocalProtectionStatusForm : Form
     private readonly Action<LocalProtectionStatusAction> _runAction;
     private readonly TableLayoutPanel _rows;
     private readonly Timer _refreshTimer;
+    private bool _refreshTimerDisposed;
+
+    internal IReadOnlyList<LocalProtectionStatusRow> CurrentRows { get; private set; } = Array.Empty<LocalProtectionStatusRow>();
+
+    internal bool IsRefreshTimerDisposed => _refreshTimerDisposed;
 
     public LocalProtectionStatusForm(
         Func<LocalProtectionStatusView> viewFactory,
@@ -188,6 +197,7 @@ internal sealed class LocalProtectionStatusForm : Form
     internal void RefreshView()
     {
         var view = _viewFactory();
+        CurrentRows = view.Rows;
         _rows.SuspendLayout();
         try
         {
@@ -213,9 +223,11 @@ internal sealed class LocalProtectionStatusForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !_refreshTimerDisposed)
         {
+            _refreshTimer.Stop();
             _refreshTimer.Dispose();
+            _refreshTimerDisposed = true;
         }
 
         base.Dispose(disposing);
@@ -266,6 +278,7 @@ internal sealed class LocalProtectionStatusForm : Form
         return action switch
         {
             LocalProtectionStatusAction.VerifyProfiles => "Verify profiles",
+            LocalProtectionStatusAction.RetryPromptProtection => "Retry protection",
             LocalProtectionStatusAction.RepairLocalProtection => "Repair local protection",
             _ => string.Empty
         };
