@@ -357,6 +357,132 @@ internal sealed class UnavailableTrayHotkeyHost : ITrayHotkeyHost
     }
 }
 
+internal sealed class TrayRemediationActionExecutor
+{
+    private readonly Action<Action> _backgroundWorkQueue;
+    private readonly Action<Action> _uiDispatcher;
+    private int _inProgress;
+
+    public TrayRemediationActionExecutor(
+        Action<Action> backgroundWorkQueue,
+        Action<Action> uiDispatcher)
+    {
+        _backgroundWorkQueue = backgroundWorkQueue ?? throw new ArgumentNullException(nameof(backgroundWorkQueue));
+        _uiDispatcher = uiDispatcher ?? throw new ArgumentNullException(nameof(uiDispatcher));
+    }
+
+    public bool TryRun<T>(
+        Func<T> backgroundWork,
+        Action<T> completeOnUi,
+        Action<Exception> captureWorkerFailure,
+        Action<T> onUiDispatcherUnavailable)
+    {
+        ArgumentNullException.ThrowIfNull(backgroundWork);
+        ArgumentNullException.ThrowIfNull(completeOnUi);
+        ArgumentNullException.ThrowIfNull(captureWorkerFailure);
+        ArgumentNullException.ThrowIfNull(onUiDispatcherUnavailable);
+
+        if (Interlocked.Exchange(ref _inProgress, 1) != 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            _backgroundWorkQueue(() => RunBackgroundWork(
+                backgroundWork,
+                completeOnUi,
+                captureWorkerFailure,
+                onUiDispatcherUnavailable));
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                captureWorkerFailure(exception);
+            }
+            finally
+            {
+                Release();
+            }
+        }
+
+        return true;
+    }
+
+    private void RunBackgroundWork<T>(
+        Func<T> backgroundWork,
+        Action<T> completeOnUi,
+        Action<Exception> captureWorkerFailure,
+        Action<T> onUiDispatcherUnavailable)
+    {
+        T result;
+        try
+        {
+            result = backgroundWork();
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                captureWorkerFailure(exception);
+            }
+            finally
+            {
+                Release();
+            }
+
+            return;
+        }
+
+        try
+        {
+            _uiDispatcher(() =>
+            {
+                try
+                {
+                    completeOnUi(result);
+                }
+                catch (Exception exception)
+                {
+                    captureWorkerFailure(exception);
+                }
+                finally
+                {
+                    Release();
+                }
+            });
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                onUiDispatcherUnavailable(result);
+            }
+            catch (Exception cleanupException)
+            {
+                captureWorkerFailure(cleanupException);
+            }
+            finally
+            {
+                try
+                {
+                    captureWorkerFailure(exception);
+                }
+                finally
+                {
+                    Release();
+                }
+            }
+        }
+    }
+
+    private void Release()
+    {
+        Volatile.Write(ref _inProgress, 0);
+    }
+}
+
 internal sealed class WindowsTrayApplicationContext : ApplicationContext
 {
     private readonly TrayProtectionController _controller;
@@ -381,10 +507,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly Action<string, MessageBoxIcon> _recoveryMessagePresenter;
     private readonly Action<Action> _backgroundWorkQueue;
     private readonly Action<Action> _uiDispatcher;
+    private readonly TrayRemediationActionExecutor _remediationActionExecutor;
     private LocalProtectionStatusForm? _localProtectionStatusForm;
     private int _firstRunSetupScheduled;
-    private int _profileVerificationInProgress;
-    private int _promptProtectionRetryInProgress;
 
     internal bool IsTrayIconVisible => _notifyIcon.Visible;
 
@@ -470,6 +595,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         SingleInstanceEnforcement.RegisterActivationWindow("tray", _activationWindow.Handle);
         _backgroundWorkQueue = backgroundWorkQueue ?? (work => ThreadPool.QueueUserWorkItem(_ => work()));
         _uiDispatcher = uiDispatcher ?? (work => _activationWindow.BeginInvoke(new MethodInvoker(work)));
+        _remediationActionExecutor = new TrayRemediationActionExecutor(_backgroundWorkQueue, _uiDispatcher);
 
         _statusItem = new ToolStripMenuItem { Enabled = false };
         _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };
@@ -714,92 +840,77 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void VerifyProfilesFromTray()
     {
-        if (Interlocked.Exchange(ref _profileVerificationInProgress, 1) != 0)
-        {
-            return;
-        }
-
-        _backgroundWorkQueue(() =>
-        {
-            var result = FirstRunSetupBackgroundRunner.Run(
+        _remediationActionExecutor.TryRun(
+            () => FirstRunSetupBackgroundRunner.Run(
                 _layout,
                 _firstRunSetupControllerFactory,
-                exception => _crashDiagnostics.Capture(exception, "tray_profile_verification", "verification_failed"));
-            try
-            {
-                _uiDispatcher(() =>
-                {
-                    try
-                    {
-                        CompleteFirstRunSetup(result);
-                    }
-                    finally
-                    {
-                        Volatile.Write(ref _profileVerificationInProgress, 0);
-                    }
-                });
-            }
-            catch (InvalidOperationException)
-            {
-                Volatile.Write(ref _profileVerificationInProgress, 0);
-            }
-        });
+                exception => _crashDiagnostics.Capture(exception, "tray_profile_verification", "verification_failed")),
+            CompleteFirstRunSetup,
+            exception => PublishRemediationFailure(exception, "tray_profile_verification", "worker_failed"),
+            _ => PublishPromptProtectionRetryFailure());
     }
 
     private void RetryPromptProtectionFromTray()
     {
-        if (Interlocked.Exchange(ref _promptProtectionRetryInProgress, 1) != 0)
+        _remediationActionExecutor.TryRun(
+            CreatePromptProtectionRetryRuntime,
+            CompletePromptProtectionRetry,
+            exception => PublishRemediationFailure(exception, "tray_prompt_protection_retry", "worker_failed"),
+            runtimeSet =>
+            {
+                StopUnactivatedRuntime(runtimeSet);
+                PublishPromptProtectionRetryFailure();
+            });
+    }
+
+    private NativeSubmitRuntimeSet? CreatePromptProtectionRetryRuntime()
+    {
+        try
         {
-            return;
+            return _nativeSubmitRuntimeFactory?.Invoke();
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "tray_prompt_protection_retry", "runtime_create_failed");
+            return null;
+        }
+    }
+
+    private void CompletePromptProtectionRetry(NativeSubmitRuntimeSet? runtimeSet)
+    {
+        var retrySucceeded = false;
+        try
+        {
+            retrySucceeded = runtimeSet is not null && _controller.ReloadNativeSubmit(runtimeSet);
+        }
+        catch (Exception exception)
+        {
+            StopUnactivatedRuntime(runtimeSet);
+            _crashDiagnostics.Capture(exception, "tray_prompt_protection_retry", "runtime_activate_failed");
         }
 
-        _backgroundWorkQueue(() =>
+        if (!retrySucceeded)
         {
-            NativeSubmitRuntimeSet? runtimeSet = null;
-            try
-            {
-                runtimeSet = _nativeSubmitRuntimeFactory?.Invoke();
-            }
-            catch (Exception exception)
-            {
-                _crashDiagnostics.Capture(exception, "tray_prompt_protection_retry", "runtime_create_failed");
-            }
+            _controller.PublishPromptProtectionRetryFailure();
+        }
 
-            try
-            {
-                _uiDispatcher(() =>
-                {
-                    try
-                    {
-                        var retrySucceeded = false;
-                        try
-                        {
-                            retrySucceeded = runtimeSet is not null && _controller.ReloadNativeSubmit(runtimeSet);
-                        }
-                        catch (Exception exception)
-                        {
-                            runtimeSet?.HookHost.Stop();
-                            _crashDiagnostics.Capture(exception, "tray_prompt_protection_retry", "runtime_activate_failed");
-                        }
+        RefreshStatus();
+    }
 
-                        if (!retrySucceeded)
-                        {
-                            _controller.PublishPromptProtectionRetryFailure();
-                        }
+    private static void StopUnactivatedRuntime(NativeSubmitRuntimeSet? runtimeSet)
+    {
+        runtimeSet?.HookHost.Stop();
+    }
 
-                        RefreshStatus();
-                    }
-                    finally
-                    {
-                        Volatile.Write(ref _promptProtectionRetryInProgress, 0);
-                    }
-                });
-            }
-            catch (InvalidOperationException)
-            {
-                Volatile.Write(ref _promptProtectionRetryInProgress, 0);
-            }
-        });
+    private void PublishRemediationFailure(Exception exception, string component, string code)
+    {
+        _crashDiagnostics.Capture(exception, component, code);
+        PublishPromptProtectionRetryFailure();
+    }
+
+    private void PublishPromptProtectionRetryFailure()
+    {
+        _controller.PublishPromptProtectionRetryFailure();
     }
 
     private void RepairLocalProtection()

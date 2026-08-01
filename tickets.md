@@ -559,8 +559,8 @@ If one of these cannot be stated, the work is an architecture-discovery ticket a
 
 **Deterministic proof:** Injected background and UI dispatch queues prove single-flight execution and each completion outcome without timers, focus, or cloud submission.
 
-- [ ] Profile verification and prompt-protection retry use one tested single-flight action executor while preserving their distinct remediation behavior and public status text.
-- [ ] The shared executor releases its guard and refreshes truthful raw-free status after cancellation, runtime-creation failure, activation failure, and UI-dispatch shutdown.
+- [x] Profile verification and prompt-protection retry use one tested single-flight action executor while preserving their distinct remediation behavior and public status text.
+- [x] The shared executor releases its guard and refreshes truthful raw-free status after cancellation, runtime-creation failure, activation failure, and UI-dispatch shutdown.
 
 ## 293. Prove local status refresh after actual DPAPI recovery
 

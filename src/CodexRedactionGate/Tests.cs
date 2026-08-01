@@ -7840,7 +7840,7 @@ public class ResidentFirstRunSetupLaunchTests
 
             context.OpenLocalProtectionStatus();
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
-            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
             Assert.That(queuedWork, Has.Count.EqualTo(1));
 
             queuedWork.Dequeue().Invoke();
@@ -7879,6 +7879,135 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
             Assert.That(retryFactoryCalls, Is.EqualTo(3));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_RemediationDispatcherShutdownReleasesSingleFlightGuard()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Save(layout, new[] { CreatePendingSetupProfile() });
+            var queuedWork = new Queue<Action>();
+            var setupController = new TestSetupController(_ => SetupCancelledResult());
+            var retryFactoryCalls = 0;
+            var protection = CreateManualOnlyTrayProtection();
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                nativeSubmitRuntimeFactory: () =>
+                {
+                    retryFactoryCalls++;
+                    return null;
+                },
+                firstRunSetupControllerFactory: () => setupController,
+                backgroundWorkQueue: work => queuedWork.Enqueue(work),
+                uiDispatcher: _ => throw new InvalidOperationException("dispatcher unavailable"),
+                scheduleFirstRunSetup: false);
+
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            Assert.That(setupController.EnsureSetupCalls, Is.EqualTo(1));
+            Assert.That(retryFactoryCalls, Is.EqualTo(1));
+            Assert.That(context.IsNativeSubmitHookReady, Is.False);
+            Assert.That(protection.State.ComposerProtected, Is.False);
+            Assert.That(protection.State.PromptProtectionRetryFailed, Is.True);
+            Assert.That(context.TrayStatusText, Does.Not.Contain("dispatcher unavailable"));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_RemediationWorkerQueueFailurePublishesBlockedRawFreeState()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            const string rawFailure = "DOMAIN_C195C3D8E8F3";
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Save(layout, new[] { CreateProtectedSetupProfile() });
+            var protection = CreateManualOnlyTrayProtection();
+            protection.Start();
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                backgroundWorkQueue: _ => throw new InvalidOperationException(rawFailure),
+                uiDispatcher: work => work(),
+                scheduleFirstRunSetup: false);
+
+            context.OpenLocalProtectionStatus();
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
+
+            var form = context.LocalProtectionStatusForm;
+            Assert.That(form, Is.Not.Null);
+            Assert.That(protection.State.PromptProtectionRetryFailed, Is.True);
+            Assert.That(context.IsNativeSubmitHookReady, Is.False);
+            Assert.That(form!.CurrentRows.Select(row => row.Consequence), Does.Not.Contain(rawFailure));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_RuntimeCreationFailureStaysBlockedAndRawFree()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            const string rawFailure = "DOMAIN_C195C3D8E8F3";
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Save(layout, new[] { CreateProtectedSetupProfile() });
+            var queuedWork = new Queue<Action>();
+            var protection = CreateManualOnlyTrayProtection();
+            protection.Start();
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                nativeSubmitRuntimeFactory: () => throw new InvalidOperationException(rawFailure),
+                backgroundWorkQueue: work => queuedWork.Enqueue(work),
+                uiDispatcher: work => work(),
+                scheduleFirstRunSetup: false);
+
+            context.OpenLocalProtectionStatus();
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+
+            var form = context.LocalProtectionStatusForm;
+            Assert.That(form, Is.Not.Null);
+            Assert.That(context.IsNativeSubmitHookReady, Is.False);
+            Assert.That(protection.State.ComposerProtected, Is.False);
+            Assert.That(form!.CurrentRows[1].Consequence, Does.Contain("retry failed"));
+            Assert.That(form.CurrentRows.Select(row => row.Consequence), Does.Not.Contain(rawFailure));
         }
         finally
         {
