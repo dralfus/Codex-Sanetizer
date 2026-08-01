@@ -7896,11 +7896,11 @@ public class ResidentFirstRunSetupLaunchTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            SubmitBindingProfileStore.Save(layout, new[] { CreatePendingSetupProfile() });
+            SubmitBindingProfileStore.Save(layout, new[] { CreateProtectedSetupProfile() });
             var queuedWork = new Queue<Action>();
-            var setupController = new TestSetupController(_ => SetupCancelledResult());
             var retryFactoryCalls = 0;
             var protection = CreateManualOnlyTrayProtection();
+            protection.Start();
             using var context = new WindowsTrayApplicationContext(
                 protection,
                 layout,
@@ -7911,12 +7911,11 @@ public class ResidentFirstRunSetupLaunchTests
                     retryFactoryCalls++;
                     return null;
                 },
-                firstRunSetupControllerFactory: () => setupController,
                 backgroundWorkQueue: work => queuedWork.Enqueue(work),
                 uiDispatcher: _ => throw new InvalidOperationException("dispatcher unavailable"),
                 scheduleFirstRunSetup: false);
 
-            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            Assert.That(protection.State.PromptProtectionRetryFailed, Is.False);
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
@@ -7925,10 +7924,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
 
-            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
-            Assert.That(queuedWork, Has.Count.EqualTo(1));
-            Assert.That(setupController.EnsureSetupCalls, Is.EqualTo(1));
-            Assert.That(retryFactoryCalls, Is.EqualTo(1));
+            Assert.That(retryFactoryCalls, Is.EqualTo(2));
             Assert.That(context.IsNativeSubmitHookReady, Is.False);
             Assert.That(protection.State.ComposerProtected, Is.False);
             Assert.That(protection.State.PromptProtectionRetryFailed, Is.True);

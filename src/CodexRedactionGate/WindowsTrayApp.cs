@@ -804,17 +804,29 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
         if (!_activationWindow.InvokeRequired)
         {
-            RefreshStatus();
+            RefreshStatusSafely();
             return;
         }
 
         try
         {
-            _uiDispatcher(RefreshStatus);
+            _uiDispatcher(RefreshStatusSafely);
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException)
         {
             // A closing dispatcher cannot render status; the resident snapshot remains authoritative.
+        }
+    }
+
+    private void RefreshStatusSafely()
+    {
+        try
+        {
+            RefreshStatus();
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "tray_status", "status_refresh_failed");
         }
     }
 
