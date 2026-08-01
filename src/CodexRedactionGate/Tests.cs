@@ -7036,7 +7036,6 @@ public class SingleInstanceEnforcementTests
     }
 
     [Test]
-    [Apartment(ApartmentState.STA)]
     public void WindowsTrayApp_RunSecondInstanceActivatesExistingWindowAndExitsCleanly()
     {
         var tempDirectory = CreateTempDirectory();
@@ -7044,14 +7043,6 @@ public class SingleInstanceEnforcementTests
         {
             SecondInstanceNotification? notification = null;
             using var owner = new ExternalMutexOwner("tray");
-            using var activationWindow = new Form
-            {
-                ShowInTaskbar = false
-            };
-            activationWindow.Show();
-            Assert.That(SingleInstanceEnforcement.RegisterActivationWindow("tray", activationWindow.Handle), Is.True);
-            activationWindow.WindowState = FormWindowState.Minimized;
-            Application.DoEvents();
 
             Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"), Is.True);
             var exitCode = WindowsTrayApp.Run(
@@ -7060,11 +7051,9 @@ public class SingleInstanceEnforcementTests
                 useGlobalMutex: false,
                 _ => throw new AssertionException("A second tray instance must not enter the message loop."),
                 new SingleInstanceNotificationSettings(true, "balloon"),
-                shown => notification = shown);
-            Application.DoEvents();
-
+                shown => notification = shown,
+                existingInstanceActivator: new TestExistingTrayInstanceActivator(activationSucceeded: true));
             Assert.That(exitCode, Is.EqualTo(0));
-            Assert.That(activationWindow.WindowState, Is.EqualTo(FormWindowState.Normal));
             Assert.That(notification?.ActivationSucceeded, Is.True);
         }
         finally
@@ -7089,7 +7078,8 @@ public class SingleInstanceEnforcementTests
                 useGlobalMutex: false,
                 _ => throw new AssertionException("A second tray instance must not enter the message loop."),
                 new SingleInstanceNotificationSettings(true, "balloon"),
-                shown => notification = shown);
+                shown => notification = shown,
+                existingInstanceActivator: new TestExistingTrayInstanceActivator(activationSucceeded: false));
 
             Assert.That(exitCode, Is.EqualTo(0));
             Assert.That(notification, Is.Not.Null);
@@ -7099,6 +7089,52 @@ public class SingleInstanceEnforcementTests
         {
             SingleInstanceEnforcement.ClearActivationWindow("tray");
             Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void WindowsTrayApp_RunSecondInstanceReportsForegroundRefusalEvenWhenRoutineNotificationsAreDisabled()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            SecondInstanceNotification? notification = null;
+            using var owner = new ExternalMutexOwner("tray");
+
+            var exitCode = WindowsTrayApp.Run(
+                TestSanitizers.Create(),
+                DefaultStorageLayout.Create(tempDirectory),
+                useGlobalMutex: false,
+                _ => throw new AssertionException("A second tray instance must not enter the message loop."),
+                new SingleInstanceNotificationSettings(false, "none"),
+                shown => notification = shown,
+                existingInstanceActivator: new TestExistingTrayInstanceActivator(activationSucceeded: false));
+
+            Assert.That(exitCode, Is.EqualTo(0));
+            Assert.That(notification, Is.Not.Null);
+            Assert.That(notification!.ActivationSucceeded, Is.False);
+        }
+        finally
+        {
+            SingleInstanceEnforcement.ClearActivationWindow("tray");
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    private sealed class TestExistingTrayInstanceActivator : IExistingTrayInstanceActivator
+    {
+        private readonly bool _activationSucceeded;
+
+        public TestExistingTrayInstanceActivator(bool activationSucceeded)
+        {
+            _activationSucceeded = activationSucceeded;
+        }
+
+        public bool TryActivate(string instanceId, bool useGlobalMutex)
+        {
+            Assert.That(instanceId, Is.EqualTo("tray"));
+            Assert.That(useGlobalMutex, Is.False);
+            return _activationSucceeded;
         }
     }
 

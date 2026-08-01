@@ -15,6 +15,25 @@ internal sealed record SecondInstanceNotification(
     int DisplayMilliseconds,
     bool ActivationSucceeded);
 
+internal interface IExistingTrayInstanceActivator
+{
+    bool TryActivate(string instanceId, bool useGlobalMutex);
+}
+
+internal sealed class WindowsExistingTrayInstanceActivator : IExistingTrayInstanceActivator
+{
+    public static WindowsExistingTrayInstanceActivator Instance { get; } = new();
+
+    private WindowsExistingTrayInstanceActivator()
+    {
+    }
+
+    public bool TryActivate(string instanceId, bool useGlobalMutex)
+    {
+        return SingleInstanceEnforcement.ActivateExistingInstance(instanceId, useGlobalMutex);
+    }
+}
+
 public static class WindowsTrayApp
 {
     public static int Run(ISanitizer sanitizer)
@@ -52,7 +71,8 @@ public static class WindowsTrayApp
         SingleInstanceNotificationSettings? secondInstanceNotificationSettings,
         Action<SecondInstanceNotification>? secondInstanceNotificationPresenter = null,
         string localProtectionStatus = LocalProtectionRecovery.ReadyCode,
-        Func<ResidentProtectionRuntime>? recoveredRuntimeFactory = null)
+        Func<ResidentProtectionRuntime>? recoveredRuntimeFactory = null,
+        IExistingTrayInstanceActivator? existingInstanceActivator = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
@@ -68,10 +88,12 @@ public static class WindowsTrayApp
             return 1;
         }
 
+        var activator = existingInstanceActivator ?? WindowsExistingTrayInstanceActivator.Instance;
+
         // Single instance enforcement - second launch should activate existing instance and exit
         if (SingleInstanceEnforcement.IsAnotherInstanceRunning("tray", useGlobalMutex))
         {
-            var activationSucceeded = SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
+            var activationSucceeded = activator.TryActivate("tray", useGlobalMutex);
             NotifyBlockedSecondInstance(
                 secondInstanceNotificationSettings,
                 activationSucceeded,
@@ -82,7 +104,7 @@ public static class WindowsTrayApp
         using var enforcement = new SingleInstanceEnforcement("tray", useGlobalMutex);
         if (!enforcement.IsFirstInstance)
         {
-            var activationSucceeded = SingleInstanceEnforcement.ActivateExistingInstance("tray", useGlobalMutex);
+            var activationSucceeded = activator.TryActivate("tray", useGlobalMutex);
             NotifyBlockedSecondInstance(
                 secondInstanceNotificationSettings,
                 activationSucceeded,
@@ -119,15 +141,20 @@ public static class WindowsTrayApp
         // The second process exits after this handoff, so one load is both a cache
         // and the complete configuration lifetime for that launch.
         var settings = configuredSettings ?? SingleInstanceNotificationSettings.Load();
-        ShowAlreadyRunningNotification(settings, activationSucceeded, presenter);
+        ShowAlreadyRunningNotification(
+            settings,
+            activationSucceeded,
+            presenter,
+            forceVisible: !activationSucceeded);
     }
 
     private static void ShowAlreadyRunningNotification(
         SingleInstanceNotificationSettings settings,
         bool activationSucceeded,
-        Action<SecondInstanceNotification>? presenter)
+        Action<SecondInstanceNotification>? presenter,
+        bool forceVisible)
     {
-        var notificationDetails = CreateSecondInstanceNotification(settings, activationSucceeded);
+        var notificationDetails = CreateSecondInstanceNotification(settings, activationSucceeded, forceVisible);
         if (notificationDetails is null)
         {
             return;
@@ -157,10 +184,11 @@ public static class WindowsTrayApp
 
     internal static SecondInstanceNotification? CreateSecondInstanceNotification(
         SingleInstanceNotificationSettings settings,
-        bool activationSucceeded)
+        bool activationSucceeded,
+        bool forceVisible = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        if (!settings.Enabled || settings.Type == "none")
+        if ((!settings.Enabled || settings.Type == "none") && !forceVisible)
         {
             return null;
         }

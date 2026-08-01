@@ -612,4 +612,4 @@ If one of these cannot be stated, the work is an architecture-discovery ticket a
 
 **Deterministic proof:** Injected activation-window operations return accepted/refused outcomes without relying on `SetForegroundWindow`, interactive desktop focus, or timing.
 
-- [ ] Refactor the single-instance activation dependency behind an injectable seam and cover both accepted and foreground-refused outcomes deterministically.
+- [x] Refactor the single-instance activation dependency behind an injectable seam and cover both accepted and foreground-refused outcomes deterministically.
