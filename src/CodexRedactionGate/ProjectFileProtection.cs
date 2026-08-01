@@ -25,6 +25,59 @@ public static class ProjectFileProtectionStatusValues
     }
 }
 
+public static class ProjectFileIngressStatusValues
+{
+    public const string Unsupported = "unsupported";
+    public const string NotConfigured = "not_configured";
+}
+
+public sealed record ProjectFileIngressStatus(
+    bool PreCloudBoundaryAvailable,
+    bool MustBlockUnroutedContext,
+    string Status,
+    string Code,
+    string WorkspaceId);
+
+public static class ProjectFileIngressStatusInspector
+{
+    public static ProjectFileIngressStatus Inspect(DefaultStorageLayout layout, string workspacePath)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
+
+        return FromWorkspaceStatus(ProtectedWorkspaceStore.GetStatus(layout, workspacePath));
+    }
+
+    internal static ProjectFileIngressStatus FromWorkspaceStatus(ProtectedWorkspaceStatus workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        if (string.Equals(workspace.Code, "protected_workspace_status_unavailable", StringComparison.Ordinal))
+        {
+            return new ProjectFileIngressStatus(
+                PreCloudBoundaryAvailable: false,
+                MustBlockUnroutedContext: true,
+                Status: ProjectFileIngressStatusValues.Unsupported,
+                Code: "project_file_ingress_unsupported",
+                WorkspaceId: workspace.WorkspaceId);
+        }
+
+        return workspace.Protected
+            ? new ProjectFileIngressStatus(
+                PreCloudBoundaryAvailable: false,
+                MustBlockUnroutedContext: true,
+                Status: ProjectFileIngressStatusValues.Unsupported,
+                Code: "project_file_ingress_unsupported",
+                WorkspaceId: workspace.WorkspaceId)
+            : new ProjectFileIngressStatus(
+                PreCloudBoundaryAvailable: false,
+                MustBlockUnroutedContext: false,
+                Status: ProjectFileIngressStatusValues.NotConfigured,
+                Code: "protected_workspace_not_registered",
+                WorkspaceId: workspace.WorkspaceId);
+    }
+}
+
 public sealed record ProtectedWorkspaceRegistrationResult(
     bool Succeeded,
     string Code,
@@ -79,7 +132,15 @@ public static class ProtectedWorkspaceStore
 
         var path = DefaultPath(layout);
         var workspaceId = RawFreeIdentity.HashPath(workspacePath);
-        var document = LoadDocument(path);
+        if (!TryLoadDocument(path, out var document))
+        {
+            return new ProtectedWorkspaceStatus(
+                Protected: false,
+                Code: "protected_workspace_status_unavailable",
+                WorkspaceId: workspaceId,
+                StorePath: path);
+        }
+
         var active = document.Workspaces.Any(record =>
             string.Equals(record.WorkspaceId, workspaceId, StringComparison.Ordinal)
             && record.Enabled);
@@ -94,24 +155,42 @@ public static class ProtectedWorkspaceStore
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        return LoadDocument(DefaultPath(layout)).Workspaces.Any(record => record.Enabled);
+        return TryLoadDocument(DefaultPath(layout), out var document)
+            && document.Workspaces.Any(record => record.Enabled);
     }
 
     private static ProtectedWorkspaceDocument LoadDocument(string path)
     {
+        return TryLoadDocument(path, out var document)
+            ? document
+            : new ProtectedWorkspaceDocument(1, Array.Empty<ProtectedWorkspaceRecord>());
+    }
+
+    private static bool TryLoadDocument(string path, out ProtectedWorkspaceDocument document)
+    {
+        document = new ProtectedWorkspaceDocument(1, Array.Empty<ProtectedWorkspaceRecord>());
         if (!File.Exists(path))
         {
-            return new ProtectedWorkspaceDocument(1, Array.Empty<ProtectedWorkspaceRecord>());
+            return true;
         }
 
         try
         {
-            return JsonSerializer.Deserialize<ProtectedWorkspaceDocument>(File.ReadAllText(path))
-                ?? new ProtectedWorkspaceDocument(1, Array.Empty<ProtectedWorkspaceRecord>());
+            var loaded = JsonSerializer.Deserialize<ProtectedWorkspaceDocument>(File.ReadAllText(path));
+            if (loaded is null)
+            {
+                return false;
+            }
+
+            document = loaded;
+            return true;
         }
-        catch (JsonException)
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException
+            or JsonException)
         {
-            return new ProtectedWorkspaceDocument(1, Array.Empty<ProtectedWorkspaceRecord>());
+            return false;
         }
     }
 
@@ -810,7 +889,7 @@ public static class ProjectFileBypassGuard
         string workspacePath,
         ProjectFileBypassPolicy? policy = null)
     {
-        return Report("direct_attachment", "direct_attachment_broker_required", layout, workspacePath, policy);
+        return Report("direct_attachment", layout, workspacePath, policy);
     }
 
     public static ProjectFileBypassResult ReportUnmanagedConnector(
@@ -818,12 +897,11 @@ public static class ProjectFileBypassGuard
         string workspacePath,
         ProjectFileBypassPolicy? policy = null)
     {
-        return Report("unmanaged_connector", "unmanaged_connector_broker_required", layout, workspacePath, policy);
+        return Report("unmanaged_connector", layout, workspacePath, policy);
     }
 
     private static ProjectFileBypassResult Report(
         string channel,
-        string code,
         DefaultStorageLayout layout,
         string workspacePath,
         ProjectFileBypassPolicy? policy)
@@ -832,26 +910,29 @@ public static class ProjectFileBypassGuard
         ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
 
         var activePolicy = policy ?? ProjectFileBypassPolicy.BrokerOnlyDefault;
-        var status = ProtectedWorkspaceStore.GetStatus(layout, workspacePath);
+        var ingress = ProjectFileIngressStatusInspector.Inspect(layout, workspacePath);
         var diagnostics = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["workspace_id"] = status.WorkspaceId,
-            ["protected_workspace"] = status.Protected.ToString().ToLowerInvariant(),
+            ["workspace_id"] = ingress.WorkspaceId,
+            ["protected_workspace"] = ingress.MustBlockUnroutedContext.ToString().ToLowerInvariant(),
+            ["precloud_ingress_boundary"] = ingress.Status,
             ["channel"] = channel,
             ["broker_routed"] = "false",
             ["broker_only_file_context_required"] = activePolicy.RequireBrokerOnlyFileContext.ToString().ToLowerInvariant(),
             ["raw_file_path_recorded"] = "false",
             ["raw_file_content_recorded"] = "false"
         };
-        var blocked = status.Protected && activePolicy.RequireBrokerOnlyFileContext;
+        var blocked = ingress.MustBlockUnroutedContext && activePolicy.RequireBrokerOnlyFileContext;
         return new ProjectFileBypassResult(
             Allowed: !blocked,
-            Code: blocked ? code : "workspace_not_protected",
+            Code: blocked ? ingress.Code : "workspace_not_protected",
             Warnings: new[]
             {
                 new Warning(
-                    blocked ? code : "workspace_not_protected",
-                    "Project file context is not broker-routed.",
+                    blocked ? ingress.Code : "workspace_not_protected",
+                    blocked
+                        ? "Project-file cloud ingress is unsupported for this protected workspace."
+                        : "Project file context is not broker-routed.",
                     blocked ? WarningSeverity.Error : WarningSeverity.Warning)
             },
             Diagnostics: diagnostics);

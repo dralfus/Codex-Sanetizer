@@ -11,8 +11,11 @@ Therefore the current honest status is:
 ```text
 composer_protected: supported for verified Windows Codex/ChatGPT Desktop surfaces
 plain_text_attachment_snippets: supported when routed through sanitizer intake
-project_files_protected: not implemented
+project_file_ingress: unsupported for Windows Codex/ChatGPT Desktop
+project_files_protected: false
 ```
+
+For a registered workspace, `--project-file-ingress-status workspace` returns the raw-free status `project_file_ingress_unsupported`. Direct attachments and unmanaged connector paths presented to Code Sanitizer are rejected locally. This does not intercept a direct file read performed inside the desktop client; without a supported pre-cloud integration point, the product must remain explicit about that limitation.
 
 ## Grilled Questions
 

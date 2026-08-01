@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted for the current Windows Codex/ChatGPT Desktop release
 
 ## Context
 
@@ -30,6 +30,8 @@ Codex requests project context
 ```
 
 Until that broker exists, Code Sanitizer may only say that explicit text attachments or file snippets are protected when they are passed through the sanitizer pipeline by the active adapter. It must not imply that arbitrary repository reads by Codex, ChatGPT, MCP tools, or connectors are covered.
+
+The current Windows desktop release has no verified pre-cloud extension point that forces those client operations through the local broker. Registered workspaces therefore report `project_file_ingress_unsupported` and keep `project_files_protected` false. The product rejects direct attachment and unmanaged-connector operations presented to its local broker, but does not claim to intercept direct desktop-client reads.
 
 ## Consequences
 

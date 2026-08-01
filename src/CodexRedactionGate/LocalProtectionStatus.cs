@@ -141,7 +141,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Project-file protection",
                 "Project-file broker",
                 "broker demo only",
-                "Broker output can be sanitized locally, but files are not intercepted before cloud submission.",
+                "Broker output can be sanitized locally, but live project-file ingress is unsupported and files are not intercepted before cloud submission.",
                 LocalProtectionStatusAction.None),
             ProjectFileProtectionStatusValues.NotConfigured => new LocalProtectionStatusRow(
                 "Project-file protection",

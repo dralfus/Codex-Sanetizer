@@ -468,14 +468,78 @@ public sealed class ProjectFileWorkflowTests
             });
 
             Assert.That(directAttachment.Allowed, Is.False);
-            Assert.That(directAttachment.Code, Is.EqualTo("direct_attachment_broker_required"));
+            Assert.That(directAttachment.Code, Is.EqualTo("project_file_ingress_unsupported"));
             Assert.That(directAttachment.Diagnostics["protected_workspace"], Is.EqualTo("true"));
             Assert.That(directAttachment.Diagnostics["broker_only_file_context_required"], Is.EqualTo("true"));
+            Assert.That(directAttachment.Diagnostics["precloud_ingress_boundary"], Is.EqualTo("unsupported"));
             Assert.That(connector.Allowed, Is.False);
-            Assert.That(connector.Code, Is.EqualTo("unmanaged_connector_broker_required"));
+            Assert.That(connector.Code, Is.EqualTo("project_file_ingress_unsupported"));
+            Assert.That(connector.Diagnostics["precloud_ingress_boundary"], Is.EqualTo("unsupported"));
             Assert.That(managed.Diagnostics["broker_only_file_context_required"], Is.EqualTo("true"));
             Assert.That(managed.Diagnostics["broker_routed"], Is.EqualTo("true"));
             Assert.That(rendered, Does.Not.Contain(workspace));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void ProjectFileIngressStatusInspector_ReportsProtectedWorkspaceAsUnsupportedWithoutRawPath()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            Directory.CreateDirectory(workspace);
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+
+            var result = ProjectFileIngressStatusInspector.Inspect(layout, workspace);
+            var rendered = JsonSerializer.Serialize(result);
+
+            Assert.That(result.PreCloudBoundaryAvailable, Is.False);
+            Assert.That(result.Status, Is.EqualTo(ProjectFileIngressStatusValues.Unsupported));
+            Assert.That(result.Code, Is.EqualTo("project_file_ingress_unsupported"));
+            Assert.That(rendered, Does.Not.Contain(workspace));
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void ProjectFileIngressStatusInspector_FailsClosedForUnreadableWorkspaceRegistry()
+    {
+        var tempDirectory = CreateTempDirectory();
+
+        try
+        {
+            var layout = DefaultStorageLayout.Create(Path.Combine(tempDirectory, "data"));
+            var workspace = Path.Combine(tempDirectory, "workspace");
+            Directory.CreateDirectory(workspace);
+            ProtectedWorkspaceStore.Protect(layout, workspace);
+            File.WriteAllText(ProtectedWorkspaceStore.DefaultPath(layout), "{not-json");
+            var runtime = CreateRuntime(layout, new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("ingress-status-test-secret")));
+
+            var inspected = ProjectFileIngressStatusInspector.Inspect(layout, workspace);
+            var bypass = ProjectFileBypassGuard.ReportDirectAttachment(layout, workspace);
+            var output = CaptureProgramOutput(() =>
+                Program.Main(new[] { "--project-file-ingress-status", workspace }, runtime));
+
+            Assert.That(inspected.PreCloudBoundaryAvailable, Is.False);
+            Assert.That(inspected.MustBlockUnroutedContext, Is.True);
+            Assert.That(inspected.Status, Is.EqualTo(ProjectFileIngressStatusValues.Unsupported));
+            Assert.That(inspected.Code, Is.EqualTo("project_file_ingress_unsupported"));
+            Assert.That(bypass.Allowed, Is.False);
+            Assert.That(bypass.Code, Is.EqualTo("project_file_ingress_unsupported"));
+            Assert.That(output.ExitCode, Is.EqualTo(1));
+            Assert.That(output.Stdout, Does.Contain("precloud_ingress_boundary: unsupported"));
+            Assert.That(output.Stdout, Does.Contain("project_files_protected: false"));
+            Assert.That(output.Stdout, Does.Not.Contain(workspace));
         }
         finally
         {
@@ -581,6 +645,8 @@ public sealed class ProjectFileWorkflowTests
             File.WriteAllText(filePath, originalText);
             var bypass = CaptureProgramOutput(() =>
                 Program.Main(new[] { "--project-attachment-bypass-status", workspace }, runtime));
+            var ingress = CaptureProgramOutput(() =>
+                Program.Main(new[] { "--project-file-ingress-status", workspace }, runtime));
             var productSmoke = CaptureProgramOutput(() =>
                 Program.Main(new[] { "--project-file-product-smoke" }, runtime));
 
@@ -605,8 +671,12 @@ public sealed class ProjectFileWorkflowTests
             Assert.That(apply.Stdout, Does.Not.Contain("192.168.10.25"));
             Assert.That(apply.Stdout, Does.Not.Contain("P@ssw0rd!"));
             Assert.That(bypass.ExitCode, Is.EqualTo(1));
-            Assert.That(bypass.Stdout, Does.Contain("status: direct_attachment_broker_required"));
+            Assert.That(bypass.Stdout, Does.Contain("status: project_file_ingress_unsupported"));
             Assert.That(bypass.Stdout, Does.Not.Contain(workspace));
+            Assert.That(ingress.ExitCode, Is.EqualTo(1));
+            Assert.That(ingress.Stdout, Does.Contain("status: project_file_ingress_unsupported"));
+            Assert.That(ingress.Stdout, Does.Contain("precloud_ingress_boundary: unsupported"));
+            Assert.That(ingress.Stdout, Does.Not.Contain(workspace));
             Assert.That(productSmoke.ExitCode, Is.EqualTo(0));
             Assert.That(productSmoke.Stdout, Does.Contain("project_file_product_smoke: passed"));
             Assert.That(File.ReadAllText(filePath), Does.Not.Contain("Route to"));

@@ -6411,6 +6411,7 @@ public class CliTests
         Assert.That(stdout, Does.Contain("--audit-cleanup --keep count"));
         Assert.That(stdout, Does.Contain("--project-workspace-protect workspace"));
         Assert.That(stdout, Does.Contain("--project-workspace-status workspace"));
+        Assert.That(stdout, Does.Contain("--project-file-ingress-status workspace"));
         Assert.That(stdout, Does.Contain("--project-file-sanitize file [--protected-workspace workspace]"));
         Assert.That(stdout, Does.Contain("--project-file-smoke"));
         Assert.That(stdout, Does.Contain("--project-tool-output-sanitize workspace \"tool output\""));

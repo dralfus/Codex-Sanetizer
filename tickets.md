@@ -440,9 +440,11 @@ If one of these cannot be stated, the work is an architecture-discovery ticket a
 **Do not:** Claim protection from post-action UI Automation events, scrape raw project content from the client after it has been sent, or turn every file in a task into a sequence of blocking confirmation dialogs.
 
 - [ ] A disposable protected workspace demonstrates one real pre-cloud file-context operation entering the local broker and produces raw-free evidence that the model-visible payload is sanitized.
-- [ ] When the boundary is unavailable, protected-workspace mode fails closed for that channel and reports `unsupported` rather than silently allowing a direct read/upload/tool-output path.
+- [x] When the boundary is unavailable, protected-workspace mode fails closed for its local attachment and unmanaged-connector channels and reports `unsupported` rather than silently allowing those channels through Code Sanitizer.
 - [ ] The user experience presents one operation-level batch summary with a navigable per-file list; it does not require accepting a separate popup for every file.
-- [ ] Live `project_files_protected` can become `true` only after the real ingress proof and its automated regression test exist.
+- [x] Live `project_files_protected` remains false unless a real ingress proof and its automated regression test exist.
+
+**Current blocker:** The Windows Codex/ChatGPT Desktop surface exposes no verified pre-cloud integration point for repository reads, attachments, or file-derived tool output. Code Sanitizer therefore reports `project_file_ingress_unsupported`; it does not claim to block direct desktop-client file reads. The remaining two criteria require a supported client extension point or an approved local gateway that owns those operations before the client reaches the cloud.
 
 ## 284. Enforce source-whitespace hygiene in the release check
 

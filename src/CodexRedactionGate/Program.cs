@@ -283,6 +283,11 @@ public static class Program
             return RunProjectWorkspaceStatus(args[1], runtime.LayoutFactory);
         }
 
+        if (args.Length == 2 && args[0] == "--project-file-ingress-status")
+        {
+            return RunProjectFileIngressStatus(args[1], runtime.LayoutFactory);
+        }
+
         if (args.Length == 2 && args[0] == "--project-file-sanitize")
         {
             return RunProjectFileSanitize(
@@ -1190,6 +1195,17 @@ public static class Program
         return result.Protected ? 0 : 1;
     }
 
+    private static int RunProjectFileIngressStatus(string workspacePath, Func<DefaultStorageLayout> layoutFactory)
+    {
+        var result = ProjectFileIngressStatusInspector.Inspect(layoutFactory(), workspacePath);
+        Console.WriteLine($"status: {result.Code}");
+        Console.WriteLine($"precloud_ingress_boundary: {result.Status}");
+        Console.WriteLine($"project_files_protected: {result.PreCloudBoundaryAvailable.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"workspace_id: {result.WorkspaceId}");
+        Console.WriteLine("raw_workspace_path_recorded_in_output: false");
+        return result.PreCloudBoundaryAvailable ? 0 : 1;
+    }
+
     private static int RunProjectFileSanitize(
         string filePath,
         string? workspacePath,
@@ -1834,6 +1850,7 @@ public static class Program
         Console.WriteLine("  --crash-reports");
         Console.WriteLine("  --project-workspace-protect workspace");
         Console.WriteLine("  --project-workspace-status workspace");
+        Console.WriteLine("  --project-file-ingress-status workspace");
         Console.WriteLine("  --project-file-sanitize file [--protected-workspace workspace]");
         Console.WriteLine("  --project-file-smoke");
         Console.WriteLine("  --project-tool-output-sanitize workspace \"tool output\"");

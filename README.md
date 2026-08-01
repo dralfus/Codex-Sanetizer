@@ -135,7 +135,13 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --pro
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --project-file-sanitize .\src\example.cs --protected-workspace .
 ```
 
-This broker demo proves the local `project_file_broker_workflow`. It reports `project_files_protected: false` for live Codex because end-to-end Codex project-file interception has not been verified yet.
+This broker demo proves the local `project_file_broker_workflow`; it is not a live Codex file boundary. For a registered workspace, check the current cloud-ingress capability with:
+
+```powershell
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --project-file-ingress-status .
+```
+
+The current Windows Codex/ChatGPT Desktop release reports `precloud_ingress_boundary: unsupported` and `project_files_protected: false`. Code Sanitizer blocks its own direct-attachment and unmanaged-connector broker paths for a protected workspace, but it cannot claim that it intercepts files read directly by the desktop client.
 
 Configure the secondary hotkey and optional autostart:
 

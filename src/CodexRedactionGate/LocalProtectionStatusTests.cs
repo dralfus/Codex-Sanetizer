@@ -61,6 +61,7 @@ public sealed class LocalProtectionStatusTests
         Assert.That(view.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.None));
         Assert.That(view.Rows[2].OperationalState, Is.EqualTo("broker demo only"));
         Assert.That(view.Rows[2].Consequence, Does.Contain("not intercepted"));
+        Assert.That(view.Rows[2].Consequence, Does.Contain("unsupported"));
     }
 
     [Test]
