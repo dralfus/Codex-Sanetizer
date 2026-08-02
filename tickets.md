@@ -733,3 +733,81 @@ is raw-free.
   suppressed key alone.
 - [x] Tests cover every terminal transition and synthetic raw values without
   timing, live focus, or cloud access.
+
+## 299. Make prompt-protection setup observable from focus to active protection
+
+**What to build:** Turn `Set up prompt protection` into a visible workflow.
+After the user chooses Send and newline keys and begins verification, Code
+Sanitizer must show whether it is waiting for focus, recognized a supported
+Codex Desktop or ChatGPT Desktop composer, is verifying the binding, is
+activating the resident hook, or has reached a terminal result with one clear
+next action. The result must remain visible after the setup window closes.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The resident protection snapshot owns the setup-verification
+lifecycle, recognized profile identity, selected bindings, and terminal result.
+The setup form, tray summary, and local-status form only render that snapshot.
+
+**Fail-closed state:** Until the resident runtime confirms activation for the
+recognized selected profile, its potential Send remains blocked. A lost focus,
+unsupported surface, binding-verification failure, hook-activation failure, or
+cancelled setup publishes a raw-free non-ready result and one recovery action.
+
+**Allowed transitions:** `idle` -> `waiting_for_focus` ->
+`composer_recognized` -> `verifying_binding` -> `activating_protection` ->
+`protected`, or one terminal raw-free failure. A new setup attempt may replace
+a terminal result but cannot overwrite an active protected runtime before it is
+replaced atomically.
+
+**Deterministic proof:** Injected focused-composer verification and resident
+runtime activation drive every state without a live desktop app, timers, or
+cloud access. Public UI tests assert the same raw-free state and next action in
+the setup window, tray, and local-status view.
+
+- [ ] Selecting `Ctrl+Enter`, starting verification, and focusing a supported
+  composer visibly advances through waiting, recognition, verification, and
+  activation instead of leaving the user with an unexplained dialog.
+- [ ] A successful setup names the protected app and Send binding, saves them,
+  reloads the resident runtime, and remains visibly `protected` after the
+  setup window closes.
+- [ ] Each terminal setup failure names exactly one safe next action and never
+  claims that protection is active.
+- [ ] All rendered setup progress and results remain raw-free and are covered
+  without live focus, timing, or cloud submission.
+
+## 300. Replace generic protected-Send blocking text with a specific outcome
+
+**What to build:** When a protected Send is blocked, show its specific
+raw-free reason and the matching next action instead of only `Send blocked`.
+The explanation must distinguish missing setup, an unrecognized or changed
+composer, unavailable verification, unavailable local protection, a duplicate
+Send already in progress, cancellation, and the explicit emergency bypass.
+
+**Blocked by:** 299. Make prompt-protection setup observable from focus to
+active protection.
+
+**State owner:** The resident protection snapshot owns the protected-Send
+attempt result and recommended action. The tray and local-status views render
+only that published result.
+
+**Fail-closed state:** Any unrecognized, stale, failed, cancelled, or
+unavailable protected-Send result leaves the original message blocked and
+publishes a non-success outcome. It must never be displayed as sent safely.
+
+**Allowed transitions:** A protected Send reaches `sent_safely` or one stable
+terminal reason. A later attempt gets a new result only after the current
+attempt has reached a terminal state; a duplicate press may report in progress
+but cannot erase the terminal reason.
+
+**Deterministic proof:** Injected hook classifications, focused-surface
+results, local-protection states, and submit runners exercise every terminal
+reason. Public tray and local-status text is asserted raw-free with one
+matching next action.
+
+- [ ] Every blocked protected-Send outcome gives a distinct user-facing reason
+  and one next action rather than only `Send blocked`.
+- [ ] The setup progress/result and protected-Send result agree because both
+  are projections of the same resident snapshot.
+- [ ] Synthetic prompt text, dictionary terms, mappings, paths, and exception
+  messages cannot appear in any explanation.

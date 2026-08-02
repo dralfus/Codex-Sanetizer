@@ -9,6 +9,12 @@ also presents dense diagnostic status text and engineering commands, while
 ordinary status text cannot be selected for copying. Most importantly, the
 native hook must never make normal typing or editing unusable.
 
+The current setup experience can also complete without confirming which app was
+recognized, whether the binding was saved, whether the resident hook became
+active, or why a later protected Send was blocked. A user who chooses
+`Ctrl+Enter`, presses verification, and focuses a composer must not have to
+guess whether to wait, retry, or stop sending sensitive information.
+
 ## Solution
 
 The installed tray application provides one normal setup action: `Set up prompt
@@ -29,6 +35,12 @@ The tray menu is a user surface: it contains protection controls, setup,
 sensitive terms, restore, and a readable protection-status window. Audit,
 diagnostics, and command-reference commands remain CLI-only. Status rows use
 selectable read-only text controls and the tray summary is short and readable.
+
+Setup is a visible resident-owned workflow. It shows the current step and a
+durable raw-free result: waiting for a composer, composer recognized, binding
+verification, resident-hook activation, or one specific next action when it
+cannot complete. A protected Send uses the same resident state to say why it
+was blocked; different failures must not collapse into only `Send blocked`.
 
 ## User Stories
 
@@ -61,6 +73,17 @@ selectable read-only text controls and the tray summary is short and readable.
 13. As a user, I want the tray menu to tell me why setup is incomplete or
     verification failed and what action to take, so that a generic active
     status never makes me assume the current application is protected.
+14. As a user, I want setup to show that it is waiting for my composer and
+    which supported application it recognized, so that focusing the right
+    window is a verifiable action rather than a guess.
+15. As a user, I want to see whether the selected Send and newline keys were
+    saved and whether the resident interception hook became active, so that I
+    know when protection is genuinely ready.
+16. As a user, I want every setup failure to name one safe next action, so
+    that I can recover without sending a sensitive prompt to test it.
+17. As a user, I want a blocked protected Send to name its raw-free cause,
+    such as setup not saved, composer changed, verification unavailable, or
+    local protection unavailable, so that I do not retry blindly.
 
 ## Implementation Decisions
 
@@ -87,6 +110,17 @@ selectable read-only text controls and the tray summary is short and readable.
 - `Ctrl+Alt+Shift+Pause` is the visible emergency bypass combination. It is
   displayed as an exceptional, temporary raw-send route and is never presented
   as a normal way to submit prompts.
+- The resident protection snapshot owns the setup-verification lifecycle,
+  recognized profile identity, selected bindings, and terminal result. The
+  setup form, tray summary, and local-status form only render that snapshot.
+- The setup lifecycle is `idle` -> `waiting_for_focus` ->
+  `composer_recognized` -> `verifying_binding` -> `activating_protection` ->
+  `protected`, or one terminal raw-free failure with an explicit next action.
+  A repeated setup attempt may replace only an earlier terminal result.
+- The protected-Send lifecycle retains a stable raw-free reason code and
+  recommended action for every blocked result. User-visible text is a fixed
+  allowlist and never includes prompt content, dictionary values, mappings,
+  paths, or exception messages.
 
 ## Testing Decisions
 
@@ -108,6 +142,13 @@ selectable read-only text controls and the tray summary is short and readable.
 - Test the tray summary for a ready protected profile, incomplete setup, and
   local-protection repair. Assertions use only public raw-free wording and the
   visible emergency-bypass combination.
+- Test setup progress through an injected focused-composer verifier and runtime
+  factory. Assert every lifecycle step and terminal result reaches the setup
+  form, tray summary, and local-status view without timers, live focus, or a
+  cloud request.
+- Test every blocked protected-Send reason through the resident snapshot and
+  public rendered text. Verify it gives the matching next action and remains
+  raw-free.
 
 ## Out of Scope
 
@@ -121,3 +162,7 @@ selectable read-only text controls and the tray summary is short and readable.
 If the active window cannot be verified, the product must say setup is required
 or the surface is unsupported. It must never claim that another configured
 desktop client protects the current window.
+
+The visible result `Send blocked` alone is insufficient for acceptance. It may
+be used as a heading only when accompanied by a specific raw-free reason and
+one next action.
