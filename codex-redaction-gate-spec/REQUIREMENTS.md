@@ -22,7 +22,7 @@
 - After Cancel, pressing Send again in the same composer, with the same text or edited text, must run the native submit handler again.
 - If no selected AI profile is protected after installation, the system must show an active setup/profile-verification window and suppress selected AI app submit attempts until setup succeeds.
 - The system must provide a delayed native profile verification workflow that runs from the user's real desktop session, gives the user time to focus the target Codex/ChatGPT composer, and never marks a profile protected from sandbox-only foreground evidence.
-- The installed tray UI must expose Codex Desktop and ChatGPT Desktop profile verification so enabling protection does not require copying console commands.
+- The installed tray UI must expose one `Set up prompt protection` action. It detects the focused supported Codex Desktop or ChatGPT Desktop composer locally, then verifies only that active profile; enabling protection must not require choosing an app name or copying console commands.
 - The system should integrate with Codex hooks when available.
 - The system must support an integration strategy that can replace the submitted prompt, not only block it.
 - The system must inspect text attachments, large pasted file contents and file snippets when the adapter can access their text before cloud submission.

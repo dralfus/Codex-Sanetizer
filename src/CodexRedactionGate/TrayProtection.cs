@@ -1535,14 +1535,6 @@ internal static class TrayMenuContent
 
     public static TrayLocalCommand RuleManagementCommand { get; } = new("Sensitive terms", "--dictionary-ui");
 
-    public static TrayLocalCommand VerifyCodexProfileCommand { get; } = new(
-        "Verify Codex Desktop profile",
-        "--native-profile-verify-delay codex-desktop Enter Ctrl+Enter 10");
-
-    public static TrayLocalCommand VerifyChatGptProfileCommand { get; } = new(
-        "Verify ChatGPT Desktop profile",
-        "--native-profile-verify-delay chatgpt-desktop Enter Ctrl+Enter 10");
-
     public static string FormatBuildVersionMenuItem(string buildVersion)
     {
         return $"Version: {NormalizeBuildVersion(buildVersion)}";

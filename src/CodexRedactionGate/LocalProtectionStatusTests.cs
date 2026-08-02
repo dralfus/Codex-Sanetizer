@@ -43,6 +43,48 @@ public sealed class LocalProtectionStatusTests
     }
 
     [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void StatusForm_RendersSelectableReadOnlyStatusText()
+    {
+        using var form = new LocalProtectionStatusForm(
+            () => LocalProtectionStatusView.Create(ProtectedTrayState()),
+            _ => { });
+
+        form.RefreshView();
+        var textBoxes = form.RowControls
+            .SelectMany(row => row.Controls.Cast<System.Windows.Forms.Control>())
+            .OfType<System.Windows.Forms.TextBox>()
+            .ToArray();
+
+        Assert.That(textBoxes, Is.Not.Empty);
+        Assert.That(textBoxes.All(text => text.ReadOnly && text.ShortcutsEnabled && text.TabStop), Is.True);
+    }
+
+    [Test]
+    [Apartment(System.Threading.ApartmentState.STA)]
+    public void StatusForm_DoesNotRefreshAwaySelectedStatusText()
+    {
+        var state = ProtectedTrayState();
+        using var form = new LocalProtectionStatusForm(
+            () => LocalProtectionStatusView.Create(state),
+            _ => { });
+
+        form.RefreshView();
+        var text = form.RowControls
+            .SelectMany(row => row.Controls.Cast<System.Windows.Forms.Control>())
+            .OfType<System.Windows.Forms.TextBox>()
+            .First();
+        text.Select(0, 1);
+
+        state = state with { NativeSubmitEnabled = false, ComposerProtected = false };
+        form.RefreshView();
+
+        Assert.That(form.CurrentRows[1].OperationalState, Is.EqualTo("active"));
+        Assert.That(text.IsDisposed, Is.False);
+        Assert.That(text.SelectionLength, Is.EqualTo(1));
+    }
+
+    [Test]
     public void StatusView_SeparatesReadyDpapiActivePromptAndBrokerOnlyFiles()
     {
         var view = LocalProtectionStatusView.Create(ProtectedTrayState() with

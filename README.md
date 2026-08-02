@@ -175,11 +175,12 @@ Recommended local validation sequence before trying a real Codex/ChatGPT prompt:
 ```powershell
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-compatibility-matrix
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-composer-diagnostic-delay 5
-dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --native-profile-verify codex-desktop Enter Ctrl+Enter
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --native-profiles-status
 ```
 
-If your Codex/ChatGPT Desktop sends with a different shortcut, replace `Enter` with the real Send binding and keep the newline binding as the shortcut that inserts a new line. For example, when `Enter` sends and `Ctrl+Enter` inserts a newline, Code Sanitizer must intercept `Enter` only in the verified composer and pass `Ctrl+Enter` through.
+After installation, Code Sanitizer automatically opens one setup window when no supported desktop app is protected. Select the Send-key pair, click `Verify active app`, and focus the composer you use. The setup detects Codex Desktop or ChatGPT Desktop locally and verifies that one profile. The tray menu offers the same single `Set up prompt protection` action later; it does not require choosing an app name first.
+
+If your Codex/ChatGPT Desktop sends with a different shortcut, choose that real Send binding and keep the newline binding as the shortcut that inserts a new line. For example, when `Enter` sends and `Ctrl+Enter` inserts a newline, Code Sanitizer intercepts `Enter` only in the verified composer and passes `Ctrl+Enter` through.
 
 Before sending a sensitive test prompt, `--native-profiles-status` should show a selected profile with:
 

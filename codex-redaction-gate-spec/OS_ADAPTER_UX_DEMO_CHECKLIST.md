@@ -14,7 +14,7 @@ dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-co
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-surface-diagnostic
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-composer-diagnostic
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-composer-diagnostic-delay 5
-dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --native-profile-verify-delay codex-desktop Enter Ctrl+Enter 10
+Use `Set up prompt protection` from the installed tray UI, select the real Send-key pair, and focus the target composer when the setup window hides.
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-demo-dry-run "Connect to 192.168.10.25"
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-demo-smoke
 dotnet run --project src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-demo-send-gate
@@ -73,7 +73,7 @@ Try a real Codex/ChatGPT app only after the disposable target works:
 2. Focus the normal composer.
 3. Run `--os-composer-diagnostic-delay 5` from the terminal, immediately switch back to the Codex/ChatGPT composer, and wait for the diagnostic to finish.
 4. Continue only if it reports `status: supported_composer`.
-5. Run `--native-profile-verify-delay codex-desktop Enter Ctrl+Enter 10` or the matching ChatGPT command from the tray profile verification menu, then focus the same composer before the countdown ends.
+5. Start `Set up prompt protection` from the tray UI, select the real Send-key pair, then focus the same composer before verification completes.
 6. Continue only if `--native-profiles-status` reports the selected profile as `protected`.
 7. Start `--os-demo-hotkey`.
 8. Trigger Ctrl+Enter and verify dry-run does not modify selection, clipboard, focus or composer text.

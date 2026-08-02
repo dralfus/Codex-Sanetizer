@@ -224,6 +224,37 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void WindowsNativeSubmitHookHost_ClassifiesOnlyPotentialSendKeysForTheSelectedApp()
+    {
+        var profile = CreateProtectedProfile() with
+        {
+            ProfileId = "chatgpt-desktop",
+            SubmitBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+            NewlineBinding = SubmitKeyBinding.Parse("Enter").Binding!
+        };
+        var host = new WindowsNativeSubmitHookHost(
+            new[] { profile },
+            _ => "chatgpt-desktop");
+        var target = new IntPtr(42);
+
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("A", TargetWindow: target), 0x41), Is.False);
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("Enter", TargetWindow: target), 0x0d), Is.False);
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("Enter", Ctrl: true, TargetWindow: target), 0x0d), Is.True);
+    }
+
+    [Test]
+    public void WindowsNativeSubmitHookHost_StillClassifiesEnterForAnUnconfiguredSelectedApp()
+    {
+        var host = new WindowsNativeSubmitHookHost(
+            new[] { FirstRunSetupController.CreateDefaultSetupProfile("codex-desktop")! },
+            _ => "codex-desktop");
+        var target = new IntPtr(42);
+
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("A", TargetWindow: target), 0x41), Is.False);
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("Enter", TargetWindow: target), 0x0d), Is.True);
+    }
+
+    [Test]
     public void NativeSubmitInterception_ConfirmAndSendSuppressesOriginalAndSubmitsSanitizedFlow()
     {
         var profile = CreateProtectedProfile();
@@ -851,7 +882,7 @@ public partial class SanitizerTests
 
             Assert.That(result.Succeeded, Is.False);
             Assert.That(result.State.Required, Is.True);
-            Assert.That(result.State.UnprotectedProfileIds, Does.Contain("codex-desktop"));
+            Assert.That(result.State.UnprotectedProfileIds, Does.Contain("focused_supported_app"));
         }
         finally
         {
@@ -878,8 +909,7 @@ public partial class SanitizerTests
             Assert.That(result.Succeeded, Is.False);
             Assert.That(result.Code, Is.EqualTo("setup_required"));
             Assert.That(result.State.Required, Is.True);
-            Assert.That(result.State.UnprotectedProfileIds, Does.Contain("codex-desktop"));
-            Assert.That(result.State.UnprotectedProfileIds, Does.Contain("chatgpt-desktop"));
+            Assert.That(result.State.UnprotectedProfileIds, Does.Contain("focused_supported_app"));
             Assert.That(controller.IsSetupComplete(layout), Is.False);
         }
         finally
@@ -905,11 +935,10 @@ public partial class SanitizerTests
             var result = controller.VerifyProfile("codex-desktop", layout);
             var stored = SubmitBindingProfileStore.Load(layout).Profiles;
             var codexProfile = stored.Single(profile => profile.ProfileId == "codex-desktop");
-            var chatGptProfile = stored.Single(profile => profile.ProfileId == "chatgpt-desktop");
 
             Assert.That(result.Succeeded, Is.True);
+            Assert.That(stored, Has.Count.EqualTo(1));
             Assert.That(codexProfile.IsProtected, Is.True);
-            Assert.That(chatGptProfile.IsProtected, Is.False);
         }
         finally
         {
@@ -969,17 +998,106 @@ public partial class SanitizerTests
         Assert.That(source, Does.Not.Contain("Continue Without Setup"));
         Assert.That(source, Does.Contain("Exit setup"));
         Assert.That(source, Does.Contain("protected Send will remain blocked"));
-        Assert.That(source, Does.Contain("AcceptButton = _verifyCodexButton"));
+        Assert.That(source, Does.Contain("AcceptButton = _verifyFocusedAppButton"));
     }
 
     [Test]
-    public void FirstRunSetupForm_BindsVerificationToTypedProfileCardState()
+    public void FirstRunSetupController_VerifyFocusedProfileAutoDetectsTheActiveSupportedApp()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"))),
+                (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by focused verification."));
+
+            var result = controller.VerifyFocusedProfile("Ctrl+Enter", "Enter", layout);
+            var stored = SubmitBindingProfileStore.Load(layout).Profiles;
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.Diagnostics["profile_id"], Is.EqualTo("chatgpt-desktop"));
+            Assert.That(stored, Has.Count.EqualTo(1));
+            Assert.That(stored.Single().ProfileId, Is.EqualTo("chatgpt-desktop"));
+            Assert.That(stored.Single().IsProtected, Is.True);
+            Assert.That(controller.GetSetupStatus(layout).State.Required, Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupController_OpensUnifiedSetupWhenNoProfileIsVerified()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            IReadOnlyList<SubmitBindingProfile>? shownProfiles = null;
+            var controller = new FirstRunSetupController(
+                new FixedVerificationProfileVerifier(failure: true),
+                (profiles, _, _) =>
+                {
+                    shownProfiles = profiles;
+                    return false;
+                });
+
+            var result = controller.EnsureSetup(layout);
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo("setup_cancelled"));
+            Assert.That(shownProfiles, Is.Not.Null);
+            Assert.That(shownProfiles, Is.Empty);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupForm_UsesOneActiveAppVerificationAction()
     {
         var source = ProductSourceText("FirstRunSetup.cs");
 
-        Assert.That(source, Does.Contain("ProfileCardState(\n        SubmitBindingProfile Profile"));
-        Assert.That(source, Does.Contain("OnVerifyProfile(GetProfileCard(\"codex-desktop\"))"));
-        Assert.That(source, Does.Not.Contain("_profiles\n            .FirstOrDefault"));
+        Assert.That(source, Does.Contain("Verify active app"));
+        Assert.That(source, Does.Contain("VerifyFocusedProfile"));
+        Assert.That(source, Does.Not.Contain("Verify Codex Desktop"));
+        Assert.That(source, Does.Not.Contain("Verify ChatGPT Desktop"));
+    }
+
+    [Test]
+    public void FirstRunSetupController_VerifyFocusedProfileContainsVerifierFailure()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var controller = new FirstRunSetupController(
+                new ThrowingFocusedFirstRunProfileVerifier(),
+                (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by focused verification."));
+
+            var result = controller.VerifyFocusedProfile("Enter", "Ctrl+Enter", layout);
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo("focused_profile_verification_failed"));
+            Assert.That(result.Diagnostics["verification_exception"], Is.EqualTo("true"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
     }
 
     [Test]
@@ -1255,7 +1373,7 @@ public partial class SanitizerTests
         }
     }
 
-    private sealed class StaticFirstRunProfileVerifier : IFirstRunProfileVerifier
+    private sealed class StaticFirstRunProfileVerifier : IFirstRunProfileVerifier, IFocusedFirstRunProfileVerifier
     {
         private readonly TextSurfaceDiscoveryResult _discovery;
 
@@ -1272,6 +1390,48 @@ public partial class SanitizerTests
                 profile.NewlineBinding?.DisplayText ?? "Ctrl+Enter",
                 _discovery,
                 profile.CompatibilityEvidence);
+        }
+
+        public FocusedProfileVerificationResult VerifyFocused(string submitBinding, string newlineBinding)
+        {
+            var profileId = _discovery.Surface?.ProfileId;
+            var profile = profileId is null
+                ? null
+                : FirstRunSetupController.CreateDefaultSetupProfile(profileId);
+            if (profile is null)
+            {
+                return new FocusedProfileVerificationResult(
+                    Profile: null,
+                    Code: "focused_surface_unverified",
+                    Diagnostics: new Dictionary<string, string>
+                    {
+                        ["surface_status"] = _discovery.Status
+                    });
+            }
+
+            var verified = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+                profile.ProfileId,
+                submitBinding,
+                newlineBinding,
+                _discovery,
+                profile.CompatibilityEvidence);
+            return new FocusedProfileVerificationResult(
+                verified,
+                verified.IsProtected ? "focused_profile_verified" : "focused_profile_verification_failed",
+                verified.Diagnostics);
+        }
+    }
+
+    private sealed class ThrowingFocusedFirstRunProfileVerifier : IFirstRunProfileVerifier, IFocusedFirstRunProfileVerifier
+    {
+        public SubmitBindingProfile Verify(SubmitBindingProfile profile)
+        {
+            return profile;
+        }
+
+        public FocusedProfileVerificationResult VerifyFocused(string submitBinding, string newlineBinding)
+        {
+            throw new InvalidOperationException("Injected verification failure.");
         }
     }
 }
@@ -1328,7 +1488,7 @@ public partial class SanitizerTests
             Assert.That(result.Succeeded, Is.False);
             Assert.That(result.State.Required, Is.True);
             Assert.That(result.State.Status, Is.EqualTo("pending"));
-            Assert.That(result.State.UnprotectedProfileIds.Contains("codex-desktop"), Is.True);
+            Assert.That(result.State.UnprotectedProfileIds, Is.EqualTo(new[] { "focused_supported_app" }));
         }
         finally
         {

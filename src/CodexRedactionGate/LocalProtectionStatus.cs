@@ -206,6 +206,11 @@ internal sealed class LocalProtectionStatusForm : Form
 
     internal void RefreshView()
     {
+        if (HasSelectedStatusText())
+        {
+            return;
+        }
+
         var view = _viewFactory();
         CurrentRows = view.Rows;
         _rows.SuspendLayout();
@@ -255,10 +260,16 @@ internal sealed class LocalProtectionStatusForm : Form
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
-        var text = new Label
+        var text = new TextBox
         {
-            AutoSize = true,
-            MaximumSize = new Size(560, 0),
+            ReadOnly = true,
+            Multiline = true,
+            BorderStyle = BorderStyle.None,
+            BackColor = SystemColors.Control,
+            TabStop = true,
+            ShortcutsEnabled = true,
+            Dock = DockStyle.Fill,
+            Height = 72,
             Text = $"{row.Name}{Environment.NewLine}Capability: {row.Capability}{Environment.NewLine}Status: {row.OperationalState}{Environment.NewLine}{row.Consequence}"
         };
         panel.Controls.Add(text, 0, 0);
@@ -283,11 +294,19 @@ internal sealed class LocalProtectionStatusForm : Form
         _rows.Controls.Add(panel, 0, _rows.RowCount++);
     }
 
+    private bool HasSelectedStatusText()
+    {
+        return _rows.Controls
+            .OfType<TableLayoutPanel>()
+            .SelectMany(panel => panel.Controls.OfType<TextBox>())
+            .Any(textBox => textBox.Focused || textBox.SelectionLength > 0);
+    }
+
     private static string ActionText(LocalProtectionStatusAction action)
     {
         return action switch
         {
-            LocalProtectionStatusAction.VerifyProfiles => "Verify profiles",
+            LocalProtectionStatusAction.VerifyProfiles => "Set up prompt protection",
             LocalProtectionStatusAction.RetryPromptProtection => "Retry protection",
             LocalProtectionStatusAction.RepairLocalProtection => "Repair local protection",
             _ => string.Empty

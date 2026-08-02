@@ -269,7 +269,7 @@ public static class WindowsTrayApp
             return null;
         }
 
-        var hookHost = new WindowsNativeSubmitHookHost();
+        var hookHost = new WindowsNativeSubmitHookHost(profiles);
         var activeSurfaceDiscovery = WindowsFocusedComposerDiscovery.CreateDefault();
         var runtimes = profiles.Select(nativeProfile =>
         {
@@ -597,7 +597,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _uiDispatcher = uiDispatcher ?? (work => _activationWindow.BeginInvoke(new MethodInvoker(work)));
         _remediationActionExecutor = new TrayRemediationActionExecutor(_backgroundWorkQueue, _uiDispatcher);
 
-        _statusItem = new ToolStripMenuItem { Enabled = false };
+        _statusItem = new ToolStripMenuItem("Protection status", null, (_, _) => OpenLocalProtectionStatus());
         _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };
         _toggleItem = new ToolStripMenuItem("Stop protection", null, (_, _) => ToggleProtection());
         _repairLocalProtectionItem = new ToolStripMenuItem("Repair local protection", null, (_, _) => RepairLocalProtection())
@@ -613,15 +613,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         menu.Items.Add(_statusItem);
         menu.Items.Add(_toggleItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Open local protection status", null, (_, _) => OpenLocalProtectionStatus()));
+        menu.Items.Add(new ToolStripMenuItem("Open protection status", null, (_, _) => OpenLocalProtectionStatus()));
         menu.Items.Add(new ToolStripMenuItem("Open local restore", null, (_, _) => OpenLocalRestore()));
         menu.Items.Add(new ToolStripMenuItem("Open sensitive terms", null, (_, _) => OpenDictionaryManagement()));
-        menu.Items.Add(new ToolStripMenuItem("Verify Codex Desktop profile", null, (_, _) => OpenCommand(TrayMenuContent.VerifyCodexProfileCommand)));
-        menu.Items.Add(new ToolStripMenuItem("Verify ChatGPT Desktop profile", null, (_, _) => OpenCommand(TrayMenuContent.VerifyChatGptProfileCommand)));
-        menu.Items.Add(new ToolStripMenuItem("Open audit viewer", null, (_, _) => OpenCommand(TrayMenuContent.AuditViewerCommand)));
-        menu.Items.Add(new ToolStripMenuItem("Open diagnostics", null, (_, _) => OpenCommand(TrayMenuContent.DiagnosticsCommand)));
+        menu.Items.Add(new ToolStripMenuItem("Set up prompt protection", null, (_, _) => VerifyProfilesFromTray()));
         menu.Items.Add(_repairLocalProtectionItem);
-        menu.Items.Add(new ToolStripMenuItem("Command reference...", null, (_, _) => ShowLocalText("Commands", TrayMenuContent.FormatBuildVersionHelpText(_buildVersion) + Environment.NewLine + Environment.NewLine + TrayMenuContent.RestoreText + Environment.NewLine + Environment.NewLine + TrayMenuContent.DiagnosticsText + Environment.NewLine + Environment.NewLine + TrayMenuContent.RuleManagementText)));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => Exit()));
 
@@ -775,16 +771,12 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         if (!string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
             _notifyIcon.Text = TrayStatusFormatter.FormatRecoveryRequiredNotifyIconText(localProtectionStatus);
-            var repairRequired = string.Equals(
-                localProtectionStatus,
-                LocalProtectionRecovery.RecoveryRequiredCode,
-                StringComparison.Ordinal);
-            _statusItem.Text = $"local_protection={localProtectionStatus} protected_send=blocked repair_required={repairRequired.ToString().ToLowerInvariant()}";
+            _statusItem.Text = "Protection status: attention required";
         }
         else
         {
             _notifyIcon.Text = TrayStatusFormatter.FormatNotifyIconText(state, _buildVersion);
-            _statusItem.Text = $"local_protection={localProtectionStatus} {TrayStatusFormatter.FormatMenuStatus(state)}";
+            _statusItem.Text = FormatReadableProtectionStatus(state);
         }
 
         _toggleItem.Text = state.Enabled ? "Stop protection" : "Start protection";
@@ -793,6 +785,23 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             LocalProtectionRecovery.RecoveryRequiredCode,
             StringComparison.Ordinal);
         _localProtectionStatusForm?.RefreshView();
+    }
+
+    private static string FormatReadableProtectionStatus(TrayProtectionState state)
+    {
+        if (!state.Enabled)
+        {
+            return "Prompt protection: stopped";
+        }
+
+        if (state.SetupRequired)
+        {
+            return "Prompt protection: setup required";
+        }
+
+        return state.ComposerProtected
+            ? "Prompt protection: active"
+            : "Prompt protection: unavailable";
     }
 
     private void RefreshStatusOnUiThread()
@@ -876,10 +885,25 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private void VerifyProfilesFromTray()
     {
         _remediationActionExecutor.TryRun(
-            () => FirstRunSetupBackgroundRunner.Run(
-                _layout,
-                _firstRunSetupControllerFactory,
-                exception => _crashDiagnostics.Capture(exception, "tray_profile_verification", "verification_failed")),
+            () =>
+            {
+                var setupController = _firstRunSetupControllerFactory();
+                try
+                {
+                    return setupController is IFocusedProfileSetupController focusedSetupController
+                        ? focusedSetupController.ConfigureFocusedProfile(_layout)
+                        : setupController.EnsureSetup(_layout);
+                }
+                catch (Exception exception)
+                {
+                    _crashDiagnostics.Capture(exception, "tray_profile_verification", "verification_failed");
+                    return new FirstRunSetupResult(
+                        Succeeded: false,
+                        Code: "setup_failed",
+                        State: new FirstRunSetupState(true, new[] { "focused_supported_app" }, "failed", false, false),
+                        Diagnostics: new Dictionary<string, string>());
+                }
+            },
             CompleteFirstRunSetup,
             exception => PublishRemediationFailure(exception, "tray_profile_verification", "worker_failed"),
             _ => PublishPromptProtectionRetryFailure());

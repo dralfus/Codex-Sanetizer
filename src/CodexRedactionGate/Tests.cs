@@ -3994,12 +3994,14 @@ public partial class SanitizerTests
 
         Assert.That(traySourceText, Does.Contain("FormatBuildVersionMenuItem"));
         Assert.That(traySourceText, Does.Contain("Open sensitive terms"));
-        Assert.That(traySourceText, Does.Contain("Verify Codex Desktop profile"));
-        Assert.That(traySourceText, Does.Contain("Verify ChatGPT Desktop profile"));
+        Assert.That(traySourceText, Does.Contain("Set up prompt protection"));
+        Assert.That(traySourceText, Does.Not.Contain("Verify Codex Desktop profile"));
+        Assert.That(traySourceText, Does.Not.Contain("Verify ChatGPT Desktop profile"));
+        Assert.That(traySourceText, Does.Not.Contain("Open audit viewer"));
+        Assert.That(traySourceText, Does.Not.Contain("Open diagnostics"));
+        Assert.That(traySourceText, Does.Not.Contain("Command reference..."));
         Assert.That(traySourceText, Does.Contain("DictionaryManagementForm"));
         Assert.That(TrayMenuContent.RuleManagementCommand.CliArgument, Is.EqualTo("--dictionary-ui"));
-        Assert.That(TrayMenuContent.VerifyCodexProfileCommand.CliArgument, Is.EqualTo("--native-profile-verify-delay codex-desktop Enter Ctrl+Enter 10"));
-        Assert.That(TrayMenuContent.VerifyChatGptProfileCommand.CliArgument, Is.EqualTo("--native-profile-verify-delay chatgpt-desktop Enter Ctrl+Enter 10"));
         Assert.That(traySourceText, Does.Not.Contain("Open rule management"));
     }
 

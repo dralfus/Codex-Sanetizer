@@ -195,11 +195,7 @@ public static class ProductSmokeRunner
         var nativeProfileVerificationEntrypointsPassed = nativeSubmit.Passed
             && codexVerification.IsProtected
             && chatGptVerification.IsProtected
-            && mismatchVerification.CapabilityStatus == OsInteractionStatusIds.SurfaceUnverified
-            && TrayMenuContent.VerifyCodexProfileCommand.CliArgument.Contains("--native-profile-verify-delay codex-desktop", StringComparison.Ordinal)
-            && TrayMenuContent.VerifyChatGptProfileCommand.CliArgument.Contains("--native-profile-verify-delay chatgpt-desktop", StringComparison.Ordinal)
-            && TrayMenuContent.RuleManagementText.Contains("--native-profile-verify-delay codex-desktop", StringComparison.Ordinal)
-            && TrayMenuContent.RuleManagementText.Contains("--native-profile-verify-delay chatgpt-desktop", StringComparison.Ordinal);
+            && mismatchVerification.CapabilityStatus == OsInteractionStatusIds.SurfaceUnverified;
         var projectFileReadOnlySmoke = ProjectFileReadOnlySmokeRunner.Run(hmacSecret);
         var projectFileProductSmoke = ProjectFileProductSmokeRunner.Run(hmacSecret);
         var projectFileBrokerWorkflowPassed = projectFileReadOnlySmoke.Passed

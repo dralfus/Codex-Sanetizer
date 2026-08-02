@@ -14,6 +14,7 @@ This directory documents Codex Redaction Gate: a local safety layer that interce
 - `ARCHITECTURE.md` - target architecture, components, data flows, and integration options.
 - `SANITIZER_DESIGN.md` - concrete sanitizer design: API, pipeline, policy, span replacement, and verification.
 - `PROMPT_INTERCEPTION.md` - prompt interception modes, guard mode, gateway mode, and why hook-only blocking is not transparent replacement.
+- `PROMPT_PROTECTION_USABILITY_SPEC.md` - single active-app onboarding, responsive normal typing, and the user-facing tray surface.
 - `POLICY_MODEL.md` - sensitivity policy, policy layers, dictionaries, allowlists/blocklists, and manual additions.
 - `EXISTING_SOLUTIONS_REVIEW.md` - review of reusable open-source sanitizer and secret-scanner projects.
 - `IMPLEMENTATION_READINESS_REVIEW.md` - pre-implementation questions and non-blocking decisions.

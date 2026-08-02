@@ -1335,11 +1335,15 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     private const int VkControl = 0x11;
     private const int VkShift = 0x10;
     private const int VkMenu = 0x12;
+    private const int VkReturn = 0x0d;
+    private const int VkPause = 0x13;
     private const uint LlkhfLowerIlInjected = 0x02;
     private const uint LlkhfInjected = 0x10;
 
     private readonly NativeMethods.LowLevelKeyboardProc _callback;
     private readonly NativeMethods.LowLevelMouseProc _mouseCallback;
+    private readonly IReadOnlyDictionary<string, SubmitKeyBinding> _submitBindings;
+    private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
     private readonly ConcurrentDictionary<(nint Window, uint ProcessId), byte> _selectedTargets = new();
     private IntPtr _hook;
     private IntPtr _mouseHook;
@@ -1350,10 +1354,16 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     private Action<NativePointerGesture, NativeSubmitInterceptionResult>? _onSuppressedPointerSubmit;
     private Func<NativePointerGesture, bool>? _shouldSuppressPointerClassificationFailure;
 
-    public WindowsNativeSubmitHookHost()
+    public WindowsNativeSubmitHookHost(
+        IReadOnlyList<SubmitBindingProfile>? profiles = null,
+        Func<IntPtr, string?>? selectedWindowProfileResolver = null)
     {
         _callback = HookCallback;
         _mouseCallback = MouseHookCallback;
+        _submitBindings = (profiles ?? Array.Empty<SubmitBindingProfile>())
+            .Where(profile => profile.Enabled && profile.SubmitBinding is not null)
+            .ToDictionary(profile => profile.ProfileId, profile => profile.SubmitBinding!, StringComparer.Ordinal);
+        _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
     }
 
     public string? LastErrorCode { get; private set; }
@@ -1482,6 +1492,12 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             Shift: IsKeyDown(VkShift),
             TargetWindow: targetWindow,
             TargetProcessId: NativeMethods.GetWindowProcessId(targetWindow));
+
+        if (!IsPotentialKeyboardInterception(gesture, data.vkCode))
+        {
+            return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
+        }
+
         var result = ClassifyKeyboardWithinBudget(gesture);
 
         if (!result.SuppressOriginalInput)
@@ -1540,9 +1556,62 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     {
         return ClassifyWithinBudget(
             () => _classify!(gesture),
-            () => ShouldSuppressKeyboardClassificationFailure(gesture),
+            () => IsKnownSelectedSubmit(gesture) || ShouldSuppressKeyboardClassificationFailure(gesture),
             result => RememberSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId, result),
             "keyboard");
+    }
+
+    private bool IsPotentialKeyboardInterception(NativeKeyGesture gesture, uint virtualKey)
+    {
+        if (virtualKey == VkPause)
+        {
+            return true;
+        }
+
+        if (virtualKey != VkReturn)
+        {
+            return false;
+        }
+
+        return IsKnownSelectedSubmit(gesture)
+            || IsKnownSelectedProfileWithoutBinding(gesture.TargetWindow);
+    }
+
+    private bool IsKnownSelectedSubmit(NativeKeyGesture gesture)
+    {
+        var profileId = ResolveSelectedWindowProfile(gesture.TargetWindow);
+        return !string.IsNullOrWhiteSpace(profileId)
+            && _submitBindings.TryGetValue(profileId, out var submitBinding)
+            && submitBinding.Matches(gesture);
+    }
+
+    private bool IsKnownSelectedProfileWithoutBinding(IntPtr targetWindow)
+    {
+        var profileId = ResolveSelectedWindowProfile(targetWindow);
+        return !string.IsNullOrWhiteSpace(profileId)
+            && !_submitBindings.ContainsKey(profileId);
+    }
+
+    private string? ResolveSelectedWindowProfile(IntPtr targetWindow)
+    {
+        if (targetWindow == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _selectedWindowProfileResolver(targetWindow);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal bool IsPotentialKeyboardInterceptionForTest(NativeKeyGesture gesture, uint virtualKey)
+    {
+        return IsPotentialKeyboardInterception(gesture, virtualKey);
     }
 
     private NativeSubmitInterceptionResult ClassifyWithinBudget(
