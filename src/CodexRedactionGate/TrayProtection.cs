@@ -54,7 +54,12 @@ public sealed record TrayProtectionState(
     string? ConfiguredProfileId = null,
     string ProtectedSendAttemptStatus = "idle",
     string ProtectedSendAttemptAction = "none",
-    long ProtectedSendAttemptId = 0);
+    long ProtectedSendAttemptId = 0,
+    string SetupVerificationStatus = "idle",
+    string SetupVerificationAction = "none",
+    string? SetupVerificationProfileId = null,
+    string SetupVerificationBinding = "not_configured",
+    long SetupVerificationAttemptId = 0);
 
 public sealed record ProtectionDisableResult(
     bool Succeeded,
@@ -500,7 +505,12 @@ internal sealed class TrayProtectionController
                     ProtectedSendAttemptAction = ActiveAttemptInterruptedByRuntimeReload(current.State)
                         ? "focus_and_send_again"
                         : current.State.ProtectedSendAttemptAction,
-                    ProtectedSendAttemptId = current.State.ProtectedSendAttemptId
+                    ProtectedSendAttemptId = current.State.ProtectedSendAttemptId,
+                    SetupVerificationStatus = current.State.SetupVerificationStatus,
+                    SetupVerificationAction = current.State.SetupVerificationAction,
+                    SetupVerificationProfileId = current.State.SetupVerificationProfileId,
+                    SetupVerificationBinding = current.State.SetupVerificationBinding,
+                    SetupVerificationAttemptId = current.State.SetupVerificationAttemptId
                 };
             if (!string.Equals(
                     state.LocalProtectionStatus,
@@ -532,6 +542,54 @@ internal sealed class TrayProtectionController
     public ProtectionSnapshot GetCurrentSnapshot()
     {
         return ReadSnapshot();
+    }
+
+    internal void PublishSetupVerificationProgress(PromptProtectionSetupProgress progress)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+
+        while (true)
+        {
+            var current = ReadSnapshot();
+            var status = PromptProtectionSetupLifecycle.SafeStatus(progress.Status);
+            var attemptId = progress.AttemptId;
+            if (status == "waiting_for_focus")
+            {
+                if (attemptId <= current.State.SetupVerificationAttemptId
+                    || current.State.SetupVerificationStatus is "waiting_for_focus" or "composer_recognized"
+                        or "verifying_binding" or "activating_protection")
+                {
+                    return;
+                }
+            }
+            else if (attemptId == 0
+                || attemptId != current.State.SetupVerificationAttemptId
+                || !PromptProtectionSetupLifecycle.IsAllowedTransition(current.State.SetupVerificationStatus, status))
+            {
+                return;
+            }
+
+            var replacement = current with
+            {
+                State = current.State with
+                {
+                    SetupVerificationStatus = status,
+                    SetupVerificationAction = PromptProtectionSetupLifecycle.SafeAction(progress.Action),
+                    SetupVerificationProfileId = PromptProtectionSetupLifecycle.SafeProfileId(progress.ProfileId),
+                    SetupVerificationBinding = PromptProtectionSetupLifecycle.SafeBinding(progress.Binding),
+                    SetupVerificationAttemptId = attemptId
+                }
+            };
+            if (PublishSnapshotIfCurrent(current, replacement))
+            {
+                return;
+            }
+        }
+    }
+
+    internal bool IsCurrentSetupVerificationAttempt(long attemptId)
+    {
+        return attemptId > 0 && ReadSnapshot().State.SetupVerificationAttemptId == attemptId;
     }
 
     /// <summary>
@@ -578,7 +636,12 @@ internal sealed class TrayProtectionController
                 ProtectedSendAttemptAction = ActiveAttemptInterruptedByRuntimeReload(previous.State)
                     ? "focus_and_send_again"
                     : previous.State.ProtectedSendAttemptAction,
-                ProtectedSendAttemptId = previous.State.ProtectedSendAttemptId
+                ProtectedSendAttemptId = previous.State.ProtectedSendAttemptId,
+                SetupVerificationStatus = previous.State.SetupVerificationStatus,
+                SetupVerificationAction = previous.State.SetupVerificationAction,
+                SetupVerificationProfileId = previous.State.SetupVerificationProfileId,
+                SetupVerificationBinding = previous.State.SetupVerificationBinding,
+                SetupVerificationAttemptId = previous.State.SetupVerificationAttemptId
             };
 
             return new ProtectionSnapshot(
@@ -660,7 +723,12 @@ internal sealed class TrayProtectionController
             ConfiguredProfileId: snapshot.State.ConfiguredProfileId,
             ProtectedSendAttemptStatus: snapshot.State.ProtectedSendAttemptStatus,
             ProtectedSendAttemptAction: snapshot.State.ProtectedSendAttemptAction,
-            ProtectedSendAttemptId: snapshot.State.ProtectedSendAttemptId);
+            ProtectedSendAttemptId: snapshot.State.ProtectedSendAttemptId,
+            SetupVerificationStatus: snapshot.State.SetupVerificationStatus,
+            SetupVerificationAction: snapshot.State.SetupVerificationAction,
+            SetupVerificationProfileId: snapshot.State.SetupVerificationProfileId,
+            SetupVerificationBinding: snapshot.State.SetupVerificationBinding,
+            SetupVerificationAttemptId: snapshot.State.SetupVerificationAttemptId);
         PublishSnapshotIfCurrent(snapshot, snapshot with { State = state });
     }
 
@@ -1026,7 +1094,12 @@ internal sealed class TrayProtectionController
                 ConfiguredProfileId: current.State.ConfiguredProfileId,
                 ProtectedSendAttemptStatus: ProtectedSendAttemptStatus(lastStatus, submitted),
                 ProtectedSendAttemptAction: ProtectedSendAttemptAction(lastStatus, submitted),
-                ProtectedSendAttemptId: current.State.ProtectedSendAttemptId);
+                ProtectedSendAttemptId: current.State.ProtectedSendAttemptId,
+                SetupVerificationStatus: current.State.SetupVerificationStatus,
+                SetupVerificationAction: current.State.SetupVerificationAction,
+                SetupVerificationProfileId: current.State.SetupVerificationProfileId,
+                SetupVerificationBinding: current.State.SetupVerificationBinding,
+                SetupVerificationAttemptId: current.State.SetupVerificationAttemptId);
             if (PublishSnapshotIfCurrent(current, current with { State = state }))
             {
                 return;
@@ -1090,10 +1163,14 @@ internal sealed class TrayProtectionController
         {
             OsInteractionStatusIds.NativeSubmitInProgress => "in_progress",
             OsInteractionStatusIds.NativeSubmitSetupRequired => "setup_required",
-            OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer => "verification_required",
+            OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer
+                or OsInteractionStatusIds.BindingUnknown or OsInteractionStatusIds.NotConfigured => "binding_not_verified",
             OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "composer_changed",
             OsInteractionStatusIds.Canceled => "canceled",
-            _ => "send_blocked"
+            OsInteractionStatusIds.EnterpriseBlocked => "policy_blocked",
+            OsInteractionStatusIds.Blocked => "content_blocked",
+            LocalProtectionRecovery.RecoveryRequiredCode or LocalProtectionRecovery.RuntimeDegradedCode => "local_protection_unavailable",
+            _ => "protection_unavailable"
         };
     }
 
@@ -1107,11 +1184,15 @@ internal sealed class TrayProtectionController
         return status switch
         {
             OsInteractionStatusIds.NativeSubmitSetupRequired => "set_up_prompt_protection",
-            OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer => "set_up_prompt_protection",
+            OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer
+                or OsInteractionStatusIds.BindingUnknown or OsInteractionStatusIds.NotConfigured => "set_up_prompt_protection",
             OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "focus_and_send_again",
             OsInteractionStatusIds.Canceled => "edit_or_send_again",
             OsInteractionStatusIds.NativeSubmitInProgress => "wait_for_current_send",
-            _ => "send_again"
+            OsInteractionStatusIds.EnterpriseBlocked => "contact_administrator",
+            OsInteractionStatusIds.Blocked => "edit_prompt_and_send_again",
+            LocalProtectionRecovery.RecoveryRequiredCode or LocalProtectionRecovery.RuntimeDegradedCode => "repair_local_protection",
+            _ => "retry_protection"
         };
     }
 
@@ -1701,7 +1782,9 @@ internal static class TrayStatusFormatter
     private static string DisplayProtectedSendAttempt(string value)
     {
         return value is "idle" or "detected" or "checking" or "in_progress" or "sent_safely"
-            or "setup_required" or "verification_required" or "composer_changed" or "canceled" or "send_blocked"
+            or "setup_required" or "binding_not_verified" or "composer_changed" or "canceled"
+            or "local_protection_unavailable" or "policy_blocked" or "protection_unavailable"
+            or "content_blocked"
             ? value
             : "unavailable";
     }
@@ -1709,7 +1792,8 @@ internal static class TrayStatusFormatter
     private static string DisplayProtectedSendAttemptAction(string value)
     {
         return value is "none" or "checking_prompt" or "wait_for_current_send" or "set_up_prompt_protection"
-            or "focus_and_send_again" or "edit_or_send_again" or "send_again"
+            or "focus_and_send_again" or "edit_or_send_again" or "repair_local_protection"
+            or "contact_administrator" or "edit_prompt_and_send_again" or "retry_protection"
             ? value
             : "none";
     }

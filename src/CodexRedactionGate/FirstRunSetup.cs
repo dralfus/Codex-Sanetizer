@@ -20,7 +20,8 @@ public sealed record FirstRunSetupResult(
     bool Succeeded,
     string Code,
     FirstRunSetupState State,
-    IReadOnlyDictionary<string, string> Diagnostics);
+    IReadOnlyDictionary<string, string> Diagnostics,
+    IReadOnlyList<SubmitBindingProfile>? PreviousProfiles = null);
 
 public interface IFirstRunSetupController
 {
@@ -73,6 +74,14 @@ internal interface IFocusedFirstRunProfileVerifier
     FocusedProfileVerificationResult VerifyFocused(string submitBinding, string newlineBinding);
 }
 
+internal interface IObservableFocusedFirstRunProfileVerifier : IFocusedFirstRunProfileVerifier
+{
+    FocusedProfileVerificationResult VerifyFocused(
+        string submitBinding,
+        string newlineBinding,
+        Action<PromptProtectionSetupProgress> publishProgress);
+}
+
 internal interface IFocusedProfileSetupController
 {
     FirstRunSetupResult ConfigureFocusedProfile(DefaultStorageLayout layout);
@@ -83,7 +92,12 @@ internal interface IFocusedProfileSetupController
         DefaultStorageLayout layout);
 }
 
-internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileVerifier, IFocusedFirstRunProfileVerifier
+internal interface ISetupVerificationProgressReporter
+{
+    void PublishSetupProgress(string status, string action, string? profileId = null, string binding = "not_configured");
+}
+
+internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileVerifier, IObservableFocusedFirstRunProfileVerifier
 {
     private readonly TimeSpan _verificationDelay;
     private readonly Func<TextSurfaceDiscoveryResult> _discoveryFactory;
@@ -131,6 +145,15 @@ internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileV
 
     public FocusedProfileVerificationResult VerifyFocused(string submitBinding, string newlineBinding)
     {
+        return VerifyFocused(submitBinding, newlineBinding, _ => { });
+    }
+
+    public FocusedProfileVerificationResult VerifyFocused(
+        string submitBinding,
+        string newlineBinding,
+        Action<PromptProtectionSetupProgress> publishProgress)
+    {
+        ArgumentNullException.ThrowIfNull(publishProgress);
         if (_verificationDelay > TimeSpan.Zero)
         {
             Thread.Sleep(_verificationDelay);
@@ -148,6 +171,11 @@ internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileV
                     ["surface_status"] = discovery.Status
                 });
         }
+
+        publishProgress(new PromptProtectionSetupProgress(
+            "composer_recognized", "wait_for_verification", profile.ProfileId, submitBinding));
+        publishProgress(new PromptProtectionSetupProgress(
+            "verifying_binding", "wait_for_verification", profile.ProfileId, submitBinding));
 
         var verified = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             profile.ProfileId,
@@ -169,27 +197,38 @@ internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileV
     }
 }
 
-internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocusedProfileSetupController
+internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocusedProfileSetupController, ISetupVerificationProgressReporter
 {
+    private static long _nextSetupAttemptId;
     private readonly IFirstRunProfileVerifier _profileVerifier;
     private readonly IFocusedFirstRunProfileVerifier _focusedProfileVerifier;
     private readonly Func<IReadOnlyList<SubmitBindingProfile>, DefaultStorageLayout, IFirstRunSetupController, bool> _showSetupWindow;
+    private readonly Action<PromptProtectionSetupProgress>? _setupProgressPublisher;
+    private long _setupAttemptId;
+    private FirstRunSetupResult? _lastFocusedVerificationResult;
 
     public FirstRunSetupController()
         : this(new FocusedComposerFirstRunProfileVerifier(), ShowSetupWindow)
     {
     }
 
+    internal FirstRunSetupController(Action<PromptProtectionSetupProgress> setupProgressPublisher)
+        : this(new FocusedComposerFirstRunProfileVerifier(), ShowSetupWindow, null, setupProgressPublisher)
+    {
+    }
+
     internal FirstRunSetupController(
         IFirstRunProfileVerifier profileVerifier,
         Func<IReadOnlyList<SubmitBindingProfile>, DefaultStorageLayout, IFirstRunSetupController, bool>? showSetupWindow = null,
-        IFocusedFirstRunProfileVerifier? focusedProfileVerifier = null)
+        IFocusedFirstRunProfileVerifier? focusedProfileVerifier = null,
+        Action<PromptProtectionSetupProgress>? setupProgressPublisher = null)
     {
         _profileVerifier = profileVerifier ?? throw new ArgumentNullException(nameof(profileVerifier));
         _focusedProfileVerifier = focusedProfileVerifier
             ?? profileVerifier as IFocusedFirstRunProfileVerifier
             ?? new FocusedComposerFirstRunProfileVerifier();
         _showSetupWindow = showSetupWindow ?? ShowSetupWindow;
+        _setupProgressPublisher = setupProgressPublisher;
     }
 
     public FirstRunSetupResult EnsureSetup(DefaultStorageLayout layout)
@@ -199,7 +238,6 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
         var initialStatus = GetSetupStatus(layout);
         if (initialStatus.Succeeded && !initialStatus.State.Required)
         {
-            SetSetupComplete(layout);
             return new FirstRunSetupResult(
                 Succeeded: true,
                 Code: "setup_complete",
@@ -258,16 +296,16 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
             var finalStatus = GetSetupStatus(layout);
             if (finalStatus.Succeeded && !finalStatus.State.Required)
             {
-                SetSetupComplete(layout);
                 return new FirstRunSetupResult(
                     Succeeded: true,
                     Code: "setup_complete_after_window",
                     State: finalStatus.State,
-                    Diagnostics: Merge(finalStatus.Diagnostics, new Dictionary<string, string>
+                    Diagnostics: Merge(_lastFocusedVerificationResult?.Diagnostics ?? finalStatus.Diagnostics, new Dictionary<string, string>
                     {
                         ["user_action"] = "setup_window_closed",
                         ["all_profiles_verified"] = "true"
-                    }));
+                    }),
+                    PreviousProfiles: _lastFocusedVerificationResult?.PreviousProfiles);
             }
 
             return new FirstRunSetupResult(
@@ -391,10 +429,6 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
         }
 
         var updatedStatus = GetSetupStatus(layout);
-        if (!updatedStatus.State.Required)
-        {
-            SetSetupComplete(layout);
-        }
 
         return new FirstRunSetupResult(
             Succeeded: verifiedProfile.IsProtected,
@@ -418,10 +452,20 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
         FocusedProfileVerificationResult focusedResult;
         try
         {
-            focusedResult = _focusedProfileVerifier.VerifyFocused(submitBinding, newlineBinding);
+            focusedResult = _focusedProfileVerifier is IObservableFocusedFirstRunProfileVerifier observableVerifier
+                ? observableVerifier.VerifyFocused(
+                    submitBinding,
+                    newlineBinding,
+                    progress => PublishSetupProgress(
+                        progress.Status,
+                        progress.Action,
+                        progress.ProfileId,
+                        progress.Binding))
+                : VerifyFocusedWithoutProgress(submitBinding, newlineBinding);
         }
         catch (Exception)
         {
+            PublishSetupProgress("verification_failed", "retry_setup", binding: submitBinding);
             var currentStatus = GetSetupStatus(layout);
             return new FirstRunSetupResult(
                 Succeeded: false,
@@ -435,6 +479,10 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
 
         if (focusedResult.Profile is not { } profile || !profile.IsProtected)
         {
+            PublishSetupProgress(
+                focusedResult.Code == "focused_surface_unverified" ? "unsupported_surface" : "verification_failed",
+                "retry_setup",
+                binding: submitBinding);
             var currentStatus = GetSetupStatus(layout);
             return new FirstRunSetupResult(
                 Succeeded: false,
@@ -443,9 +491,25 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
                 Diagnostics: focusedResult.Diagnostics);
         }
 
+        var previousProfiles = SubmitBindingProfileStore.Load(layout);
+        if (!previousProfiles.Succeeded)
+        {
+            PublishSetupProgress("verification_failed", "retry_setup", profile.ProfileId, submitBinding);
+            return new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "focused_profile_update_failed",
+                State: GetSetupStatus(layout).State,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["profile_id"] = profile.ProfileId,
+                    ["save_status"] = previousProfiles.Code
+                });
+        }
+
         var saveResult = SubmitBindingProfileStore.Upsert(layout, profile);
         if (!saveResult.Succeeded)
         {
+            PublishSetupProgress("verification_failed", "retry_setup", profile.ProfileId, submitBinding);
             return new FirstRunSetupResult(
                 Succeeded: false,
                 Code: "focused_profile_update_failed",
@@ -458,8 +522,8 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
         }
 
         var updatedStatus = GetSetupStatus(layout);
-        SetSetupComplete(layout);
-        return new FirstRunSetupResult(
+        PublishSetupProgress("activating_protection", "wait_for_verification", profile.ProfileId, submitBinding);
+        var verifiedResult = new FirstRunSetupResult(
             Succeeded: true,
             Code: "focused_profile_verified",
             State: updatedStatus.State,
@@ -467,8 +531,38 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
             {
                 ["profile_id"] = profile.ProfileId,
                 ["verification_result"] = profile.CapabilityStatus,
-                ["binding_source"] = profile.BindingSource
-            }));
+                ["binding_source"] = profile.BindingSource,
+                ["setup_attempt_id"] = _setupAttemptId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            }),
+            PreviousProfiles: previousProfiles.Profiles);
+        _lastFocusedVerificationResult = verifiedResult;
+        return verifiedResult;
+    }
+
+    private FocusedProfileVerificationResult VerifyFocusedWithoutProgress(string submitBinding, string newlineBinding)
+    {
+        PublishSetupProgress("verifying_binding", "wait_for_verification", binding: submitBinding);
+        return _focusedProfileVerifier.VerifyFocused(submitBinding, newlineBinding);
+    }
+
+    public void PublishSetupProgress(
+        string status,
+        string action,
+        string? profileId = null,
+        string binding = "not_configured")
+    {
+        if (status == "waiting_for_focus")
+        {
+            _setupAttemptId = Interlocked.Increment(ref _nextSetupAttemptId);
+        }
+        else if (_setupAttemptId == 0)
+        {
+            _setupAttemptId = Interlocked.Increment(ref _nextSetupAttemptId);
+            _setupProgressPublisher?.Invoke(new PromptProtectionSetupProgress(
+                "waiting_for_focus", "focus_message_composer", profileId, binding, _setupAttemptId));
+        }
+
+        _setupProgressPublisher?.Invoke(new PromptProtectionSetupProgress(status, action, profileId, binding, _setupAttemptId));
     }
 
     public bool IsSetupComplete(DefaultStorageLayout layout)
@@ -477,6 +571,11 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
 
         var setupMarkerPath = Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete");
         return File.Exists(setupMarkerPath);
+    }
+
+    internal static void MarkSetupComplete(DefaultStorageLayout layout)
+    {
+        SetSetupComplete(layout);
     }
 
     internal static SubmitBindingProfile? CreateDefaultSetupProfile(string profileId)
@@ -800,6 +899,10 @@ internal sealed class FirstRunSetupForm : Form
 
         _verificationStatusLabel!.Text = "Verification is waiting for the focused Codex or ChatGPT Desktop composer...";
         _verificationStatusLabel.ForeColor = Color.DarkOrange;
+        if (_setupController is ISetupVerificationProgressReporter setupProgressReporter)
+        {
+            setupProgressReporter.PublishSetupProgress("waiting_for_focus", "focus_message_composer", binding: selectedSubmit);
+        }
         TopMost = false;
         WindowState = FormWindowState.Minimized;
         Hide();
@@ -817,7 +920,7 @@ internal sealed class FirstRunSetupForm : Form
             _verificationStatusLabel.Text = "The focused window was not verified. Protected Send remains blocked.";
             _verificationStatusLabel.ForeColor = Color.DarkRed;
             MessageBox.Show(
-                $"Verification failed. status={result.Code}. Protected Send will remain blocked until setup succeeds.",
+                "Verification did not confirm the selected composer. Focus the Codex or ChatGPT Desktop message box and try again. Protected Send remains blocked until setup succeeds.",
                 "Codex Redaction Gate - Setup required",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
@@ -825,9 +928,15 @@ internal sealed class FirstRunSetupForm : Form
         }
 
         var profileId = result.Diagnostics.TryGetValue("profile_id", out var verifiedProfileId)
-            ? verifiedProfileId
-            : "active app";
-        _verificationStatusLabel.Text = $"Protected: {profileId}";
+            ? PromptProtectionSetupLifecycle.SafeProfileId(verifiedProfileId)
+            : "selected_desktop_app";
+        var profileName = profileId switch
+        {
+            "codex-desktop" => "Codex Desktop",
+            "chatgpt-desktop" => "ChatGPT Desktop",
+            _ => "selected desktop app"
+        };
+        _verificationStatusLabel.Text = $"Protected: {profileName}";
         _verificationStatusLabel.ForeColor = Color.DarkGreen;
         _setupCompleted = true;
         Close();

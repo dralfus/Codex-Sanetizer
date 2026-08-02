@@ -572,7 +572,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _crashDiagnostics = LocalCrashDiagnostics.Bootstrap();
         _singleInstanceEnforcement = singleInstanceEnforcement;
         _nativeSubmitRuntimeFactory = nativeSubmitRuntimeFactory;
-        _firstRunSetupControllerFactory = firstRunSetupControllerFactory ?? (() => new FirstRunSetupController());
+        _firstRunSetupControllerFactory = firstRunSetupControllerFactory
+            ?? (() => new FirstRunSetupController(_controller.PublishSetupVerificationProgress));
         _firstRunSetupCompleted = firstRunSetupCompleted;
         _recoveredRuntimeFactory = recoveredRuntimeFactory ?? (() =>
             WindowsTrayApp.CreateResidentProtectionRuntime(Sanitizer.CreateProduction(_layout), _layout));
@@ -692,21 +693,49 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     {
         if (result?.Succeeded == true && !result.State.Required)
         {
+            var setupAttemptId = SetupVerificationAttemptId(result);
+            if (setupAttemptId > 0 && !_controller.IsCurrentSetupVerificationAttempt(setupAttemptId))
+            {
+                return;
+            }
+
+            _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "activating_protection",
+                "wait_for_verification",
+                result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
+                _controller.State.ProtectedSendBinding,
+                SetupVerificationAttemptId(result)));
             try
             {
                 var runtimeSet = _nativeSubmitRuntimeFactory?.Invoke();
                 if (runtimeSet is null || !_controller.ReloadNativeSubmit(runtimeSet))
                 {
+                    RestorePreviousSetupProfiles(result);
+                    _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                        "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
                     MessageBox.Show(
                         "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.",
                         "Codex Redaction Gate - Setup required",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
                 }
+                else
+                {
+                    FirstRunSetupController.MarkSetupComplete(_layout);
+                    _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                        "protected",
+                        "none",
+                        result.Diagnostics.TryGetValue("profile_id", out var activatedProfileId) ? activatedProfileId : null,
+                        _controller.State.ProtectedSendBinding,
+                        SetupVerificationAttemptId(result)));
+                }
             }
             catch (Exception exception)
             {
                 LocalCrashDiagnostics.CaptureDefault(exception, "first_run_setup", "runtime_reload_failed");
+                RestorePreviousSetupProfiles(result);
+                _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                    "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
                 MessageBox.Show(
                     "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.",
                     "Codex Redaction Gate - Setup required",
@@ -716,11 +745,19 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
         else if (result is null || result.Code != "setup_cancelled")
         {
+            _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                result?.Code == "focused_surface_unverified" ? "unsupported_surface" : "verification_failed",
+                "retry_setup", AttemptId: SetupVerificationAttemptId(result)));
             MessageBox.Show(
                 "Setup could not be completed. Protected Send remains blocked until verification succeeds. Open profile verification from the tray to retry.",
                 "Codex Redaction Gate - Setup required",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
+        }
+        else
+        {
+            _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "setup_cancelled", "retry_setup", AttemptId: SetupVerificationAttemptId(result)));
         }
 
         RefreshStatus();
@@ -731,6 +768,22 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         catch (Exception exception)
         {
             _crashDiagnostics.Capture(exception, "first_run_setup", "completion_callback_failed");
+        }
+    }
+
+    private static long SetupVerificationAttemptId(FirstRunSetupResult? result)
+    {
+        return result?.Diagnostics.TryGetValue("setup_attempt_id", out var text) == true
+            && long.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            ? value
+            : 0;
+    }
+
+    private void RestorePreviousSetupProfiles(FirstRunSetupResult result)
+    {
+        if (result.PreviousProfiles is { } previousProfiles)
+        {
+            SubmitBindingProfileStore.Save(_layout, previousProfiles);
         }
     }
 
@@ -804,6 +857,18 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             return "Prompt protection: stopped";
         }
 
+        if (!string.Equals(state.LocalProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
+        {
+            return "Prompt protection: local protection needs repair before sending";
+        }
+
+        if (state.SetupVerificationStatus != "idle"
+            && (state.SetupVerificationStatus != "protected"
+                || (state.ProtectedSendAttemptStatus == "idle" && state.ComposerProtected)))
+        {
+            return FormatSetupVerificationStatus(state);
+        }
+
         if (state.SetupRequired)
         {
             return $"Prompt setup required for {ProfileDisplayName(state)}: select Set up prompt protection";
@@ -825,14 +890,20 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 return "Protected Send: sent safely";
             case "composer_changed":
                 return "Protected Send: focus the original composer and send again";
-            case "verification_required":
+            case "binding_not_verified":
                 return "Protected Send: verify prompt protection before sending";
             case "setup_required":
                 return "Protected Send: set up prompt protection before sending";
             case "canceled":
                 return "Protected Send: canceled; edit the prompt or send again";
-            case "send_blocked":
-                return "Protected Send: not sent; send again after checking protection status";
+            case "local_protection_unavailable":
+                return "Protected Send: local protection is unavailable; repair local protection before sending";
+            case "policy_blocked":
+                return "Protected Send: blocked by policy; contact the administrator";
+            case "protection_unavailable":
+                return "Protected Send: protection is unavailable; retry protection before sending";
+            case "content_blocked":
+                return "Protected Send: edit the prompt and send again";
         }
 
         if (state.ComposerProtected)
@@ -856,12 +927,28 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private static string ProfileDisplayName(TrayProtectionState state)
     {
-        var profileId = state.LastProfileId ?? state.ConfiguredProfileId;
+        var profileId = state.SetupVerificationProfileId ?? state.LastProfileId ?? state.ConfiguredProfileId;
         return profileId switch
         {
             "chatgpt-desktop" => "ChatGPT Desktop",
             "codex-desktop" => "Codex Desktop",
             _ => "the selected desktop app"
+        };
+    }
+
+    private static string FormatSetupVerificationStatus(TrayProtectionState state)
+    {
+        return state.SetupVerificationStatus switch
+        {
+            "waiting_for_focus" => "Prompt setup: focus the message composer in the selected app",
+            "composer_recognized" => $"Prompt setup: {ProfileDisplayName(state)} composer recognized",
+            "verifying_binding" => $"Prompt setup: verifying {PromptProtectionSetupLifecycle.SafeBinding(state.SetupVerificationBinding)}",
+            "activating_protection" => "Prompt setup: activating protected Send",
+            "protected" => $"Prompt setup: {ProfileDisplayName(state)} is protected, Send {state.SetupVerificationBinding}",
+            "unsupported_surface" => "Prompt setup: the focused window was not a supported composer; focus it and try again",
+            "activation_failed" => "Prompt setup: verification succeeded, but protected Send could not start; restart protection",
+            "setup_cancelled" => "Prompt setup: not completed; select Set up prompt protection",
+            _ => "Prompt setup: verification failed; focus the message composer and try again"
         };
     }
 

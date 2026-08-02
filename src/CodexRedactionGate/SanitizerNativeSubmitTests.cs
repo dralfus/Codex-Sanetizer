@@ -651,7 +651,9 @@ public partial class SanitizerTests
             Assert.That(controller.State.ComposerProtected, Is.True, flowStatus);
             Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo(
                 flowStatus == OsInteractionStatusIds.Submitted ? "sent_safely" :
-                flowStatus == OsInteractionStatusIds.Canceled ? "canceled" : "send_blocked"), flowStatus);
+                flowStatus == OsInteractionStatusIds.Canceled ? "canceled" :
+                flowStatus == OsInteractionStatusIds.Blocked ? "content_blocked" :
+                "protection_unavailable"), flowStatus);
         }
     }
 
@@ -787,12 +789,12 @@ public partial class SanitizerTests
         {
             (OsInteractionStatusIds.FocusLost, "composer_changed"),
             (OsInteractionStatusIds.StaleComposer, "composer_changed"),
-            (OsInteractionStatusIds.SurfaceUnverified, "verification_required"),
+            (OsInteractionStatusIds.SurfaceUnverified, "binding_not_verified"),
             (OsInteractionStatusIds.NativeSubmitSetupRequired, "setup_required"),
-            (OsInteractionStatusIds.FailedClosed, "send_blocked"),
-            (OsInteractionStatusIds.EnterpriseBlocked, "send_blocked"),
-            (OsInteractionStatusIds.BindingUnknown, "send_blocked"),
-            (OsInteractionStatusIds.NotConfigured, "send_blocked")
+            (OsInteractionStatusIds.FailedClosed, "protection_unavailable"),
+            (OsInteractionStatusIds.EnterpriseBlocked, "policy_blocked"),
+            (OsInteractionStatusIds.BindingUnknown, "binding_not_verified"),
+            (OsInteractionStatusIds.NotConfigured, "binding_not_verified")
         })
         {
             var hook = new FakeNativeSubmitHookHost();
@@ -1287,6 +1289,39 @@ public partial class SanitizerTests
             Assert.That(stored.Single().ProfileId, Is.EqualTo("chatgpt-desktop"));
             Assert.That(stored.Single().IsProtected, Is.True);
             Assert.That(controller.GetSetupStatus(layout).State.Required, Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupController_VerifyFocusedProfilePublishesResidentLifecycleProgress()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var progress = new List<PromptProtectionSetupProgress>();
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"))),
+                (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by focused verification."),
+                setupProgressPublisher: progress.Add);
+
+            var result = controller.VerifyFocusedProfile("Ctrl+Enter", "Enter", layout);
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(progress.Select(item => item.Status), Is.EqualTo(new[]
+            {
+                "waiting_for_focus",
+                "verifying_binding",
+                "activating_protection"
+            }));
+            Assert.That(progress.All(item => item.Binding == "Ctrl+Enter"), Is.True);
         }
         finally
         {

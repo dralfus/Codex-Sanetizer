@@ -765,15 +765,15 @@ runtime activation drive every state without a live desktop app, timers, or
 cloud access. Public UI tests assert the same raw-free state and next action in
 the setup window, tray, and local-status view.
 
-- [ ] Selecting `Ctrl+Enter`, starting verification, and focusing a supported
+- [x] Selecting `Ctrl+Enter`, starting verification, and focusing a supported
   composer visibly advances through waiting, recognition, verification, and
   activation instead of leaving the user with an unexplained dialog.
-- [ ] A successful setup names the protected app and Send binding, saves them,
+- [x] A successful setup names the protected app and Send binding, saves them,
   reloads the resident runtime, and remains visibly `protected` after the
   setup window closes.
-- [ ] Each terminal setup failure names exactly one safe next action and never
+- [x] Each terminal setup failure names exactly one safe next action and never
   claims that protection is active.
-- [ ] All rendered setup progress and results remain raw-free and are covered
+- [x] All rendered setup progress and results remain raw-free and are covered
   without live focus, timing, or cloud submission.
 
 ## 300. Replace generic protected-Send blocking text with a specific outcome
@@ -805,9 +805,51 @@ results, local-protection states, and submit runners exercise every terminal
 reason. Public tray and local-status text is asserted raw-free with one
 matching next action.
 
-- [ ] Every blocked protected-Send outcome gives a distinct user-facing reason
+- [x] Every blocked protected-Send outcome gives a distinct user-facing reason
   and one next action rather than only `Send blocked`.
-- [ ] The setup progress/result and protected-Send result agree because both
+- [x] The setup progress/result and protected-Send result agree because both
   are projections of the same resident snapshot.
-- [ ] Synthetic prompt text, dictionary terms, mappings, paths, and exception
+- [x] Synthetic prompt text, dictionary terms, mappings, paths, and exception
   messages cannot appear in any explanation.
+
+## 301. Atomically replace a protected Send binding and its resident runtime
+
+**What to build:** Replace the current two-step setup handoff with one atomic
+candidate activation: prepare and validate the candidate runtime for the newly
+verified binding, publish it as the resident runtime, and only then persist the
+new binding as active. If preparation, publication, or persistence fails, the
+previous protected binding and runtime remain authoritative. Do not create a
+period in which a newly selected Send key can pass through without the resident
+gate.
+
+**Blocked by:** 299. The setup lifecycle and terminal activation result must
+already be observable.
+
+**State owner:** The resident protection snapshot owns the active runtime,
+active binding, and setup activation attempt. Persistent profile storage is a
+commit target, never an independent source of active protection while a handoff
+is in progress.
+
+**Fail-closed state:** Candidate build, runtime replacement, profile save, or
+rollback failure leaves selected-app Send blocked and leaves the previous active
+binding unchanged. A candidate binding is never reported as protected before
+the resident hook protects it.
+
+**Allowed transitions:** `protected(old)` -> `activating(candidate)` ->
+`protected(candidate)`, or `protected(old)` -> `activation_failed(old)`.
+Only the matching setup-attempt id may complete or roll back its candidate.
+
+**Deterministic proof:** Injected profile stores, runtime factories, and hook
+hosts prove that candidate-key input cannot pass raw during handoff; failure at
+every boundary retains or restores the previous runtime and binding without
+timers, a live desktop app, or cloud submission.
+
+- [ ] Candidate runtime is prepared from an uncommitted verified binding and
+  guards both the old and candidate Send binding until atomic publication.
+- [ ] Persistence happens only after resident activation, and every failure
+  keeps the previous active configuration authoritative.
+- [ ] Tests cover candidate creation, hook start, snapshot publish, persistence,
+  rollback, stale attempt completion, and no raw candidate Send pass-through.
+- [ ] A stale setup attempt cannot reload the runtime, write the completion
+  marker, or roll back a newer active candidate; rollback-save failure itself
+  becomes an explicit fail-closed resident state.

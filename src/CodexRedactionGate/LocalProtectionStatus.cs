@@ -70,16 +70,6 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
 
     private static LocalProtectionStatusRow CreatePromptRow(TrayProtectionState state)
     {
-        if (state.SetupRequired || state.NativeSubmitStatus == OsInteractionStatusIds.NativeSubmitSetupRequired)
-        {
-            return new LocalProtectionStatusRow(
-                "Automatic prompt protection",
-                "Selected-app send interception",
-                "setup required",
-                "Send from selected AI apps is blocked until profile verification succeeds.",
-                LocalProtectionStatusAction.VerifyProfiles);
-        }
-
         if (!string.Equals(
                 state.LocalProtectionStatus,
                 LocalProtectionRecovery.ReadyCode,
@@ -90,7 +80,23 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Selected-app send interception",
                 "unavailable",
                 "Selected AI-app prompts remain blocked until local protection is ready.",
-                LocalProtectionStatusAction.None);
+                LocalProtectionStatusAction.RepairLocalProtection);
+        }
+
+        var setupProgressRow = CreateSetupVerificationRow(state);
+        if (setupProgressRow is not null)
+        {
+            return setupProgressRow;
+        }
+
+        if (state.SetupRequired || state.NativeSubmitStatus == OsInteractionStatusIds.NativeSubmitSetupRequired)
+        {
+            return new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "setup required",
+                "Send from selected AI apps is blocked until profile verification succeeds.",
+                LocalProtectionStatusAction.VerifyProfiles);
         }
 
         if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
@@ -129,6 +135,39 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
             LocalProtectionStatusAction.None);
     }
 
+    private static LocalProtectionStatusRow? CreateSetupVerificationRow(TrayProtectionState state)
+    {
+        return state.SetupVerificationStatus switch
+        {
+            "waiting_for_focus" => new LocalProtectionStatusRow(
+                "Automatic prompt protection", "Selected-app send interception", "waiting for focus",
+                "Focus the selected app composer to continue verification.", LocalProtectionStatusAction.None),
+            "composer_recognized" => new LocalProtectionStatusRow(
+                "Automatic prompt protection", "Selected-app send interception", "composer recognized",
+                "The selected app composer was recognized; binding verification is continuing.", LocalProtectionStatusAction.None),
+            "verifying_binding" => new LocalProtectionStatusRow(
+                "Automatic prompt protection", "Selected-app send interception", "verifying Send key",
+                "The selected Send key is being verified before cloud submission is allowed.", LocalProtectionStatusAction.None),
+            "activating_protection" => new LocalProtectionStatusRow(
+                "Automatic prompt protection", "Selected-app send interception", "activating protection",
+                "Verification succeeded; protected Send is being activated.", LocalProtectionStatusAction.None),
+            "protected" => null,
+            "unsupported_surface" => new LocalProtectionStatusRow(
+                "Automatic prompt protection", "Selected-app send interception", "setup needs focus",
+                "Focus a Codex or ChatGPT Desktop message composer and verify prompt protection again.", LocalProtectionStatusAction.VerifyProfiles),
+            "activation_failed" => new LocalProtectionStatusRow(
+                "Automatic prompt protection", "Selected-app send interception", "activation failed",
+                "Protected Send remains blocked; restart prompt protection and try again.", LocalProtectionStatusAction.RetryPromptProtection),
+            "setup_cancelled" => new LocalProtectionStatusRow(
+                "Automatic prompt protection", "Selected-app send interception", "setup not completed",
+                "Protected Send remains blocked until prompt protection is verified.", LocalProtectionStatusAction.VerifyProfiles),
+            "verification_failed" => new LocalProtectionStatusRow(
+                "Automatic prompt protection", "Selected-app send interception", "verification failed",
+                "Focus the selected app composer and verify prompt protection again.", LocalProtectionStatusAction.VerifyProfiles),
+            _ => null
+        };
+    }
+
     private static LocalProtectionStatusRow? CreateProtectedSendAttemptRow(string status)
     {
         return status switch
@@ -143,7 +182,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Automatic prompt protection",
                 "Selected-app send interception",
                 "Send in progress",
-                "The previous protected Send is still in progress.",
+                "The previous protected Send is still in progress. Wait for it to finish.",
                 LocalProtectionStatusAction.None),
             "sent_safely" => new LocalProtectionStatusRow(
                 "Automatic prompt protection",
@@ -163,17 +202,35 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Send blocked",
                 "Focus the original composer and send again.",
                 LocalProtectionStatusAction.None),
-            "verification_required" or "setup_required" => new LocalProtectionStatusRow(
+            "binding_not_verified" or "setup_required" => new LocalProtectionStatusRow(
                 "Automatic prompt protection",
                 "Selected-app send interception",
                 "Send blocked",
                 "Verify prompt protection before sending.",
                 LocalProtectionStatusAction.VerifyProfiles),
-            "send_blocked" => new LocalProtectionStatusRow(
+            "local_protection_unavailable" => new LocalProtectionStatusRow(
                 "Automatic prompt protection",
                 "Selected-app send interception",
-                "Send blocked",
-                "The original Send stayed blocked. Check protection status, then send again.",
+                "Send blocked: local protection unavailable",
+                "Repair local protection before sending.",
+                LocalProtectionStatusAction.RepairLocalProtection),
+            "policy_blocked" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked by policy",
+                "The original Send stayed blocked; contact the administrator.",
+                LocalProtectionStatusAction.None),
+            "protection_unavailable" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked: protection unavailable",
+                "Retry prompt protection before sending.",
+                LocalProtectionStatusAction.RetryPromptProtection),
+            "content_blocked" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked by content policy",
+                "Edit the prompt and send again.",
                 LocalProtectionStatusAction.None),
             _ => null
         };

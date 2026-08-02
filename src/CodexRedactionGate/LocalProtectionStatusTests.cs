@@ -139,9 +139,12 @@ public sealed class LocalProtectionStatusTests
         foreach (var (attemptStatus, expectedState, expectedAction, expectedConsequence) in new[]
         {
             ("composer_changed", "Send blocked", LocalProtectionStatusAction.None, "Focus the original composer"),
-            ("verification_required", "Send blocked", LocalProtectionStatusAction.VerifyProfiles, "Verify prompt protection"),
+            ("binding_not_verified", "Send blocked", LocalProtectionStatusAction.VerifyProfiles, "Verify prompt protection"),
             ("setup_required", "Send blocked", LocalProtectionStatusAction.VerifyProfiles, "Verify prompt protection"),
-            ("send_blocked", "Send blocked", LocalProtectionStatusAction.None, "original Send stayed blocked")
+            ("local_protection_unavailable", "Send blocked: local protection unavailable", LocalProtectionStatusAction.RepairLocalProtection, "Repair local protection"),
+            ("policy_blocked", "Send blocked by policy", LocalProtectionStatusAction.None, "contact the administrator"),
+            ("protection_unavailable", "Send blocked: protection unavailable", LocalProtectionStatusAction.RetryPromptProtection, "Retry prompt protection"),
+            ("content_blocked", "Send blocked by content policy", LocalProtectionStatusAction.None, "Edit the prompt")
         })
         {
             var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
@@ -157,6 +160,29 @@ public sealed class LocalProtectionStatusTests
             Assert.That(promptRow.Consequence, Does.Contain(expectedConsequence), attemptStatus);
             Assert.That(view.RenderText(), Does.Not.Contain("DOMAIN_C195C3D8E8F3"), attemptStatus);
         }
+    }
+
+    [Test]
+    public void StatusView_ExplainsSetupProgressAndSpecificBlockedSendReasons()
+    {
+        var waiting = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            SetupRequired = true,
+            ComposerProtected = false,
+            SetupVerificationStatus = "waiting_for_focus",
+            SetupVerificationAction = "focus_message_composer",
+            SetupVerificationBinding = "Ctrl+Enter"
+        });
+        var policyBlocked = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ProtectedSendAttemptStatus = "policy_blocked",
+            ProtectedSendAttemptAction = "contact_administrator"
+        });
+
+        Assert.That(waiting.Rows[1].OperationalState, Is.EqualTo("waiting for focus"));
+        Assert.That(waiting.Rows[1].Consequence, Does.Contain("Focus the selected app composer"));
+        Assert.That(policyBlocked.Rows[1].OperationalState, Is.EqualTo("Send blocked by policy"));
+        Assert.That(policyBlocked.Rows[1].Consequence, Does.Contain("contact the administrator"));
     }
 
     [Test]

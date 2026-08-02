@@ -8281,6 +8281,110 @@ public class ResidentFirstRunSetupLaunchTests
     }
 
     [Test]
+    public void ReadableProtectionStatus_ExplainsObservableSetupLifecycle()
+    {
+        var waiting = CreateReadableProtectionState() with
+        {
+            SetupVerificationStatus = "waiting_for_focus",
+            SetupVerificationAction = "focus_message_composer",
+            SetupVerificationBinding = "Ctrl+Enter"
+        };
+        var verifying = waiting with
+        {
+            SetupVerificationStatus = "verifying_binding",
+            SetupVerificationAction = "wait_for_verification"
+        };
+        var protectedState = waiting with
+        {
+            SetupVerificationStatus = "protected",
+            SetupVerificationAction = "none",
+            SetupVerificationProfileId = "chatgpt-desktop"
+        };
+        var protectedThenBlocked = protectedState with
+        {
+            ProtectedSendAttemptStatus = "policy_blocked"
+        };
+
+        Assert.That(WindowsTrayApplicationContext.FormatReadableProtectionStatus(waiting),
+            Does.Contain("focus the message composer"));
+        Assert.That(WindowsTrayApplicationContext.FormatReadableProtectionStatus(verifying),
+            Does.Contain("verifying Ctrl+Enter"));
+        Assert.That(WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState),
+            Does.Contain("ChatGPT Desktop is protected"));
+        Assert.That(WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedThenBlocked),
+            Does.Contain("blocked by policy"));
+    }
+
+    [Test]
+    public void ReadableProtectionStatus_ExplainsSpecificBlockedSendReasons()
+    {
+        foreach (var (attemptStatus, expectedText) in new[]
+        {
+            ("local_protection_unavailable", "local protection is unavailable"),
+            ("policy_blocked", "blocked by policy"),
+            ("binding_not_verified", "verify prompt protection"),
+            ("protection_unavailable", "retry protection"),
+            ("content_blocked", "edit the prompt and send again")
+        })
+        {
+            var state = CreateReadableProtectionState() with
+            {
+                ProtectedSendAttemptStatus = attemptStatus,
+                ProtectedSendAttemptAction = "DOMAIN_C195C3D8E8F3"
+            };
+
+            var text = WindowsTrayApplicationContext.FormatReadableProtectionStatus(state);
+            Assert.That(text, Does.Contain(expectedText), attemptStatus);
+            Assert.That(text, Does.Not.Contain("DOMAIN_C195C3D8E8F3"), attemptStatus);
+        }
+    }
+
+    [Test]
+    public void TrayProtectionController_RejectsStaleAndOutOfOrderSetupProgress()
+    {
+        var controller = new TrayProtectionController(
+            new UnavailableTrayHotkeyHost(
+                new HotkeyBinding("test-hotkey", "Ctrl+Shift+F9", "tests"),
+                "test_hotkey_unavailable"),
+            () => throw new InvalidOperationException("Manual scan should not run."));
+
+        controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+            "waiting_for_focus", "focus_message_composer", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 2));
+        controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+            "composer_recognized", "wait_for_verification", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 2));
+        controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+            "verifying_binding", "wait_for_verification", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 2));
+        controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+            "composer_recognized", "wait_for_verification", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 1));
+
+        Assert.That(controller.State.SetupVerificationStatus, Is.EqualTo("verifying_binding"));
+        Assert.That(controller.State.SetupVerificationAttemptId, Is.EqualTo(2));
+    }
+
+    private static TrayProtectionState CreateReadableProtectionState()
+    {
+        return new TrayProtectionState(
+            Enabled: true,
+            Mode: "NativeSubmit",
+            Hotkey: "Ctrl+Shift+F9",
+            LastStatus: OsInteractionStatusIds.Protected,
+            LastDecision: null,
+            LastReplacementCount: null,
+            LastProfileId: "chatgpt-desktop",
+            LastApplied: false,
+            LastSubmitted: false,
+            NativeSubmitEnabled: true,
+            NativeSubmitStatus: OsInteractionStatusIds.Protected,
+            ProtectedSendBinding: "Ctrl+Enter",
+            NewlineBinding: "Enter",
+            ManualScanHotkey: "Ctrl+Shift+F9",
+            ReadinessStatus: OsInteractionStatusIds.Protected,
+            ComposerProtected: true,
+            ResidentProcess: true,
+            ConfiguredProfileId: "chatgpt-desktop");
+    }
+
+    [Test]
     [Apartment(ApartmentState.STA)]
     public void WindowsTrayApplicationContext_ShowsEmergencyBypassInMenu()
     {
