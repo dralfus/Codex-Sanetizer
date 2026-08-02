@@ -51,7 +51,10 @@ public sealed record TrayProtectionState(
     string ProgrammaticUiaInvokeStatus = OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported,
     string LocalProtectionStatus = LocalProtectionRecovery.ReadyCode,
     bool PromptProtectionRetryFailed = false,
-    string? ConfiguredProfileId = null);
+    string? ConfiguredProfileId = null,
+    string ProtectedSendAttemptStatus = "idle",
+    string ProtectedSendAttemptAction = "none",
+    long ProtectedSendAttemptId = 0);
 
 public sealed record ProtectionDisableResult(
     bool Succeeded,
@@ -490,7 +493,14 @@ internal sealed class TrayProtectionController
                     ResidentProcess = current.State.ResidentProcess,
                     ProgrammaticUiaInvokeStatus = current.State.ProgrammaticUiaInvokeStatus,
                     LocalProtectionStatus = current.State.LocalProtectionStatus,
-                    PromptProtectionRetryFailed = current.State.PromptProtectionRetryFailed
+                    PromptProtectionRetryFailed = current.State.PromptProtectionRetryFailed,
+                    ProtectedSendAttemptStatus = ActiveAttemptInterruptedByRuntimeReload(current.State)
+                        ? "composer_changed"
+                        : current.State.ProtectedSendAttemptStatus,
+                    ProtectedSendAttemptAction = ActiveAttemptInterruptedByRuntimeReload(current.State)
+                        ? "focus_and_send_again"
+                        : current.State.ProtectedSendAttemptAction,
+                    ProtectedSendAttemptId = current.State.ProtectedSendAttemptId
                 };
             if (!string.Equals(
                     state.LocalProtectionStatus,
@@ -560,6 +570,16 @@ internal sealed class TrayProtectionController
                     : OsInteractionStatusIds.NotConfigured,
                 setupRequired: setupRequired,
                 localProtectionStatus: previous.State.LocalProtectionStatus);
+            state = state with
+            {
+                ProtectedSendAttemptStatus = ActiveAttemptInterruptedByRuntimeReload(previous.State)
+                    ? "composer_changed"
+                    : previous.State.ProtectedSendAttemptStatus,
+                ProtectedSendAttemptAction = ActiveAttemptInterruptedByRuntimeReload(previous.State)
+                    ? "focus_and_send_again"
+                    : previous.State.ProtectedSendAttemptAction,
+                ProtectedSendAttemptId = previous.State.ProtectedSendAttemptId
+            };
 
             return new ProtectionSnapshot(
                 previous.Generation + 1,
@@ -637,7 +657,10 @@ internal sealed class TrayProtectionController
             ProgrammaticUiaInvokeStatus: snapshot.State.ProgrammaticUiaInvokeStatus,
             LocalProtectionStatus: snapshot.State.LocalProtectionStatus,
             PromptProtectionRetryFailed: snapshot.State.PromptProtectionRetryFailed,
-            ConfiguredProfileId: snapshot.State.ConfiguredProfileId);
+            ConfiguredProfileId: snapshot.State.ConfiguredProfileId,
+            ProtectedSendAttemptStatus: snapshot.State.ProtectedSendAttemptStatus,
+            ProtectedSendAttemptAction: snapshot.State.ProtectedSendAttemptAction,
+            ProtectedSendAttemptId: snapshot.State.ProtectedSendAttemptId);
         PublishSnapshotIfCurrent(snapshot, snapshot with { State = state });
     }
 
@@ -924,6 +947,18 @@ internal sealed class TrayProtectionController
 
         try
         {
+            snapshot = PublishProtectedSendAttempt(snapshot, "detected", "checking_prompt", startNewAttempt: true);
+            if (snapshot is null)
+            {
+                return;
+            }
+
+            snapshot = PublishProtectedSendAttempt(snapshot, "checking", "checking_prompt", startNewAttempt: false);
+            if (snapshot is null)
+            {
+                return;
+            }
+
             var result = runtime.Controller.CompleteGuardedSubmit(
                 classification,
                 () => RunNativeSubmitFlow(runtime, execution.Target));
@@ -953,39 +988,131 @@ internal sealed class TrayProtectionController
         bool submitted,
         bool setupRequired = false)
     {
-        if (!IsLocalProtectionReady(eventSnapshot)
-            || !ReferenceEquals(ReadSnapshot(), eventSnapshot))
+        while (true)
         {
-            return;
+            var current = ReadSnapshot();
+            if (!CanContinueWithRuntime(current, eventSnapshot)
+                || (lastStatus != OsInteractionStatusIds.NativeSubmitInProgress
+                    && current.State.ProtectedSendAttemptId != eventSnapshot.State.ProtectedSendAttemptId))
+            {
+                return;
+            }
+
+            var state = new TrayProtectionState(
+                Enabled: true,
+                Mode: "NativeSubmit",
+                Hotkey: _hotkeyHost.Binding.DisplayText,
+                LastStatus: lastStatus,
+                LastDecision: null,
+                LastReplacementCount: null,
+                LastProfileId: profileId,
+                LastApplied: applied,
+                LastSubmitted: submitted,
+                NativeSubmitEnabled: readinessStatus != OsInteractionStatusIds.DegradedHotkeyOnly
+                    && readinessStatus != OsInteractionStatusIds.NotConfigured,
+                NativeSubmitStatus: readinessStatus,
+                ProtectedSendBinding: ProtectedSendBindingText(current, readinessStatus, profileId),
+                NewlineBinding: NewlineBindingText(current),
+                ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
+                ReadinessStatus: readinessStatus,
+                ComposerProtected: readinessStatus == OsInteractionStatusIds.Protected,
+                ProjectFilesProtected: current.State.ProjectFilesProtected,
+                ProjectFileStatus: current.State.ProjectFileStatus,
+                ResidentProcess: true,
+                SetupRequired: setupRequired,
+                ProgrammaticUiaInvokeStatus: current.State.ProgrammaticUiaInvokeStatus,
+                LocalProtectionStatus: current.State.LocalProtectionStatus,
+                PromptProtectionRetryFailed: current.State.PromptProtectionRetryFailed,
+                ConfiguredProfileId: current.State.ConfiguredProfileId,
+                ProtectedSendAttemptStatus: ProtectedSendAttemptStatus(lastStatus, submitted),
+                ProtectedSendAttemptAction: ProtectedSendAttemptAction(lastStatus, submitted),
+                ProtectedSendAttemptId: current.State.ProtectedSendAttemptId);
+            if (PublishSnapshotIfCurrent(current, current with { State = state }))
+            {
+                return;
+            }
+        }
+    }
+
+    private ProtectionSnapshot? PublishProtectedSendAttempt(
+        ProtectionSnapshot snapshot,
+        string status,
+        string action,
+        bool startNewAttempt)
+    {
+        while (true)
+        {
+            var current = ReadSnapshot();
+            if (!CanContinueWithRuntime(current, snapshot))
+            {
+                return null;
+            }
+
+            var replacement = current with
+            {
+                State = current.State with
+                {
+                    ProtectedSendAttemptStatus = status,
+                    ProtectedSendAttemptAction = action,
+                    ProtectedSendAttemptId = startNewAttempt
+                        ? checked(current.State.ProtectedSendAttemptId + 1)
+                        : current.State.ProtectedSendAttemptId
+                }
+            };
+            if (PublishSnapshotIfCurrent(current, replacement))
+            {
+                return replacement;
+            }
+        }
+    }
+
+    private static bool CanContinueWithRuntime(ProtectionSnapshot current, ProtectionSnapshot source)
+    {
+        return current.State.Enabled
+            && current.HookReady
+            && ReferenceEquals(current.RuntimeSet, source.RuntimeSet)
+            && IsLocalProtectionReady(current);
+    }
+
+    private static bool ActiveAttemptInterruptedByRuntimeReload(TrayProtectionState state)
+    {
+        return state.ProtectedSendAttemptStatus is "detected" or "checking" or "in_progress";
+    }
+
+    private static string ProtectedSendAttemptStatus(string status, bool submitted)
+    {
+        if (submitted && status == OsInteractionStatusIds.Submitted)
+        {
+            return "sent_safely";
         }
 
-        var state = new TrayProtectionState(
-            Enabled: true,
-            Mode: "NativeSubmit",
-            Hotkey: _hotkeyHost.Binding.DisplayText,
-            LastStatus: lastStatus,
-            LastDecision: null,
-            LastReplacementCount: null,
-            LastProfileId: profileId,
-            LastApplied: applied,
-            LastSubmitted: submitted,
-            NativeSubmitEnabled: readinessStatus != OsInteractionStatusIds.DegradedHotkeyOnly
-                && readinessStatus != OsInteractionStatusIds.NotConfigured,
-            NativeSubmitStatus: readinessStatus,
-            ProtectedSendBinding: ProtectedSendBindingText(eventSnapshot, readinessStatus, profileId),
-            NewlineBinding: NewlineBindingText(eventSnapshot),
-            ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
-            ReadinessStatus: readinessStatus,
-            ComposerProtected: readinessStatus == OsInteractionStatusIds.Protected,
-            ProjectFilesProtected: eventSnapshot.State.ProjectFilesProtected,
-            ProjectFileStatus: eventSnapshot.State.ProjectFileStatus,
-            ResidentProcess: true,
-            SetupRequired: setupRequired,
-            ProgrammaticUiaInvokeStatus: eventSnapshot.State.ProgrammaticUiaInvokeStatus,
-            LocalProtectionStatus: eventSnapshot.State.LocalProtectionStatus,
-            PromptProtectionRetryFailed: eventSnapshot.State.PromptProtectionRetryFailed,
-            ConfiguredProfileId: eventSnapshot.State.ConfiguredProfileId);
-        PublishSnapshotIfCurrent(eventSnapshot, eventSnapshot with { State = state });
+        return status switch
+        {
+            OsInteractionStatusIds.NativeSubmitInProgress => "in_progress",
+            OsInteractionStatusIds.NativeSubmitSetupRequired => "setup_required",
+            OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer => "verification_required",
+            OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "composer_changed",
+            OsInteractionStatusIds.Canceled => "canceled",
+            _ => "send_blocked"
+        };
+    }
+
+    private static string ProtectedSendAttemptAction(string status, bool submitted)
+    {
+        if (submitted && status == OsInteractionStatusIds.Submitted)
+        {
+            return "none";
+        }
+
+        return status switch
+        {
+            OsInteractionStatusIds.NativeSubmitSetupRequired => "set_up_prompt_protection",
+            OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer => "set_up_prompt_protection",
+            OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "focus_and_send_again",
+            OsInteractionStatusIds.Canceled => "edit_or_send_again",
+            OsInteractionStatusIds.NativeSubmitInProgress => "wait_for_current_send",
+            _ => "send_again"
+        };
     }
 
     private static string NativeSubmitReadinessStatusAfterFlow(string flowStatus)
@@ -1519,7 +1646,7 @@ internal static class TrayStatusFormatter
         var replacements = state.LastReplacementCount is null
             ? "n/a"
             : state.LastReplacementCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return $"status={enabled} mode={DisplayMode(state.Mode)} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} programmatic_uia_invoke={DisplayStatus(state.ProgrammaticUiaInvokeStatus)} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={DisplayProjectFileStatus(state.ProjectFileStatus)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} newline_binding={DisplayBinding(state.NewlineBinding)} manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} native_submit={DisplayStatus(state.NativeSubmitStatus)} readiness={DisplayStatus(state.ReadinessStatus)} last={DisplayStatus(state.LastStatus)} replacements={replacements}";
+        return $"status={enabled} mode={DisplayMode(state.Mode)} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} programmatic_uia_invoke={DisplayStatus(state.ProgrammaticUiaInvokeStatus)} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={DisplayProjectFileStatus(state.ProjectFileStatus)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} newline_binding={DisplayBinding(state.NewlineBinding)} manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} protected_send_attempt={DisplayProtectedSendAttempt(state.ProtectedSendAttemptStatus)} attempt_action={DisplayProtectedSendAttemptAction(state.ProtectedSendAttemptAction)} native_submit={DisplayStatus(state.NativeSubmitStatus)} readiness={DisplayStatus(state.ReadinessStatus)} last={DisplayStatus(state.LastStatus)} replacements={replacements}";
     }
 
     public static string FormatNotifyIconText(TrayProtectionState state, string? buildVersion = null)
@@ -1569,6 +1696,22 @@ internal static class TrayStatusFormatter
     private static string DisplayProjectFileStatus(string value)
     {
         return ProjectFileProtectionStatusValues.ToSafeDisplayValue(value);
+    }
+
+    private static string DisplayProtectedSendAttempt(string value)
+    {
+        return value is "idle" or "detected" or "checking" or "in_progress" or "sent_safely"
+            or "setup_required" or "verification_required" or "composer_changed" or "canceled" or "send_blocked"
+            ? value
+            : "unavailable";
+    }
+
+    private static string DisplayProtectedSendAttemptAction(string value)
+    {
+        return value is "none" or "checking_prompt" or "wait_for_current_send" or "set_up_prompt_protection"
+            or "focus_and_send_again" or "edit_or_send_again" or "send_again"
+            ? value
+            : "none";
     }
 
     private static string DisplayStatus(string value)

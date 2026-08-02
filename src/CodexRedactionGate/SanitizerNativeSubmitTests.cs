@@ -435,6 +435,13 @@ public partial class SanitizerTests
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
+        var attemptStatuses = new List<string>();
+        var activeSurfaceDiscoveryCalls = 0;
+        Func<TextSurfaceDiscoveryResult> activeSurfaceDiscovery = () =>
+        {
+            activeSurfaceDiscoveryCalls++;
+            return TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop"));
+        };
         var controller = new TrayProtectionController(
             new FakeTrayHotkeyHost(),
             () => new OsInteractionResult(
@@ -448,7 +455,8 @@ public partial class SanitizerTests
             hook,
             new NativeSubmitInterceptionController(
                 profile,
-                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                activeSurfaceDiscovery: activeSurfaceDiscovery),
             () => new OsInteractionResult(
                 OsInteractionStatusIds.Submitted,
                 CreateNativeSubmitSurface("codex-desktop"),
@@ -456,7 +464,10 @@ public partial class SanitizerTests
                 null,
                 Applied: true,
                 Submitted: true,
-                Diagnostics: new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+                Diagnostics: new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }),
+            profile,
+            activeSurfaceDiscovery: activeSurfaceDiscovery);
+        controller.StateChanged += (_, _) => attemptStatuses.Add(controller.State.ProtectedSendAttemptStatus);
 
         var started = controller.Start();
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
@@ -469,6 +480,77 @@ public partial class SanitizerTests
         Assert.That(controller.State.LastProfileId, Is.EqualTo("codex-desktop"));
         Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
         Assert.That(controller.State.ComposerProtected, Is.True);
+        Assert.That(attemptStatuses, Does.Contain("detected"));
+        Assert.That(attemptStatuses, Does.Contain("checking"));
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("sent_safely"));
+        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("none"));
+        Assert.That(activeSurfaceDiscoveryCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void TrayProtectionController_DoesNotPublishProtectedSendAttemptForOrdinaryInput()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop"))),
+            () => throw new InvalidOperationException("Protected submit should not run."),
+            profile,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
+
+        Assert.That(controller.Start(), Is.True);
+
+        hook.Trigger(new NativeKeyGesture("A", Ctrl: true));
+
+        Assert.That(hook.LastClassification!.SuppressOriginalInput, Is.False);
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("idle"));
+        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("none"));
+    }
+
+    [Test]
+    public void TrayProtectionController_PassesCtrlEnterThroughOutsideTheSelectedComposer()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitFlowCalls = 0;
+        var unrelatedSurface = TextSurfaceDiscoveryResult.Failure(
+            OsInteractionStatusIds.UnsupportedSurface,
+            new Dictionary<string, string>());
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                activeSurfaceDiscovery: () => unrelatedSurface),
+            () =>
+            {
+                submitFlowCalls++;
+                return new OsInteractionResult(
+                    OsInteractionStatusIds.Submitted,
+                    null,
+                    null,
+                    null,
+                    Applied: true,
+                    Submitted: true,
+                    Diagnostics: new Dictionary<string, string>());
+            },
+            profile,
+            activeSurfaceDiscovery: () => unrelatedSurface);
+
+        Assert.That(controller.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(hook.LastClassification!.SuppressOriginalInput, Is.False);
+        Assert.That(submitFlowCalls, Is.EqualTo(0));
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("idle"));
     }
 
     [Test]
@@ -526,6 +608,7 @@ public partial class SanitizerTests
             TrayProtectionController? controller = null;
             var submitFlowCalls = 0;
             var inProgressStatusSeen = false;
+            var inProgressAttemptStatusSeen = false;
             controller = new TrayProtectionController(
                 new FakeTrayHotkeyHost(),
                 () => throw new InvalidOperationException("Manual scan should not run."),
@@ -542,6 +625,7 @@ public partial class SanitizerTests
                         inProgressStatusSeen = controller!.State.LastStatus == OsInteractionStatusIds.NativeSubmitInProgress
                             && controller.State.LastSubmitted == false
                             && controller.State.NativeSubmitStatus == OsInteractionStatusIds.Protected;
+                        inProgressAttemptStatusSeen = controller.State.ProtectedSendAttemptStatus == "in_progress";
                     }
 
                     return new OsInteractionResult(
@@ -561,9 +645,13 @@ public partial class SanitizerTests
 
             Assert.That(submitFlowCalls, Is.EqualTo(2), flowStatus);
             Assert.That(inProgressStatusSeen, Is.True, flowStatus);
+            Assert.That(inProgressAttemptStatusSeen, Is.True, flowStatus);
             Assert.That(controller.State.LastStatus, Is.EqualTo(flowStatus), flowStatus);
             Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected), flowStatus);
             Assert.That(controller.State.ComposerProtected, Is.True, flowStatus);
+            Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo(
+                flowStatus == OsInteractionStatusIds.Submitted ? "sent_safely" :
+                flowStatus == OsInteractionStatusIds.Canceled ? "canceled" : "send_blocked"), flowStatus);
         }
     }
 
@@ -608,6 +696,130 @@ public partial class SanitizerTests
         Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
         Assert.That(controller.State.LastSubmitted, Is.True);
         Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+    }
+
+    [Test]
+    public void TrayProtectionController_CompletesTheActiveAttemptAfterADuplicateProtectedSend()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        TrayProtectionController? controller = null;
+        var submitFlowCalls = 0;
+        var attemptIdBeforeDuplicate = 0L;
+        controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                submitFlowCalls++;
+                attemptIdBeforeDuplicate = controller!.State.ProtectedSendAttemptId;
+                hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+                Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("in_progress"));
+                Assert.That(controller.State.ProtectedSendAttemptId, Is.EqualTo(attemptIdBeforeDuplicate));
+                return new OsInteractionResult(
+                    OsInteractionStatusIds.Submitted,
+                    CreateNativeSubmitSurface("codex-desktop"),
+                    null,
+                    null,
+                    Applied: true,
+                    Submitted: true,
+                    Diagnostics: new Dictionary<string, string>());
+            },
+            profile);
+
+        Assert.That(controller.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(submitFlowCalls, Is.EqualTo(1));
+        Assert.That(attemptIdBeforeDuplicate, Is.GreaterThan(0));
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("sent_safely"));
+        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("none"));
+        Assert.That(controller.State.ProtectedSendAttemptId, Is.EqualTo(attemptIdBeforeDuplicate));
+    }
+
+    [Test]
+    public void TrayProtectionController_RuntimeReloadInterruptsAnActiveAttemptWithARawFreeStatus()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var replacementHook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        Func<OsInteractionResult> submittedResult = () => new OsInteractionResult(
+            OsInteractionStatusIds.Submitted,
+            CreateNativeSubmitSurface(profile.ProfileId),
+            null,
+            null,
+            Applied: true,
+            Submitted: true,
+            Diagnostics: new Dictionary<string, string>());
+        TrayProtectionController? controller = null;
+        var replacementRuntime = new NativeSubmitRuntime(
+            replacementHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            submittedResult,
+            profile);
+        controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                Assert.That(controller!.State.ProtectedSendAttemptStatus, Is.EqualTo("checking"));
+                Assert.That(controller.ReloadNativeSubmit(replacementRuntime), Is.True);
+                return submittedResult();
+            },
+            profile);
+
+        Assert.That(controller.Start(), Is.True);
+        oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("composer_changed"));
+        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("focus_and_send_again"));
+        Assert.That(controller.State.ProtectedSendAttemptId, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public void TrayProtectionController_PublishesDistinctTerminalProtectedSendAttemptStatuses()
+    {
+        foreach (var (flowStatus, expectedAttemptStatus) in new[]
+        {
+            (OsInteractionStatusIds.FocusLost, "composer_changed"),
+            (OsInteractionStatusIds.StaleComposer, "composer_changed"),
+            (OsInteractionStatusIds.SurfaceUnverified, "verification_required"),
+            (OsInteractionStatusIds.NativeSubmitSetupRequired, "setup_required"),
+            (OsInteractionStatusIds.FailedClosed, "send_blocked"),
+            (OsInteractionStatusIds.EnterpriseBlocked, "send_blocked"),
+            (OsInteractionStatusIds.BindingUnknown, "send_blocked"),
+            (OsInteractionStatusIds.NotConfigured, "send_blocked")
+        })
+        {
+            var hook = new FakeNativeSubmitHookHost();
+            var profile = CreateProtectedProfile();
+            var controller = new TrayProtectionController(
+                new FakeTrayHotkeyHost(),
+                () => throw new InvalidOperationException("Manual scan should not run."),
+                hook,
+                new NativeSubmitInterceptionController(
+                    profile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () => new OsInteractionResult(
+                    flowStatus,
+                    CreateNativeSubmitSurface("codex-desktop"),
+                    null,
+                    null,
+                    Applied: false,
+                    Submitted: false,
+                    Diagnostics: new Dictionary<string, string>()),
+                profile);
+
+            Assert.That(controller.Start(), Is.True, flowStatus);
+            hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+            Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo(expectedAttemptStatus), flowStatus);
+            Assert.That(controller.State.ProtectedSendAttemptStatus, Is.Not.EqualTo("sent_safely"), flowStatus);
+        }
     }
 
     [Test]

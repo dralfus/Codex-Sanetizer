@@ -95,6 +95,12 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
 
         if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
         {
+            var attemptRow = CreateProtectedSendAttemptRow(state.ProtectedSendAttemptStatus);
+            if (attemptRow is not null)
+            {
+                return attemptRow;
+            }
+
             return new LocalProtectionStatusRow(
                 "Automatic prompt protection",
                 "Selected-app send interception",
@@ -121,6 +127,56 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
             "disabled",
             "Selected AI-app prompts are not intercepted while protection is stopped.",
             LocalProtectionStatusAction.None);
+    }
+
+    private static LocalProtectionStatusRow? CreateProtectedSendAttemptRow(string status)
+    {
+        return status switch
+        {
+            "detected" or "checking" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "checking Send",
+                "The protected Send is being checked before cloud submission.",
+                LocalProtectionStatusAction.None),
+            "in_progress" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send in progress",
+                "The previous protected Send is still in progress.",
+                LocalProtectionStatusAction.None),
+            "sent_safely" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "last Send protected",
+                "The last protected Send completed without exposing its text in this status view.",
+                LocalProtectionStatusAction.None),
+            "canceled" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "last Send canceled",
+                "The original Send stayed blocked. Edit the prompt or send it again.",
+                LocalProtectionStatusAction.None),
+            "composer_changed" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked",
+                "Focus the original composer and send again.",
+                LocalProtectionStatusAction.None),
+            "verification_required" or "setup_required" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked",
+                "Verify prompt protection before sending.",
+                LocalProtectionStatusAction.VerifyProfiles),
+            "send_blocked" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked",
+                "The original Send stayed blocked. Check protection status, then send again.",
+                LocalProtectionStatusAction.None),
+            _ => null
+        };
     }
 
     private static LocalProtectionStatusRow CreateProjectFileRow(bool liveProtected, string projectFileStatus)

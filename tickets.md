@@ -694,3 +694,42 @@ passes through, and unrelated input is not captured.
   cannot be redirected to the second window.
 - [ ] If the profile store cannot be read, the tray shows a raw-free settings
   recovery action rather than offering a setup action that cannot run.
+
+## 298. Publish a raw-free protected-Send attempt status
+
+**What to build:** Make each configured keyboard Send attempt visible in the
+tray's resident status so a user can tell whether Code Sanitizer detected the
+gesture, is checking it, sent a safe result, or blocked it with an actionable
+reason. The status must never contain prompt text, dictionary terms, mappings,
+paths, or exception details.
+
+**Blocked by:** 296. Keep protected Send usable and explain its safety state.
+
+**State owner:** The resident protection snapshot owns the lifecycle of one
+protected Send attempt. The native hook and UI publish no independent local
+flags; the tray only displays the snapshot.
+
+**Fail-closed state:** An incomplete, failed, stale, unverified, or cancelled
+attempt leaves the original Send blocked and publishes one stable raw-free
+reason. It must never be reported as sent.
+
+**Allowed transitions:** `detected` -> `checking` -> `sent_safely` or one
+terminal raw-free blocked state. A repeated key press while an attempt is in
+progress may report `in_progress`, but cannot overwrite the active attempt's
+terminal outcome.
+
+**Deterministic proof:** Injected hook classifications and submit runners drive
+the real resident snapshot through each transition without a live desktop
+client, timers, or cloud submission. Assertions prove public menu/status text
+is raw-free.
+
+- [x] A configured `Ctrl+Enter` publishes `detected` and `checking` before the
+  protected flow runs, without exposing prompt content.
+- [x] Successful safe Send publishes `sent safely`; failed, stale, unverified,
+  cancelled, and setup-required outcomes publish distinct plain-language next
+  actions.
+- [x] The tray summary and local protection status render only the resident
+  attempt state, including `in progress`, and never infer success from a
+  suppressed key alone.
+- [x] Tests cover every terminal transition and synthetic raw values without
+  timing, live focus, or cloud access.

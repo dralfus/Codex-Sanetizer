@@ -1390,6 +1390,27 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayStatusFormatter_RendersOnlyKnownProtectedSendAttemptValues()
+    {
+        var status = TrayStatusFormatter.FormatMenuStatus(new TrayProtectionState(
+            Enabled: true,
+            Mode: "NativeSubmit",
+            Hotkey: "Ctrl+Shift+F9",
+            LastStatus: OsInteractionStatusIds.Protected,
+            LastDecision: null,
+            LastReplacementCount: null,
+            LastProfileId: "chatgpt-desktop",
+            LastApplied: false,
+            LastSubmitted: false,
+            ProtectedSendAttemptStatus: "DOMAIN_C195C3D8E8F3",
+            ProtectedSendAttemptAction: "DOMAIN_C195C3D8E8F3"));
+
+        Assert.That(status, Does.Contain("protected_send_attempt=unavailable"));
+        Assert.That(status, Does.Contain("attempt_action=none"));
+        Assert.That(status, Does.Not.Contain("DOMAIN_C195C3D8E8F3"));
+    }
+
+    [Test]
     public void TrayProtectionController_HotkeyRunsApplyOnlyAndStoresRawFreeResult()
     {
         const string rawPrompt = "Discuss ACME Banking status.";
@@ -8237,13 +8258,25 @@ public class ResidentFirstRunSetupLaunchTests
             SetupRequired = false,
             ReadinessStatus = OsInteractionStatusIds.StaleComposer
         });
+        var checkingText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState with
+        {
+            ProtectedSendAttemptStatus = "checking",
+            ProtectedSendAttemptAction = "checking_prompt"
+        });
+        var sentText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState with
+        {
+            ProtectedSendAttemptStatus = "sent_safely",
+            ProtectedSendAttemptAction = "none"
+        });
 
         Assert.That(protectedText, Does.Contain("ChatGPT Desktop"));
         Assert.That(protectedText, Does.Contain("Ctrl+Enter"));
         Assert.That(setupText, Does.Contain("select Set up prompt protection"));
         Assert.That(repairText, Does.Contain("Prompt verification required"));
         Assert.That(focusLostText, Does.Contain("focus it and send again"));
-        Assert.That(new[] { protectedText, setupText, repairText, focusLostText }
+        Assert.That(checkingText, Is.EqualTo("Protected Send: checking prompt"));
+        Assert.That(sentText, Is.EqualTo("Protected Send: sent safely"));
+        Assert.That(new[] { protectedText, setupText, repairText, focusLostText, checkingText, sentText }
             .All(text => !text.Contains(OsInteractionStatusIds.NativeSubmitSetupRequired, StringComparison.Ordinal)), Is.True);
     }
 

@@ -107,6 +107,59 @@ public sealed class LocalProtectionStatusTests
     }
 
     [Test]
+    public void StatusView_RendersRawFreeProtectedSendAttemptFromResidentState()
+    {
+        var checking = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ProtectedSendAttemptStatus = "checking",
+            ProtectedSendAttemptAction = "checking_prompt",
+            LastStatus = "DOMAIN_C195C3D8E8F3"
+        });
+        var sent = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ProtectedSendAttemptStatus = "sent_safely",
+            ProtectedSendAttemptAction = "none"
+        });
+        var canceled = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ProtectedSendAttemptStatus = "canceled",
+            ProtectedSendAttemptAction = "edit_or_send_again"
+        });
+
+        Assert.That(checking.Rows[1].OperationalState, Is.EqualTo("checking Send"));
+        Assert.That(sent.Rows[1].OperationalState, Is.EqualTo("last Send protected"));
+        Assert.That(canceled.Rows[1].OperationalState, Is.EqualTo("last Send canceled"));
+        Assert.That(new[] { checking, sent, canceled }
+            .All(view => !view.RenderText().Contains("DOMAIN_C195C3D8E8F3", StringComparison.Ordinal)), Is.True);
+    }
+
+    [Test]
+    public void StatusView_ExplainsEveryBlockedProtectedSendAttemptWithoutRawValues()
+    {
+        foreach (var (attemptStatus, expectedState, expectedAction, expectedConsequence) in new[]
+        {
+            ("composer_changed", "Send blocked", LocalProtectionStatusAction.None, "Focus the original composer"),
+            ("verification_required", "Send blocked", LocalProtectionStatusAction.VerifyProfiles, "Verify prompt protection"),
+            ("setup_required", "Send blocked", LocalProtectionStatusAction.VerifyProfiles, "Verify prompt protection"),
+            ("send_blocked", "Send blocked", LocalProtectionStatusAction.None, "original Send stayed blocked")
+        })
+        {
+            var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+            {
+                ProtectedSendAttemptStatus = attemptStatus,
+                ProtectedSendAttemptAction = "DOMAIN_C195C3D8E8F3",
+                LastStatus = "DOMAIN_C195C3D8E8F3"
+            });
+            var promptRow = view.Rows[1];
+
+            Assert.That(promptRow.OperationalState, Is.EqualTo(expectedState), attemptStatus);
+            Assert.That(promptRow.Action, Is.EqualTo(expectedAction), attemptStatus);
+            Assert.That(promptRow.Consequence, Does.Contain(expectedConsequence), attemptStatus);
+            Assert.That(view.RenderText(), Does.Not.Contain("DOMAIN_C195C3D8E8F3"), attemptStatus);
+        }
+    }
+
+    [Test]
     public void StatusView_ExplainsRecoveryAndSetupWithoutClaimingProtection()
     {
         var state = ProtectedTrayState() with

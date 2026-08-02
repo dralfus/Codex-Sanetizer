@@ -814,6 +814,27 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             return $"Emergency bypass is active: {NativeSubmitEmergencyState.BypassDisplayText}";
         }
 
+        switch (state.ProtectedSendAttemptStatus)
+        {
+            case "detected":
+            case "checking":
+                return "Protected Send: checking prompt";
+            case "in_progress":
+                return "Protected Send: previous send is still in progress";
+            case "sent_safely":
+                return "Protected Send: sent safely";
+            case "composer_changed":
+                return "Protected Send: focus the original composer and send again";
+            case "verification_required":
+                return "Protected Send: verify prompt protection before sending";
+            case "setup_required":
+                return "Protected Send: set up prompt protection before sending";
+            case "canceled":
+                return "Protected Send: canceled; edit the prompt or send again";
+            case "send_blocked":
+                return "Protected Send: not sent; send again after checking protection status";
+        }
+
         if (state.ComposerProtected)
         {
             return $"Prompt protection: {ProfileDisplayName(state)} protected, Send {state.ProtectedSendBinding}";
