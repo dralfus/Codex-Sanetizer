@@ -609,6 +609,8 @@ public sealed record NativeSubmitEnterprisePolicy(
 
 public sealed class NativeSubmitEmergencyState
 {
+    public const string BypassDisplayText = "Ctrl+Alt+Shift+Pause";
+
     private readonly TimeSpan _duration;
     private readonly Dictionary<string, DateTimeOffset> _disabledUntil = new(StringComparer.Ordinal);
 
@@ -1327,6 +1329,7 @@ internal sealed class UnavailableNativeSubmitHookHost : INativeSubmitHookHost
 
 internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INativeSubmitPointerHookHost
 {
+    private static readonly TimeSpan ClassificationBudget = TimeSpan.FromMilliseconds(75);
     private const int WhKeyboardLl = 13;
     private const int WhMouseLl = 14;
     private const int WmKeyDown = 0x0100;
@@ -1505,10 +1508,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
-        {
-            ThreadPool.QueueUserWorkItem(_ => _onSuppressedSubmit(gesture, result));
-        }
+        QueueKeyboardSuppressedSubmit(gesture, result);
 
         return new IntPtr(1);
     }
@@ -1535,10 +1535,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             return NativeMethods.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
         }
 
-        if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
-        {
-            ThreadPool.QueueUserWorkItem(_ => _onSuppressedPointerSubmit(gesture, result));
-        }
+        QueuePointerSuppressedSubmit(gesture, result);
 
         return new IntPtr(1);
     }
@@ -1549,6 +1546,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             () => _classifyPointer!(gesture),
             () => ShouldSuppressPointerClassificationFailure(gesture),
             result => RememberSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId, result),
+            result => QueuePointerSuppressedSubmit(gesture, result),
             "pointer");
     }
 
@@ -1556,9 +1554,40 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     {
         return ClassifyWithinBudget(
             () => _classify!(gesture),
-            () => IsKnownSelectedSubmit(gesture) || ShouldSuppressKeyboardClassificationFailure(gesture),
+            () => true,
             result => RememberSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId, result),
+            result => QueueKeyboardSuppressedSubmit(gesture, result),
             "keyboard");
+    }
+
+    private void QueueKeyboardSuppressedSubmit(
+        NativeKeyGesture gesture,
+        NativeSubmitInterceptionResult result)
+    {
+        if (result.SuppressOriginalInput
+            && !IsDeferredClassificationPending(result)
+            && _onSuppressedSubmit is not null)
+        {
+            ThreadPool.QueueUserWorkItem(_ => _onSuppressedSubmit(gesture, result));
+        }
+    }
+
+    private void QueuePointerSuppressedSubmit(
+        NativePointerGesture gesture,
+        NativeSubmitInterceptionResult result)
+    {
+        if (result.SuppressOriginalInput
+            && !IsDeferredClassificationPending(result)
+            && _onSuppressedPointerSubmit is not null)
+        {
+            ThreadPool.QueueUserWorkItem(_ => _onSuppressedPointerSubmit(gesture, result));
+        }
+    }
+
+    private static bool IsDeferredClassificationPending(NativeSubmitInterceptionResult result)
+    {
+        return result.Diagnostics.TryGetValue("classification_pending", out var pending)
+            && string.Equals(pending, "true", StringComparison.Ordinal);
     }
 
     private bool IsPotentialKeyboardInterception(NativeKeyGesture gesture, uint virtualKey)
@@ -1618,11 +1647,34 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         Func<NativeSubmitInterceptionResult> classify,
         Func<bool> shouldSuppressFailure,
         Action<NativeSubmitInterceptionResult> rememberSelectedTarget,
-        string inputType)
+        Action<NativeSubmitInterceptionResult> onDeferredClassification,
+        string inputType,
+        TimeSpan? classificationBudget = null)
     {
         NativeSubmitInterceptionResult? result = null;
         Exception? failure = null;
         var completed = new ManualResetEventSlim(false);
+        var deferred = 0;
+        var deferredDeliveryClaimed = 0;
+
+        void DeliverDeferredClassification()
+        {
+            if (Interlocked.Exchange(ref deferredDeliveryClaimed, 1) != 0)
+            {
+                return;
+            }
+
+            var completedResult = failure is null && result is not null && result.SuppressOriginalInput
+                ? result
+                : CompletedClassificationUnavailableResult(inputType);
+            if (result is not null)
+            {
+                rememberSelectedTarget(result);
+            }
+
+            onDeferredClassification(completedResult);
+        }
+
         ThreadPool.QueueUserWorkItem(_ =>
         {
             try
@@ -1636,10 +1688,14 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             finally
             {
                 completed.Set();
+                if (Volatile.Read(ref deferred) != 0)
+                {
+                    DeliverDeferredClassification();
+                }
             }
         });
 
-        if (completed.Wait(TimeSpan.FromMilliseconds(75)))
+        if (completed.Wait(classificationBudget ?? ClassificationBudget))
         {
             completed.Dispose();
             if (failure is null && result is not null)
@@ -1650,6 +1706,14 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         }
         else
         {
+            // The original Send stays blocked. The worker delivers the verified
+            // result after it completes, outside the low-level hook callback.
+            Volatile.Write(ref deferred, 1);
+            if (completed.IsSet)
+            {
+                DeliverDeferredClassification();
+            }
+
             // The worker owns disposal after a timeout so its final Set cannot
             // race with disposal on the low-level hook callback thread.
             ThreadPool.QueueUserWorkItem(_ =>
@@ -1663,8 +1727,23 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             ? "native_submit_classification_timeout"
             : "native_submit_hook_callback_failed";
         return shouldSuppressFailure()
-            ? ClassificationUnavailableResult(inputType)
+            ? DeferredClassificationPendingResult(inputType)
             : PassThroughResult();
+    }
+
+    internal NativeSubmitInterceptionResult ClassifyWithinBudgetForTest(
+        Func<NativeSubmitInterceptionResult> classify,
+        Func<bool> shouldSuppressFailure,
+        Action<NativeSubmitInterceptionResult> onDeferredClassification,
+        TimeSpan classificationBudget)
+    {
+        return ClassifyWithinBudget(
+            classify,
+            shouldSuppressFailure,
+            _ => { },
+            onDeferredClassification,
+            "keyboard",
+            classificationBudget);
     }
 
     private bool ShouldSuppressKeyboardClassificationFailure(NativeKeyGesture gesture)
@@ -1741,7 +1820,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         return ShouldSuppressPointerClassificationFailure(gesture);
     }
 
-    private static NativeSubmitInterceptionResult ClassificationUnavailableResult(string inputType)
+    private static NativeSubmitInterceptionResult DeferredClassificationPendingResult(string inputType)
     {
         return new NativeSubmitInterceptionResult(
             OsInteractionStatusIds.SurfaceUnverified,
@@ -1751,7 +1830,23 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             Diagnostics: new Dictionary<string, string>
             {
                 ["input_type"] = inputType,
-                ["send_control_status"] = "unavailable"
+                ["send_control_status"] = "unavailable",
+                ["classification_pending"] = "true"
+            });
+    }
+
+    private static NativeSubmitInterceptionResult CompletedClassificationUnavailableResult(string inputType)
+    {
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.SurfaceUnverified,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["input_type"] = inputType,
+                ["send_control_status"] = "unavailable",
+                ["classification_completed"] = "unavailable"
             });
     }
 

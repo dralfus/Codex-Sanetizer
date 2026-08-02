@@ -50,7 +50,8 @@ public sealed record TrayProtectionState(
     bool SetupRequired = false,
     string ProgrammaticUiaInvokeStatus = OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported,
     string LocalProtectionStatus = LocalProtectionRecovery.ReadyCode,
-    bool PromptProtectionRetryFailed = false);
+    bool PromptProtectionRetryFailed = false,
+    string? ConfiguredProfileId = null);
 
 public sealed record ProtectionDisableResult(
     bool Succeeded,
@@ -635,7 +636,8 @@ internal sealed class TrayProtectionController
             SetupRequired: snapshot.State.SetupRequired,
             ProgrammaticUiaInvokeStatus: snapshot.State.ProgrammaticUiaInvokeStatus,
             LocalProtectionStatus: snapshot.State.LocalProtectionStatus,
-            PromptProtectionRetryFailed: snapshot.State.PromptProtectionRetryFailed);
+            PromptProtectionRetryFailed: snapshot.State.PromptProtectionRetryFailed,
+            ConfiguredProfileId: snapshot.State.ConfiguredProfileId);
         PublishSnapshotIfCurrent(snapshot, snapshot with { State = state });
     }
 
@@ -691,7 +693,10 @@ internal sealed class TrayProtectionController
         return RememberSnapshot(
             snapshot,
             result,
-            NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, discovery.ComposerDiscovery.Surface));
+            NativeSubmitTargetIdentity.TryCreateForGesture(
+                snapshot.Generation,
+                discovery.ComposerDiscovery.Surface,
+                gesture.TargetWindow));
     }
 
     private bool ShouldSuppressPointerClassificationFailure(NativePointerGesture gesture)
@@ -779,18 +784,26 @@ internal sealed class TrayProtectionController
     {
         if (!TryTakeExecutionContext(classification, out var execution))
         {
+            PublishUnattributedClassificationFailure(classification);
             return;
         }
 
         var snapshot = execution.Snapshot;
-        if (!IsLocalProtectionReady(snapshot))
+        if (!ReferenceEquals(ReadSnapshot(), snapshot) || !IsLocalProtectionReady(snapshot))
         {
             return;
         }
 
         var runtime = ResolveClassifiedRuntime(snapshot, classification);
+        if (classification.Status != OsInteractionStatusIds.NativeSubmitGuarded)
+        {
+            PublishBlockedNativeSubmitState(snapshot, classification, runtime?.Profile.ProfileId);
+            return;
+        }
+
         if (runtime is null)
         {
+            PublishBlockedNativeSubmitState(snapshot, classification, profileId: null);
             return;
         }
 
@@ -875,18 +888,26 @@ internal sealed class TrayProtectionController
     {
         if (!TryTakeExecutionContext(classification, out var execution))
         {
+            PublishUnattributedClassificationFailure(classification);
             return;
         }
 
         var snapshot = execution.Snapshot;
-        if (!IsLocalProtectionReady(snapshot))
+        if (!ReferenceEquals(ReadSnapshot(), snapshot) || !IsLocalProtectionReady(snapshot))
         {
             return;
         }
 
         var runtime = ResolveClassifiedRuntime(snapshot, classification);
+        if (classification.Status != OsInteractionStatusIds.NativeSubmitGuarded)
+        {
+            PublishBlockedNativeSubmitState(snapshot, classification, runtime?.Profile.ProfileId);
+            return;
+        }
+
         if (runtime is null)
         {
+            PublishBlockedNativeSubmitState(snapshot, classification, profileId: null);
             return;
         }
 
@@ -951,7 +972,7 @@ internal sealed class TrayProtectionController
             NativeSubmitEnabled: readinessStatus != OsInteractionStatusIds.DegradedHotkeyOnly
                 && readinessStatus != OsInteractionStatusIds.NotConfigured,
             NativeSubmitStatus: readinessStatus,
-            ProtectedSendBinding: ProtectedSendBindingText(eventSnapshot, readinessStatus),
+            ProtectedSendBinding: ProtectedSendBindingText(eventSnapshot, readinessStatus, profileId),
             NewlineBinding: NewlineBindingText(eventSnapshot),
             ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
             ReadinessStatus: readinessStatus,
@@ -962,7 +983,8 @@ internal sealed class TrayProtectionController
             SetupRequired: setupRequired,
             ProgrammaticUiaInvokeStatus: eventSnapshot.State.ProgrammaticUiaInvokeStatus,
             LocalProtectionStatus: eventSnapshot.State.LocalProtectionStatus,
-            PromptProtectionRetryFailed: eventSnapshot.State.PromptProtectionRetryFailed);
+            PromptProtectionRetryFailed: eventSnapshot.State.PromptProtectionRetryFailed,
+            ConfiguredProfileId: eventSnapshot.State.ConfiguredProfileId);
         PublishSnapshotIfCurrent(eventSnapshot, eventSnapshot with { State = state });
     }
 
@@ -974,8 +996,46 @@ internal sealed class TrayProtectionController
             or OsInteractionStatusIds.BindingUnknown
             or OsInteractionStatusIds.NotConfigured
             or OsInteractionStatusIds.NativeSubmitSetupRequired
+            or OsInteractionStatusIds.FocusLost
+            or OsInteractionStatusIds.StaleComposer
             ? flowStatus
             : OsInteractionStatusIds.Protected;
+    }
+
+    private void PublishBlockedNativeSubmitState(
+        ProtectionSnapshot snapshot,
+        NativeSubmitInterceptionResult classification,
+        string? profileId)
+    {
+        var resolvedProfileId = classification.Diagnostics.TryGetValue("profile_id", out var classifiedProfileId)
+            ? classifiedProfileId
+            : profileId ?? snapshot.State.ConfiguredProfileId;
+        var readinessStatus = NativeSubmitReadinessStatusAfterFlow(classification.Status);
+        PublishNativeSubmitState(
+            snapshot,
+            classification.Status,
+            readinessStatus,
+            resolvedProfileId,
+            applied: false,
+            submitted: false,
+            setupRequired: readinessStatus == OsInteractionStatusIds.NativeSubmitSetupRequired);
+    }
+
+    private void PublishUnattributedClassificationFailure(NativeSubmitInterceptionResult classification)
+    {
+        if (!classification.Diagnostics.TryGetValue("classification_completed", out var completion)
+            || !string.Equals(completion, "unavailable", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var snapshot = ReadSnapshot();
+        if (!IsLocalProtectionReady(snapshot))
+        {
+            return;
+        }
+
+        PublishBlockedNativeSubmitState(snapshot, classification, profileId: null);
     }
 
     private static string NativeSubmitUnavailableStatus(ProtectionSnapshot snapshot)
@@ -1028,7 +1088,8 @@ internal sealed class TrayProtectionController
             ProjectFileStatus: projectFileStatus,
             ResidentProcess: enabled,
             SetupRequired: setupRequired,
-            LocalProtectionStatus: localProtectionStatus);
+            LocalProtectionStatus: localProtectionStatus,
+            ConfiguredProfileId: runtimes.FirstOrDefault()?.Profile.ProfileId);
     }
 
     private (bool ProjectFilesProtected, string ProjectFileStatus) ReadProjectFileProtectionStatus()
@@ -1068,9 +1129,23 @@ internal sealed class TrayProtectionController
 
     private static string ProtectedSendBindingText(
         ProtectionSnapshot snapshot,
-        string nativeSubmitStatus)
+        string nativeSubmitStatus,
+        string? profileId = null)
     {
-        return ProtectedSendBindingText(snapshot.RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>(), nativeSubmitStatus);
+        var runtimes = snapshot.RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>();
+        if (!string.IsNullOrWhiteSpace(profileId))
+        {
+            var matchedRuntime = runtimes.FirstOrDefault(runtime => string.Equals(
+                runtime.Profile.ProfileId,
+                profileId,
+                StringComparison.Ordinal));
+            if (nativeSubmitStatus == OsInteractionStatusIds.Protected && matchedRuntime?.Profile.SubmitBinding is not null)
+            {
+                return matchedRuntime.Profile.SubmitBinding.DisplayText;
+            }
+        }
+
+        return ProtectedSendBindingText(runtimes, nativeSubmitStatus);
     }
 
     private static string ProtectedSendBindingText(
@@ -1125,7 +1200,10 @@ internal sealed class TrayProtectionController
                     && focusedRuntime is not null
                     ? SuppressLocalProtectionRecoverySubmit(focusedRuntime.Profile.ProfileId)
                     : focusedControlResult,
-                NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, focusedComposerDiscovery?.Surface));
+                NativeSubmitTargetIdentity.TryCreateForGesture(
+                    snapshot.Generation,
+                    focusedComposerDiscovery?.Surface,
+                    gesture.TargetWindow));
         }
 
         var runtime = ResolveRuntime(snapshot, discovery);
@@ -1141,7 +1219,10 @@ internal sealed class TrayProtectionController
             return RememberSnapshot(
                 snapshot,
                 SuppressLocalProtectionRecoverySubmit(runtime.Profile.ProfileId),
-                NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, discovery.Surface));
+                NativeSubmitTargetIdentity.TryCreateForGesture(
+                    snapshot.Generation,
+                    discovery.Surface,
+                    gesture.TargetWindow));
         }
 
         var result = runtime is null
@@ -1154,7 +1235,10 @@ internal sealed class TrayProtectionController
         return RememberSnapshot(
             snapshot,
             result,
-            NativeSubmitTargetIdentity.TryCreate(snapshot.Generation, discovery.Surface));
+            NativeSubmitTargetIdentity.TryCreateForGesture(
+                snapshot.Generation,
+                discovery.Surface,
+                gesture.TargetWindow));
     }
 
     private NativeSubmitInterceptionResult? ClassifyFocusedSendControl(

@@ -8195,6 +8195,81 @@ public class ResidentFirstRunSetupLaunchTests
 
     }
 
+    [Test]
+    public void ReadableProtectionStatus_ExplainsProfileSetupAndRepairWithoutInternalCodes()
+    {
+        var protectedState = new TrayProtectionState(
+            Enabled: true,
+            Mode: "NativeSubmit",
+            Hotkey: "Ctrl+Shift+F9",
+            LastStatus: OsInteractionStatusIds.Protected,
+            LastDecision: null,
+            LastReplacementCount: null,
+            LastProfileId: "chatgpt-desktop",
+            LastApplied: false,
+            LastSubmitted: false,
+            NativeSubmitEnabled: true,
+            NativeSubmitStatus: OsInteractionStatusIds.Protected,
+            ProtectedSendBinding: "Ctrl+Enter",
+            NewlineBinding: "Enter",
+            ManualScanHotkey: "Ctrl+Shift+F9",
+            ReadinessStatus: OsInteractionStatusIds.Protected,
+            ComposerProtected: true,
+            ResidentProcess: true,
+            ConfiguredProfileId: "chatgpt-desktop");
+
+        var protectedText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState);
+        var setupText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState with
+        {
+            ComposerProtected = false,
+            SetupRequired = true,
+            ReadinessStatus = OsInteractionStatusIds.NativeSubmitSetupRequired
+        });
+        var repairText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState with
+        {
+            ComposerProtected = false,
+            SetupRequired = false,
+            ReadinessStatus = OsInteractionStatusIds.SurfaceUnverified
+        });
+        var focusLostText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState with
+        {
+            ComposerProtected = false,
+            SetupRequired = false,
+            ReadinessStatus = OsInteractionStatusIds.StaleComposer
+        });
+
+        Assert.That(protectedText, Does.Contain("ChatGPT Desktop"));
+        Assert.That(protectedText, Does.Contain("Ctrl+Enter"));
+        Assert.That(setupText, Does.Contain("select Set up prompt protection"));
+        Assert.That(repairText, Does.Contain("Prompt verification required"));
+        Assert.That(focusLostText, Does.Contain("focus it and send again"));
+        Assert.That(new[] { protectedText, setupText, repairText, focusLostText }
+            .All(text => !text.Contains(OsInteractionStatusIds.NativeSubmitSetupRequired, StringComparison.Ordinal)), Is.True);
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_ShowsEmergencyBypassInMenu()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            using var context = new WindowsTrayApplicationContext(
+                CreateManualOnlyTrayProtection(),
+                DefaultStorageLayout.Create(directory),
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                scheduleFirstRunSetup: false);
+
+            Assert.That(context.EmergencyBypassMenuText,
+                Is.EqualTo($"Emergency bypass: {NativeSubmitEmergencyState.BypassDisplayText}"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static void LaunchFirstRunSetupIfRequiredWithController(DefaultStorageLayout layout, IFirstRunSetupController setupController)
     {
         FirstRunSetupBackgroundRunner.Run(layout, () => setupController, _ => { });

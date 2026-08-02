@@ -496,6 +496,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _statusItem;
     private readonly ToolStripMenuItem _toggleItem;
     private readonly ToolStripMenuItem _versionItem;
+    private readonly ToolStripMenuItem _emergencyBypassItem;
     private readonly ToolStripMenuItem _repairLocalProtectionItem;
     private readonly SingleInstanceEnforcement? _singleInstanceEnforcement;
     private Func<NativeSubmitRuntimeSet?>? _nativeSubmitRuntimeFactory;
@@ -516,6 +517,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     internal string TrayTooltipText => _notifyIcon.Text ?? string.Empty;
 
     internal string TrayStatusText => _statusItem.Text ?? string.Empty;
+
+    internal string EmergencyBypassMenuText => _emergencyBypassItem.Text ?? string.Empty;
 
     internal bool IsLocalProtectionStatusOpen => _localProtectionStatusForm is { IsDisposed: false, Visible: true };
 
@@ -599,6 +602,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
         _statusItem = new ToolStripMenuItem("Protection status", null, (_, _) => OpenLocalProtectionStatus());
         _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };
+        _emergencyBypassItem = new ToolStripMenuItem(
+            $"Emergency bypass: {NativeSubmitEmergencyState.BypassDisplayText}") { Enabled = false };
         _toggleItem = new ToolStripMenuItem("Stop protection", null, (_, _) => ToggleProtection());
         _repairLocalProtectionItem = new ToolStripMenuItem("Repair local protection", null, (_, _) => RepairLocalProtection())
         {
@@ -611,6 +616,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add(_versionItem);
         menu.Items.Add(_statusItem);
+        menu.Items.Add(_emergencyBypassItem);
         menu.Items.Add(_toggleItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Open protection status", null, (_, _) => OpenLocalProtectionStatus()));
@@ -771,7 +777,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         if (!string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
             _notifyIcon.Text = TrayStatusFormatter.FormatRecoveryRequiredNotifyIconText(localProtectionStatus);
-            _statusItem.Text = "Protection status: attention required";
+            _statusItem.Text = "Protection needs repair: select Repair local protection";
         }
         else
         {
@@ -783,11 +789,15 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _repairLocalProtectionItem.Visible = string.Equals(
             localProtectionStatus,
             LocalProtectionRecovery.RecoveryRequiredCode,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal)
+            || string.Equals(
+                localProtectionStatus,
+                LocalProtectionRecovery.RuntimeDegradedCode,
+                StringComparison.Ordinal);
         _localProtectionStatusForm?.RefreshView();
     }
 
-    private static string FormatReadableProtectionStatus(TrayProtectionState state)
+    internal static string FormatReadableProtectionStatus(TrayProtectionState state)
     {
         if (!state.Enabled)
         {
@@ -796,12 +806,42 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
         if (state.SetupRequired)
         {
-            return "Prompt protection: setup required";
+            return $"Prompt setup required for {ProfileDisplayName(state)}: select Set up prompt protection";
         }
 
-        return state.ComposerProtected
-            ? "Prompt protection: active"
-            : "Prompt protection: unavailable";
+        if (state.LastStatus == OsInteractionStatusIds.EmergencyDisabled)
+        {
+            return $"Emergency bypass is active: {NativeSubmitEmergencyState.BypassDisplayText}";
+        }
+
+        if (state.ComposerProtected)
+        {
+            return $"Prompt protection: {ProfileDisplayName(state)} protected, Send {state.ProtectedSendBinding}";
+        }
+
+        return state.ReadinessStatus switch
+        {
+            OsInteractionStatusIds.BindingUnknown or OsInteractionStatusIds.NotConfigured
+                => $"Prompt setup incomplete for {ProfileDisplayName(state)}: no verified Send key is saved; select Set up prompt protection",
+            OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer
+                => $"Prompt verification required for {ProfileDisplayName(state)}: select Set up prompt protection",
+            OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer
+                => "Prompt was not sent because its original composer changed: focus it and send again",
+            OsInteractionStatusIds.DegradedHotkeyOnly
+                => "Prompt protection is unavailable: restart protection, then select Set up prompt protection",
+            _ => "Prompt protection is unavailable: select Set up prompt protection"
+        };
+    }
+
+    private static string ProfileDisplayName(TrayProtectionState state)
+    {
+        var profileId = state.LastProfileId ?? state.ConfiguredProfileId;
+        return profileId switch
+        {
+            "chatgpt-desktop" => "ChatGPT Desktop",
+            "codex-desktop" => "Codex Desktop",
+            _ => "the selected desktop app"
+        };
     }
 
     private void RefreshStatusOnUiThread()

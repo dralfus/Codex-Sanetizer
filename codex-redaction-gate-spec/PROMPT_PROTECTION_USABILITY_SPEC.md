@@ -20,7 +20,10 @@ automatically until one profile is verified.
 The keyboard hook performs expensive composer checks only for a potential Send
 gesture. Ordinary characters, navigation, clipboard shortcuts, and editing are
 passed directly to Windows. A recognized selected client with no verified
-binding remains fail-closed for Enter while setup is incomplete.
+binding remains fail-closed for Enter while setup is incomplete. If a composer
+check takes longer than the hook's immediate budget, the original Send remains
+blocked and the verified check continues outside the hook; a successful result
+then completes one protected Send rather than silently dropping the request.
 
 The tray menu is a user surface: it contains protection controls, setup,
 sensitive terms, restore, and a readable protection-status window. Audit,
@@ -50,6 +53,14 @@ selectable read-only text controls and the tray summary is short and readable.
    share support information without screenshots.
 10. As a user, I want audit and diagnostic tools removed from the normal tray
     menu, so that everyday controls are not confused with engineering tools.
+11. As a user, I want the configured Send key to send a safe prompt even when
+    the composer takes time to inspect, so that protection does not turn my
+    Send key into a dead key.
+12. As a user, I want the tray menu to show the emergency bypass combination,
+    so that I can use the exceptional raw-send route only deliberately.
+13. As a user, I want the tray menu to tell me why setup is incomplete or
+    verification failed and what action to take, so that a generic active
+    status never makes me assume the current application is protected.
 
 ## Implementation Decisions
 
@@ -61,10 +72,21 @@ selectable read-only text controls and the tray summary is short and readable.
 - `WindowsNativeSubmitHookHost` owns the fast keyboard prefilter. Its
   fail-closed state is a potential Send gesture in a recognized selected client
   when configuration is missing or the protected classification cannot finish.
+  A delayed classification delivers its final result once to the resident
+  controller outside the low-level hook; the controller alone decides whether
+  the protected Send flow can run.
 - The UI renders only the resident protection-state projection. It does not
   infer readiness from local flags or from a successful dictionary operation.
 - User-facing status details are raw-free and selectable. CLI remains the
   support surface for audit and detailed diagnostics.
+- The tray summary identifies the configured protected desktop profile and its
+  Send binding when available. If setup is missing, verification is not
+  confirmed, or local protection needs repair, it gives one raw-free reason and
+  directs the user to the corresponding menu action. It must not say simply
+  `active` for a different or unusable profile.
+- `Ctrl+Alt+Shift+Pause` is the visible emergency bypass combination. It is
+  displayed as an exceptional, temporary raw-send route and is never presented
+  as a normal way to submit prompts.
 
 ## Testing Decisions
 
@@ -79,6 +101,13 @@ selectable read-only text controls and the tray summary is short and readable.
   refresh.
 - Test tray-menu content by user-visible commands: it must contain one setup
   action and exclude audit, diagnostics, and command-reference entries.
+- Test delayed Send classification through an injected hook seam: the original
+  input is blocked, the completed guarded result starts exactly one protected
+  flow, and a failed or unverified result remains blocked without cloud
+  submission. The test must not require a live desktop client or cloud access.
+- Test the tray summary for a ready protected profile, incomplete setup, and
+  local-protection repair. Assertions use only public raw-free wording and the
+  visible emergency-bypass combination.
 
 ## Out of Scope
 

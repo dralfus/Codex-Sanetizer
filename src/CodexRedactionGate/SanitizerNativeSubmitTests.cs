@@ -100,6 +100,60 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void WindowsNativeSubmitHookHost_DeferredGuardedClassificationDeliversExactlyOnce()
+    {
+        using var releaseClassification = new ManualResetEventSlim(false);
+        using var delivered = new ManualResetEventSlim(false);
+        var deliveries = 0;
+        var host = new WindowsNativeSubmitHookHost();
+
+        var immediate = host.ClassifyWithinBudgetForTest(
+            () =>
+            {
+                releaseClassification.Wait();
+                return new NativeSubmitInterceptionResult(
+                    OsInteractionStatusIds.NativeSubmitGuarded,
+                    SuppressOriginalInput: true,
+                    Applied: false,
+                    Submitted: false,
+                    Diagnostics: new Dictionary<string, string>());
+            },
+            shouldSuppressFailure: () => true,
+            onDeferredClassification: _ =>
+            {
+                Interlocked.Increment(ref deliveries);
+                delivered.Set();
+            },
+            classificationBudget: TimeSpan.Zero);
+
+        Assert.That(immediate.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(immediate.SuppressOriginalInput, Is.True);
+
+        releaseClassification.Set();
+
+        Assert.That(delivered.Wait(TimeSpan.FromSeconds(2)), Is.True);
+        Assert.That(deliveries, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void NativeSubmitTargetIdentity_RejectsDelayedClassificationForDifferentWindow()
+    {
+        var surface = CreateNativeSubmitSurface("codex-desktop") with
+        {
+            Metadata = new SurfaceMetadata(
+                ComposerStatus: OsInteractionStatusIds.SupportedComposer,
+                WindowHandle: "2")
+        };
+
+        var target = NativeSubmitTargetIdentity.TryCreateForGesture(
+            snapshotGeneration: 1,
+            surface: surface,
+            gestureTargetWindow: new IntPtr(1));
+
+        Assert.That(target, Is.Null);
+    }
+
+    [Test]
     public void NativeSubmitInterception_PassesThroughSubmitBindingWhenForegroundIsUnsupported()
     {
         var profile = CreateProtectedProfile();
@@ -1257,7 +1311,7 @@ public partial class SanitizerTests
         {
             var result = _classify!(gesture);
             LastClassification = result;
-            if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
+            if (result.SuppressOriginalInput)
             {
                 _onSuppressedSubmit!(gesture, result);
             }
@@ -1267,7 +1321,7 @@ public partial class SanitizerTests
         {
             var result = _classifyPointer!(gesture);
             LastPointerClassification = result;
-            if (result.Status == OsInteractionStatusIds.NativeSubmitGuarded)
+            if (result.SuppressOriginalInput)
             {
                 _onSuppressedPointerSubmit!(gesture, result);
             }
@@ -1699,7 +1753,7 @@ public class HandleButtonClickTests : SanitizerTests
                 new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
 
         Assert.That(tray.Start(), Is.True);
-        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true, TargetWindow: new IntPtr(1)));
 
         Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
         Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.False);
@@ -2261,7 +2315,7 @@ public class HandleButtonClickTests : SanitizerTests
             nativeSubmitRuntimes: new[] { runtime });
 
         Assert.That(tray.Start(), Is.True);
-        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true, TargetWindow: new IntPtr(1)));
 
         Assert.That(targetRunnerCalls, Is.EqualTo(1));
         Assert.That(capturedTarget?.SnapshotGeneration, Is.EqualTo(tray.GetCurrentSnapshot().Generation));

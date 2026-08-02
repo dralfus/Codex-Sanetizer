@@ -615,3 +615,82 @@ If one of these cannot be stated, the work is an architecture-discovery ticket a
 **Deterministic proof:** Injected activation-window operations return accepted/refused outcomes without relying on `SetForegroundWindow`, interactive desktop focus, or timing.
 
 - [x] Refactor the single-instance activation dependency behind an injectable seam and cover both accepted and foreground-refused outcomes deterministically.
+
+## 296. Keep protected Send usable and explain its safety state
+
+**What to build:** Make the configured Send binding complete one protected Send
+even when composer inspection outlives the low-level hook budget. The tray menu
+must show the configured protected profile and binding, the emergency bypass
+combination, and a clear raw-free reason plus next action whenever setup is not
+saved, verification did not succeed, or local protection needs repair.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The resident protection snapshot owns configured profile,
+binding, readiness, and the last guarded result. The hook only captures and
+suppresses a potential Send; the tray only projects the published snapshot.
+
+**Fail-closed state:** A selected-app Send whose setup is absent, whose
+classification fails, or whose local protection is unavailable remains blocked.
+The only raw-send route is the visible emergency bypass
+`Ctrl+Alt+Shift+Pause`; ordinary typing and unrelated application input remain
+pass-through.
+
+**Allowed transitions:** A potential configured Send is either passed through
+as normal input, suppressed then completed once after a verified guarded result,
+or suppressed with a published raw-free setup or verification remedy. A delayed
+classification may publish one final guarded result, never a second Send.
+
+**Deterministic proof:** An injected delayed-classification seam and fake
+resident runtime prove one protected completion without a live desktop client,
+timers, or cloud submission. Tray-context tests prove public menu wording for
+ready, setup-required, verification-unavailable, and local-repair states.
+
+- [x] A configured keyboard Send remains suppressed during slow inspection and
+  then starts exactly one protected flow when inspection completes; injected
+  replay input is not recaptured.
+- [x] A slow failed or unverified inspection remains fail-closed and publishes
+  a raw-free state rather than silently dropping the request or sending raw
+  content.
+- [x] The tray menu shows `Ctrl+Alt+Shift+Pause` as the emergency bypass and
+  gives a readable profile/binding summary when protected.
+- [x] When setup is missing, a binding is not saved, verification is
+  unavailable, or local DPAPI protection needs repair, the menu names the
+  condition in plain language and directs the user to setup or repair.
+
+## 297. Make all deferred and pointer Send decisions atomic and fail-closed
+
+**What to build:** Close the remaining resident-state race around deferred
+keyboard work and the mouse Send discovery gap. A selected desktop-client Send
+must never reach the cloud raw because a button cannot be classified quickly,
+and work captured before stop or runtime replacement must not invoke an old
+runtime.
+
+**Blocked by:** 296. Keep protected Send usable and explain its safety state.
+
+**State owner:** The resident protection snapshot owns the active runtime and
+the selected target identity. Hook callbacks may request work only while that
+snapshot remains current; the tray remains a projection.
+
+**Fail-closed state:** An unclassified click in a selected client, a stale
+snapshot, a changed target window, or a runtime replacement blocks the original
+Send and publishes a raw-free remedy. Ordinary unrelated clicks remain normal.
+
+**Allowed transitions:** A click or key gesture is bound to one resident
+generation and target. It either completes one guarded send for that same
+generation, or it is rejected without a cloud submission when the identity or
+runtime changes.
+
+**Deterministic proof:** Injected pointer discovery and a controllable resident
+snapshot replacement prove that no old runner executes, no raw pointer send
+passes through, and unrelated input is not captured.
+
+- [ ] A pointer Send whose control discovery is slow or fails is fail-closed
+  only for the selected desktop client; unrelated application clicks remain
+  pass-through.
+- [ ] Deferred keyboard and pointer results cannot call a runner after Stop or
+  resident-runtime replacement, including the compare-and-send boundary.
+- [ ] Tests cover two desktop windows with the same profile and prove the send
+  cannot be redirected to the second window.
+- [ ] If the profile store cannot be read, the tray shows a raw-free settings
+  recovery action rather than offering a setup action that cannot run.

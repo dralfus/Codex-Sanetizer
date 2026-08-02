@@ -24,6 +24,22 @@ internal sealed record NativeSubmitTargetIdentity(
 
         return new NativeSubmitTargetIdentity(snapshotGeneration, surface.ProfileId, windowHandle);
     }
+
+    public static NativeSubmitTargetIdentity? TryCreateForGesture(
+        long snapshotGeneration,
+        TextSurfaceDescriptor? surface,
+        IntPtr gestureTargetWindow)
+    {
+        var target = TryCreate(snapshotGeneration, surface);
+        return target is not null
+            && gestureTargetWindow != IntPtr.Zero
+            && string.Equals(
+                target.WindowHandle,
+                gestureTargetWindow.ToInt64().ToString("X"),
+                StringComparison.Ordinal)
+            ? target
+            : null;
+    }
 }
 
 internal sealed class CapturedTargetSurfaceDiscovery : IActiveTextSurfaceDiscovery
