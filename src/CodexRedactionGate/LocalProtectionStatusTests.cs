@@ -507,7 +507,6 @@ public sealed class LocalProtectionStatusTests
                 () => throw new AssertionException("Manual scan should not run."),
                 nativeSubmitHookHost: null,
                 nativeSubmitController: null,
-                nativeSubmitRunner: null,
                 storageLayout: layout);
             Assert.That(controller.State.ProjectFileStatus, Is.EqualTo(ProjectFileProtectionStatusValues.NotConfigured));
 

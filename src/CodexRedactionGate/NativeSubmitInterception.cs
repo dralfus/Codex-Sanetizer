@@ -2181,7 +2181,7 @@ public static class NativeSubmitProductSmokeRunner
         var submitFlowCalls = 0;
         var inProgressStatusSeen = false;
 
-        controller = new TrayProtectionController(
+        controller = TrayProtectionController.CreateTest(
             new ProductSmokeTrayHotkeyHost("Ctrl+Shift+F9"),
             () => new OsInteractionResult(
                 OsInteractionStatusIds.Applied,

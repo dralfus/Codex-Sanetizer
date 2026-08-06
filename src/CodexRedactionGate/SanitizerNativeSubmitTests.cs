@@ -690,7 +690,7 @@ public partial class SanitizerTests
             activeSurfaceDiscoveryCalls++;
             return TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop"));
         };
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => new OsInteractionResult(
                 OsInteractionStatusIds.Applied,
@@ -740,7 +740,7 @@ public partial class SanitizerTests
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
@@ -770,7 +770,7 @@ public partial class SanitizerTests
         var unrelatedSurface = TextSurfaceDiscoveryResult.Failure(
             OsInteractionStatusIds.UnsupportedSurface,
             new Dictionary<string, string>());
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
@@ -807,7 +807,7 @@ public partial class SanitizerTests
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
         var submitFlowCalls = 0;
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
@@ -857,7 +857,7 @@ public partial class SanitizerTests
             var submitFlowCalls = 0;
             var inProgressStatusSeen = false;
             var inProgressAttemptStatusSeen = false;
-            controller = new TrayProtectionController(
+        controller = TrayProtectionController.CreateTest(
                 new FakeTrayHotkeyHost(),
                 () => throw new InvalidOperationException("Manual scan should not run."),
                 hook,
@@ -911,7 +911,7 @@ public partial class SanitizerTests
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
         var submitFlowCalls = 0;
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
@@ -979,7 +979,7 @@ public partial class SanitizerTests
         TrayProtectionController? controller = null;
         var submitFlowCalls = 0;
         var attemptIdBeforeDuplicate = 0L;
-        controller = new TrayProtectionController(
+        controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
@@ -1032,7 +1032,7 @@ public partial class SanitizerTests
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             submittedResult,
             profile);
-        controller = new TrayProtectionController(
+        controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             oldHook,
@@ -1113,12 +1113,11 @@ public partial class SanitizerTests
             ResidentTracedRunner: (_, executionGuard, _) => RunResident(executionGuard),
             ResidentTargetTracedRunner: (_, _, executionGuard, _) => RunResident(executionGuard));
 
-        controller = new TrayProtectionController(
+        controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            nativeSubmitRunner: null,
             profile,
             nativeSubmitRuntimes: new[] { runtime });
 
@@ -1142,25 +1141,20 @@ public partial class SanitizerTests
             profile,
             TraceRequired: false,
             ResidentTracedRunner: null,
-            ResidentTargetTracedRunner: null,
-            TestOnly: true);
-        var controller = new TrayProtectionController(
+            ResidentTargetTracedRunner: null);
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            nativeSubmitRunner: null,
             profile,
             nativeSubmitRuntimes: new[] { runtime });
 
-        Assert.That(controller.Start(), Is.True);
-        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
-
+        Assert.That(controller.Start(), Is.False);
+        Assert.That(hook.Started, Is.False);
         Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
+        Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
         Assert.That(controller.State.LastProtectedSendTraceStatus, Is.EqualTo("trace_unavailable"));
-        var unavailable = TrayProtectionController.TraceRunnerUnavailableResult();
-        Assert.That(unavailable.Diagnostics["trace_status"], Is.EqualTo("trace_unavailable"));
-        Assert.That(unavailable.Diagnostics.Values, Does.Not.Contain("RESIDENT_SMOKE_SENSITIVE_VALUE"));
     }
 
     [Test]
@@ -1180,7 +1174,6 @@ public partial class SanitizerTests
             Assert.That(runtimeSet!.Runtimes, Has.Count.EqualTo(1));
             var runtime = runtimeSet.Runtimes.Single();
             Assert.That(runtime.TraceRequired, Is.True);
-            Assert.That(runtime.TestOnly, Is.False);
             Assert.That(runtime.ResidentTracedRunner, Is.Not.Null);
             Assert.That(runtime.ResidentTargetTracedRunner, Is.Not.Null);
         }
@@ -1335,12 +1328,11 @@ public partial class SanitizerTests
                     CompleteWithoutSideEffect(traceStage, executionGuard, executionLease, countSideEffect: true),
                 TraceRequired: true);
 
-            controller = new TrayProtectionController(
+            controller = TrayProtectionController.CreateTest(
                 new FakeTrayHotkeyHost(),
                 () => throw new InvalidOperationException("Manual scan should not run."),
                 oldHook,
                 oldRuntime.Controller,
-                nativeSubmitRunner: null,
                 profile,
                 protectedSendStageObserver: stage =>
                 {
@@ -1377,6 +1369,57 @@ public partial class SanitizerTests
         }
     }
 
+    [Test]
+    public void ResidentProtectedSendOperation_HoldsLifecycleLeaseAcrossCancellation()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var runtime = NativeSubmitRuntime.CreateTest(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("Test runner should not run."),
+            profile);
+        using var runtimeSet = new NativeSubmitRuntimeSet(hook, new[] { runtime });
+        var snapshot = new ProtectionSnapshot(
+            Generation: 3,
+            State: new TrayProtectionState(
+                Enabled: true,
+                Mode: "NativeSubmit",
+                Hotkey: "Ctrl+Shift+F9",
+                LastStatus: OsInteractionStatusIds.NativeSubmitInProgress,
+                LastDecision: null,
+                LastReplacementCount: null,
+                LastProfileId: profile.ProfileId,
+                LastApplied: false,
+                LastSubmitted: false),
+            ApplyOnlyRunner: () => throw new InvalidOperationException("Apply-only runner should not run."),
+            RuntimeSet: runtimeSet,
+            HookReady: true,
+            SendControlDiscovery: null,
+            ActiveSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)));
+        using var operation = new ResidentProtectedSendOperation(snapshot, runtimeSet, target: null);
+        using var lease = operation.TryAcquireSideEffect(snapshot);
+        Assert.That(lease, Is.Not.Null);
+
+        using var cancellationStarted = new ManualResetEventSlim(false);
+        using var cancellationFinished = new ManualResetEventSlim(false);
+        var cancellationThread = new Thread(() =>
+        {
+            cancellationStarted.Set();
+            operation.Cancel();
+            cancellationFinished.Set();
+        });
+        cancellationThread.Start();
+
+        Assert.That(cancellationStarted.Wait(TimeSpan.FromSeconds(1)), Is.True);
+        Assert.That(cancellationFinished.Wait(100), Is.False);
+
+        lease!.Dispose();
+        Assert.That(cancellationFinished.Wait(TimeSpan.FromSeconds(1)), Is.True);
+        cancellationThread.Join();
+        Assert.That(operation.IsCancelled, Is.True);
+    }
+
     private static ConfirmationUiModel CreateOverlayModel(string prompt)
     {
         return new ConfirmationUiModel(
@@ -1407,7 +1450,7 @@ public partial class SanitizerTests
         {
             var hook = new FakeNativeSubmitHookHost();
             var profile = CreateProtectedProfile();
-            var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
                 new FakeTrayHotkeyHost(),
                 () => throw new InvalidOperationException("Manual scan should not run."),
                 hook,
@@ -1441,7 +1484,7 @@ public partial class SanitizerTests
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
@@ -1479,7 +1522,7 @@ public partial class SanitizerTests
 
         // Create a submit runner that throws an exception
         var exceptionThrown = false;
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => new OsInteractionResult(
                 OsInteractionStatusIds.Applied,
@@ -3118,12 +3161,11 @@ public class HandleButtonClickTests : SanitizerTests
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => throw new InvalidOperationException("Guarded flow must not run."),
             profile);
-        var tray = new TrayProtectionController(
+        var tray = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            nativeSubmitRunner: null,
             profile,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
                 OsInteractionStatusIds.SurfaceUnverified,
@@ -3147,12 +3189,11 @@ public class HandleButtonClickTests : SanitizerTests
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => throw new InvalidOperationException("Guarded flow must not run."),
             profile);
-        var tray = new TrayProtectionController(
+        var tray = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            nativeSubmitRunner: null,
             profile,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
                 OsInteractionStatusIds.SurfaceUnverified,
@@ -3184,12 +3225,11 @@ public class HandleButtonClickTests : SanitizerTests
                 return CreateSubmittedResult("codex-desktop");
             },
             profile);
-        var tray = new TrayProtectionController(
+        var tray = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            nativeSubmitRunner: null,
             profile,
             activeSurfaceDiscovery: () => throw new InvalidOperationException(),
             nativeSubmitRuntimes: new[] { runtime });
@@ -3232,12 +3272,11 @@ public class HandleButtonClickTests : SanitizerTests
                     Submitted: false,
                     rediscovery.Diagnostics);
             });
-        var tray = new TrayProtectionController(
+        var tray = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            nativeSubmitRunner: null,
             profile,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(capturedSurface),
             nativeSubmitRuntimes: new[] { runtime });
@@ -3418,12 +3457,11 @@ public class HandleButtonClickTests : SanitizerTests
                 return CreateSubmittedResult("codex-desktop");
             },
             profile);
-        return new TrayProtectionController(
+        return TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            nativeSubmitRunner: null,
             profile,
             sendControlDiscovery: sendControlDiscovery,
             activeSurfaceDiscovery: () => activeSurfaceResult
@@ -3519,12 +3557,11 @@ public class HandleButtonClickTests : SanitizerTests
                     return CreateSubmittedResult("codex-desktop");
                 },
                 oldProfile);
-            var tray = new TrayProtectionController(
+        var tray = TrayProtectionController.CreateTest(
                 new FakeTrayHotkeyHost(),
                 () => throw new InvalidOperationException("Manual scan should not run."),
                 oldHook,
                 oldRuntime.Controller,
-                nativeSubmitRunner: null,
                 oldProfile,
                 storageLayout: layout,
                 activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
@@ -3603,12 +3640,11 @@ public class HandleButtonClickTests : SanitizerTests
                 },
                 chatGptProfile)
         };
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtimes[0].Controller,
-            nativeSubmitRunner: null,
             runtimes[0].Profile,
             nativeSubmitRuntimes: runtimes,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
@@ -3650,12 +3686,11 @@ public class HandleButtonClickTests : SanitizerTests
                 },
                 chatGptProfile)
         };
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtimes[0].Controller,
-            nativeSubmitRunner: null,
             runtimes[0].Profile,
             nativeSubmitRuntimes: runtimes,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
@@ -3705,7 +3740,7 @@ public class HandleButtonClickTests : SanitizerTests
             hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
             oldRuntimeStatus = controller!.State.LastStatus;
         };
-        controller = new TrayProtectionController(
+        controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             oldHook,
@@ -3744,7 +3779,7 @@ public class HandleButtonClickTests : SanitizerTests
         var oldHook = new FakeNativeSubmitHookHost();
         var failedHook = new FakeNativeSubmitHookHost { StartResult = false };
         var profile = CreateProtectedProfile();
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             oldHook,
@@ -3774,7 +3809,7 @@ public class HandleButtonClickTests : SanitizerTests
         var oldHook = new FakeNativeSubmitHookHost();
         var candidateHook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             oldHook,
@@ -3813,7 +3848,7 @@ public class HandleButtonClickTests : SanitizerTests
                 ProtectedWorkspaceStore.Protect(layout, workspace);
                 controller!.RefreshProjectFileProtectionStatus();
             };
-            controller = new TrayProtectionController(
+        controller = TrayProtectionController.CreateTest(
                 new FakeTrayHotkeyHost(),
                 () => throw new InvalidOperationException("Manual scan should not run."),
                 oldHook,
@@ -3846,7 +3881,7 @@ public class HandleButtonClickTests : SanitizerTests
         var oldHook = new FakeNativeSubmitHookHost();
         var candidateHook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             oldHook,
@@ -3876,7 +3911,7 @@ public class HandleButtonClickTests : SanitizerTests
         var oldApplyCalls = 0;
         var candidateApplyCalls = 0;
         var candidateSubmitCalls = 0;
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             hotkey,
             () =>
             {
@@ -3927,7 +3962,7 @@ public class HandleButtonClickTests : SanitizerTests
         var profile = CreateProtectedProfile();
         var oldApplyCalls = 0;
         var candidateApplyCalls = 0;
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             hotkey,
             () =>
             {
@@ -3972,7 +4007,7 @@ public class HandleButtonClickTests : SanitizerTests
         var profile = CreateProtectedProfile();
         using var applyStarted = new ManualResetEventSlim(false);
         using var releaseApply = new ManualResetEventSlim(false);
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             hotkey,
             () =>
             {
@@ -4013,7 +4048,7 @@ public class HandleButtonClickTests : SanitizerTests
         var firstCandidateHook = new FakeNativeSubmitHookHost();
         var secondCandidateHook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
             () => throw new InvalidOperationException("Manual scan should not run."),
             oldHook,

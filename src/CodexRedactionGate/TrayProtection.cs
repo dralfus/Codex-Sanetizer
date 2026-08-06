@@ -109,7 +109,6 @@ internal sealed class TrayProtectionController
         Func<OsInteractionResult> applyOnlyRunner,
         INativeSubmitHookHost? nativeSubmitHookHost,
         NativeSubmitInterceptionController? nativeSubmitController,
-        Func<OsInteractionResult>? nativeSubmitRunner,
         SubmitBindingProfile? nativeProfile = null,
         NativeSubmitEnterprisePolicy? enterprisePolicy = null,
         DefaultStorageLayout? storageLayout = null,
@@ -124,11 +123,7 @@ internal sealed class TrayProtectionController
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
         var resolvedProfile = nativeProfile ?? nativeSubmitController?.Profile;
-        var runtimes = nativeSubmitRuntimes ?? CreateSingleRuntimeList(
-            nativeSubmitHookHost,
-            nativeSubmitController,
-            nativeSubmitRunner,
-            resolvedProfile);
+        var runtimes = nativeSubmitRuntimes ?? Array.Empty<NativeSubmitRuntime>();
         _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         _storageLayout = storageLayout ?? DefaultStorageLayout.CreateDefault();
         _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
@@ -148,6 +143,92 @@ internal sealed class TrayProtectionController
             HookReady: false,
             sendControlDiscovery,
             surfaceDiscovery);
+    }
+
+    // Explicit test seam for controller tests that do not construct the Windows orchestrator.
+    internal static TrayProtectionController CreateTest(
+        ITrayHotkeyHost hotkeyHost,
+        Func<OsInteractionResult> applyOnlyRunner)
+    {
+        return new TrayProtectionController(hotkeyHost, applyOnlyRunner);
+    }
+
+    // Explicit test seam for tests that already own traced runtime fixtures.
+    internal static TrayProtectionController CreateTest(
+        ITrayHotkeyHost hotkeyHost,
+        Func<OsInteractionResult> applyOnlyRunner,
+        INativeSubmitHookHost nativeSubmitHookHost,
+        NativeSubmitInterceptionController nativeSubmitController,
+        SubmitBindingProfile nativeProfile,
+        NativeSubmitEnterprisePolicy? enterprisePolicy = null,
+        DefaultStorageLayout? storageLayout = null,
+        ISendControlDiscovery? sendControlDiscovery = null,
+        IReadOnlyList<NativeSubmitRuntime>? nativeSubmitRuntimes = null,
+        Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null,
+        Func<IntPtr, string?>? selectedWindowProfileResolver = null,
+        Action<string>? protectedSendStageObserver = null,
+        IDisposable? residentRuntimeOwner = null,
+        IDisposable? nativeSubmitRuntimeOwner = null)
+    {
+        return new TrayProtectionController(
+            hotkeyHost,
+            applyOnlyRunner,
+            nativeSubmitHookHost,
+            nativeSubmitController,
+            nativeProfile,
+            enterprisePolicy,
+            storageLayout,
+            sendControlDiscovery,
+            nativeSubmitRuntimes,
+            activeSurfaceDiscovery,
+            selectedWindowProfileResolver,
+            protectedSendStageObserver,
+            residentRuntimeOwner,
+            nativeSubmitRuntimeOwner);
+    }
+
+    // Explicit test seam for controller tests that do not construct the Windows orchestrator.
+    internal static TrayProtectionController CreateTest(
+        ITrayHotkeyHost hotkeyHost,
+        Func<OsInteractionResult> applyOnlyRunner,
+        INativeSubmitHookHost nativeSubmitHookHost,
+        NativeSubmitInterceptionController nativeSubmitController,
+        Func<OsInteractionResult> nativeSubmitRunner,
+        SubmitBindingProfile? nativeProfile = null,
+        NativeSubmitEnterprisePolicy? enterprisePolicy = null,
+        DefaultStorageLayout? storageLayout = null,
+        ISendControlDiscovery? sendControlDiscovery = null,
+        Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null,
+        Func<IntPtr, string?>? selectedWindowProfileResolver = null,
+        Action<string>? protectedSendStageObserver = null,
+        IDisposable? residentRuntimeOwner = null,
+        IDisposable? nativeSubmitRuntimeOwner = null)
+    {
+        ArgumentNullException.ThrowIfNull(nativeSubmitHookHost);
+        ArgumentNullException.ThrowIfNull(nativeSubmitController);
+        ArgumentNullException.ThrowIfNull(nativeSubmitRunner);
+
+        var profile = nativeProfile ?? nativeSubmitController.Profile;
+        var runtime = NativeSubmitRuntime.CreateTest(
+            nativeSubmitHookHost,
+            nativeSubmitController,
+            nativeSubmitRunner,
+            profile);
+        return new TrayProtectionController(
+            hotkeyHost,
+            applyOnlyRunner,
+            nativeSubmitHookHost,
+            nativeSubmitController,
+            profile,
+            enterprisePolicy,
+            storageLayout,
+            sendControlDiscovery,
+            nativeSubmitRuntimes: new[] { runtime },
+            activeSurfaceDiscovery,
+            selectedWindowProfileResolver,
+            protectedSendStageObserver,
+            residentRuntimeOwner,
+            nativeSubmitRuntimeOwner);
     }
 
     public event EventHandler? StateChanged;
@@ -339,20 +420,32 @@ internal sealed class TrayProtectionController
         var nativeStarted = snapshot.RuntimeSet is not null && StartNativeSubmitHook(snapshot.RuntimeSet);
         if (snapshot.RuntimeSet is not null && !nativeStarted)
         {
+            var traceUnavailable = snapshot.RuntimeSet.Runtimes.Any(runtime => !HasRequiredResidentTraceRunner(runtime));
             StopAndDisposeRuntime(snapshot.RuntimeSet);
             if (manualHotkeyStarted)
             {
                 _hotkeyHost.Stop();
             }
 
+            var failedState = CreateState(
+                enabled: false,
+                lastStatus: traceUnavailable
+                    ? OsInteractionStatusIds.TraceUnavailable
+                    : NativeSubmitUnavailableStatus(snapshot),
+                runtimes: snapshot.RuntimeSet.Runtimes,
+                nativeSubmitStatus: traceUnavailable
+                    ? OsInteractionStatusIds.TraceUnavailable
+                    : OsInteractionStatusIds.NotConfigured,
+                setupRequired: setupRequired,
+                localProtectionStatus: snapshot.State.LocalProtectionStatus);
             PublishSnapshot(snapshot with
             {
-                State = CreateState(
-                    enabled: false,
-                    lastStatus: NativeSubmitUnavailableStatus(snapshot),
-                    runtimes: snapshot.RuntimeSet.Runtimes,
-                    setupRequired: setupRequired,
-                    localProtectionStatus: snapshot.State.LocalProtectionStatus)
+                State = failedState with
+                {
+                    LastProtectedSendTraceStatus = traceUnavailable
+                        ? "trace_unavailable"
+                        : failedState.LastProtectedSendTraceStatus
+                }
             });
             return false;
         }
@@ -1258,7 +1351,7 @@ internal sealed class TrayProtectionController
         if (diagnostics is null
             || !diagnostics.TryGetValue("trace_status", out var traceStatus))
         {
-            return currentStatus;
+            return "none";
         }
 
         return traceStatus switch
@@ -1990,15 +2083,8 @@ internal sealed class TrayProtectionController
 
     private static bool HasRequiredResidentTraceRunner(NativeSubmitRuntime runtime)
     {
-        if (runtime.TraceRequired)
-        {
-            return runtime.ResidentTracedRunner is not null
-                && runtime.ResidentTargetTracedRunner is not null;
-        }
-
-        return runtime.TestOnly
-            || (runtime.ResidentTracedRunner is not null
-                && runtime.ResidentTargetTracedRunner is not null);
+        return runtime.ResidentTracedRunner is not null
+            && runtime.ResidentTargetTracedRunner is not null;
     }
 
     private static void StopAndDisposeRuntime(NativeSubmitRuntimeSet? runtimeSet)
@@ -2147,17 +2233,6 @@ internal sealed class TrayProtectionController
             });
     }
 
-    private static IReadOnlyList<NativeSubmitRuntime> CreateSingleRuntimeList(
-        INativeSubmitHookHost? hookHost,
-        NativeSubmitInterceptionController? controller,
-        Func<OsInteractionResult>? runner,
-        SubmitBindingProfile? profile)
-    {
-        return hookHost is not null && controller is not null && runner is not null && profile is not null
-            ? new[] { NativeSubmitRuntime.CreateTest(hookHost, controller, runner, profile) }
-            : Array.Empty<NativeSubmitRuntime>();
-    }
-
     internal static OsInteractionResult TraceRunnerUnavailableResult()
     {
         return new OsInteractionResult(
@@ -2181,8 +2256,7 @@ internal sealed record NativeSubmitRuntime(
     SubmitBindingProfile Profile,
     bool TraceRequired = false,
     Func<Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTracedRunner = null,
-    Func<NativeSubmitTargetIdentity, Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTargetTracedRunner = null,
-    bool TestOnly = false)
+    Func<NativeSubmitTargetIdentity, Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTargetTracedRunner = null)
 {
     public static NativeSubmitRuntime CreateTest(
         INativeSubmitHookHost hookHost,
@@ -2201,8 +2275,7 @@ internal sealed record NativeSubmitRuntime(
             ResidentTracedRunner ?? ((traceStage, executionGuard, executionLease) =>
                 RunTestTracedRunner(runner, traceStage, executionGuard, executionLease)),
             ResidentTargetTracedRunner ?? ((target, traceStage, executionGuard, executionLease) =>
-                RunTestTracedRunner(runner, traceStage, executionGuard, executionLease)),
-            TestOnly: true);
+                RunTestTracedRunner(runner, traceStage, executionGuard, executionLease)));
     }
 
     private static OsInteractionResult RunTestTracedRunner(

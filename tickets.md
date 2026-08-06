@@ -1197,10 +1197,13 @@ submit call occurs.
 
 **Review result (2026-08-06):** Resolved. Production runtime no longer
 stores an untraced `Runner`; only `NativeSubmitRuntime.CreateTest` closes over
-the test runner. Production construction requires both guarded resident
-contracts, and the missing-runner test asserts the trace status projected by
-the real interception flow. Lifecycle smoke/tests also exercise the lease
-contract at side-effect boundaries.
+the test runner. The production controller constructor no longer accepts a
+raw runner; controller-only fixtures use the explicit
+`TrayProtectionController.CreateTest` seam. Production construction requires
+both guarded resident contracts, and an incomplete fixture is rejected at
+startup with `trace_unavailable`. The resulting status is projected into
+resident state, and the lifecycle lease has a deterministic cancellation
+blocking test at the side-effect boundary.
 
 ## 311. Type and centralize protected-Send trace transitions
 

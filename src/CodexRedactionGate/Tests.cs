@@ -1454,7 +1454,7 @@ public partial class SanitizerTests
             CanSubmit: false,
             Metadata: new SurfaceMetadata());
         var host = new RecordingTrayHotkeyHost();
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             host,
             () => new OsInteractionResult(
                 OsInteractionStatusIds.Applied,
@@ -1554,7 +1554,7 @@ public partial class SanitizerTests
                 CanReplaceText: true,
                 CanSubmit: true,
                 Metadata: new SurfaceMetadata())));
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
             () => throw new InvalidOperationException("Manual scan should not run."),
             new RecordingNativeSubmitHookHost(),
@@ -1595,7 +1595,7 @@ public partial class SanitizerTests
                 CanReplaceText: true,
                 CanSubmit: true,
                 Metadata: new SurfaceMetadata())));
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
             () => throw new InvalidOperationException("Manual scan should not run."),
             new RecordingNativeSubmitHookHost(),
@@ -1633,7 +1633,7 @@ public partial class SanitizerTests
                 CanReplaceText: true,
                 CanSubmit: true,
                 Metadata: new SurfaceMetadata())));
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
             () => throw new InvalidOperationException("Manual scan should not run."),
             new RecordingNativeSubmitHookHost(),
@@ -1659,7 +1659,7 @@ public partial class SanitizerTests
         Assert.That(confirmed.ProtectionStillRunning, Is.False);
         Assert.That(confirmed.Diagnostics["raw_prompt_recorded"], Is.EqualTo("false"));
 
-        var managed = new TrayProtectionController(
+        var managed = TrayProtectionController.CreateTest(
             new RecordingTrayHotkeyHost("Ctrl+Shift+F9"),
             () => throw new InvalidOperationException("Manual scan should not run."),
             new RecordingNativeSubmitHookHost(),
@@ -7721,7 +7721,7 @@ public class ResidentFirstRunSetupLaunchTests
                         activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateSetupTestSurface()),
                         firstRunSetupController: new FirstRunSetupController(),
                         setupLayout: layout);
-                    var protection = new TrayProtectionController(
+                    var protection = TrayProtectionController.CreateTest(
                         new SanitizerTests.FakeTrayHotkeyHost(),
                         () => throw new AssertionException("Manual scan should not run."),
                         hook,
@@ -8651,7 +8651,7 @@ public class ResidentFirstRunSetupLaunchTests
         };
         var hook = new SanitizerTests.FakeNativeSubmitHookHost();
         var submitted = 0;
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new SanitizerTests.FakeTrayHotkeyHost(),
             CreateProtectedInteractionResult,
             hook,
@@ -8824,7 +8824,7 @@ public class ResidentFirstRunSetupLaunchTests
     [Test]
     public void TrayProtectionController_RejectsStaleAndOutOfOrderSetupProgress()
     {
-        var controller = new TrayProtectionController(
+        var controller = TrayProtectionController.CreateTest(
             new UnavailableTrayHotkeyHost(
                 new HotkeyBinding("test-hotkey", "Ctrl+Shift+F9", "tests"),
                 "test_hotkey_unavailable"),
@@ -8901,7 +8901,6 @@ public class ResidentFirstRunSetupLaunchTests
             CreateProtectedInteractionResult,
             nativeSubmitHookHost: null,
             nativeSubmitController: null,
-            nativeSubmitRunner: null,
             storageLayout: storageLayout);
     }
 
@@ -8924,7 +8923,7 @@ public class ResidentFirstRunSetupLaunchTests
         {
             OnStarted = _ => onHookStarted?.Invoke()
         };
-                    var runtime = NativeSubmitRuntime.CreateTest(
+        var runtime = NativeSubmitRuntime.CreateTest(
             hook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             CreateProtectedInteractionResult,

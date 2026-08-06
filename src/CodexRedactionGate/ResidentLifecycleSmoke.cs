@@ -108,7 +108,7 @@ internal static class ResidentLifecycleSmokeRunner
                 new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
                 firstRunSetupController: setup,
                 setupLayout: layout);
-            var protection = new TrayProtectionController(
+            var protection = TrayProtectionController.CreateTest(
                 new UnavailableTrayHotkeyHost(
                     new HotkeyBinding("resident-smoke", "Ctrl+Shift+F9", "resident_smoke"),
                     "resident_smoke_manual_hotkey_disabled"),
@@ -319,7 +319,6 @@ internal static class ResidentLifecycleSmokeRunner
             () => throw new InvalidOperationException("manual_scan_not_expected"),
             hook,
             runtime.Controller,
-            nativeSubmitRunner: null,
             profile,
             nativeSubmitRuntimes: new[] { runtime },
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(captured));

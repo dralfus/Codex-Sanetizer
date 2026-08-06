@@ -226,7 +226,6 @@ public static class WindowsTrayApp
             residentRuntime.ApplyOnlyRunner,
             runtime?.HookHost,
             runtime?.Controller,
-            nativeSubmitRunner: null,
             nativeProfile,
             storageLayout: resolvedLayout,
             sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault(resolvedLayout),
