@@ -283,7 +283,9 @@ public static class WindowsTrayApp
                 activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
                 firstRunSetupController: new FirstRunSetupController(),
                 setupLayout: layout);
-            OsInteractionResult RunConfirmAndSend(NativeSubmitTargetIdentity? target)
+            OsInteractionResult RunConfirmAndSend(
+                NativeSubmitTargetIdentity? target,
+                Func<string, string, bool>? traceStage)
             {
                 var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
                 IActiveTextSurfaceDiscovery composerDiscovery = target is null
@@ -298,15 +300,20 @@ public static class WindowsTrayApp
                     nativeSubmitAdapter,
                     new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
                     new WindowsConfirmationOverlay());
-                return nativeSubmitOrchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
+                return nativeSubmitOrchestrator.RunOnce(
+                    OsInteractionRunOptions.ConfirmAndSend,
+                    traceStage);
             }
 
             return new NativeSubmitRuntime(
                 hookHost,
                 controller,
-                () => RunConfirmAndSend(target: null),
+                () => RunConfirmAndSend(target: null, traceStage: null),
                 nativeProfile,
-                target => RunConfirmAndSend(target));
+                target => RunConfirmAndSend(target, traceStage: null),
+                TracedRunner: traceStage => RunConfirmAndSend(target: null, traceStage: traceStage),
+                TargetTracedRunner: (target, traceStage) => RunConfirmAndSend(target, traceStage),
+                TraceRequired: true);
         }).ToArray();
         return new NativeSubmitRuntimeSet(hookHost, runtimes);
     }
@@ -705,7 +712,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         if (result?.Succeeded == true && !result.State.Required)
         {
             var setupAttemptId = SetupVerificationAttemptId(result);
-            if (setupAttemptId > 0 && !_controller.IsCurrentSetupVerificationAttempt(setupAttemptId))
+            var requiresAttemptId = result.PendingProfiles is not null;
+            if ((requiresAttemptId && setupAttemptId <= 0)
+                || (setupAttemptId > 0 && !_controller.IsCurrentSetupVerificationAttempt(setupAttemptId)))
             {
                 return;
             }
@@ -733,6 +742,22 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                         "Codex Redaction Gate - Setup required",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
+                }
+                else if (result.PendingProfiles is not null && !IsCurrentSetupAttempt(result))
+                {
+                    if (!ReferenceEquals(
+                            _controller.GetCurrentSnapshot().RuntimeSet,
+                            candidateRuntimeSet))
+                    {
+                        candidateRuntimeSet.HookHost.Stop();
+                    }
+
+                    // A stale completion cannot roll back a runtime published by
+                    // another setup attempt. Keep the current gate active and
+                    // require a fresh verification instead.
+                    _controller.PublishPromptProtectionRetryFailure();
+                    _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                        "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
                 }
                 else if (CommitActivatedProfiles(result, result.PendingProfiles))
                 {
@@ -801,6 +826,12 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     {
         try
         {
+            if (pendingProfiles is not null && !IsCurrentSetupAttempt(result))
+            {
+                _controller.PublishPromptProtectionRetryFailure();
+                return false;
+            }
+
             if (pendingProfiles is not null)
             {
                 var saveResult = SubmitBindingProfileStore.Save(_layout, pendingProfiles);
@@ -825,16 +856,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void RollbackActivatedSetup(FirstRunSetupResult result)
     {
-        var profilesRestored = true;
-        try
-        {
-            RestorePreviousSetupProfiles(result);
-        }
-        catch (Exception exception)
-        {
-            profilesRestored = false;
-            _crashDiagnostics.Capture(exception, "first_run_setup", "profile_rollback_failed");
-        }
+        var profilesRestored = RestorePreviousSetupProfiles(result);
 
         NativeSubmitRuntimeSet? rollbackRuntime = null;
         try
@@ -851,7 +873,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             && _controller.ReloadNativeSubmit(rollbackRuntime);
         if (!rollbackSucceeded)
         {
-            _controller.Stop();
+            // Keep the currently published guarded runtime in place. Stopping it here
+            // would remove the selected-app gate and could allow the original Send
+            // through while setup recovery is unresolved.
             _controller.PublishPromptProtectionRetryFailure();
         }
     }
@@ -864,11 +888,36 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             : 0;
     }
 
-    private void RestorePreviousSetupProfiles(FirstRunSetupResult result)
+    private bool IsCurrentSetupAttempt(FirstRunSetupResult result)
     {
-        if (result.PreviousProfiles is { } previousProfiles)
+        var attemptId = SetupVerificationAttemptId(result);
+        return attemptId > 0 && _controller.IsCurrentSetupVerificationAttempt(attemptId);
+    }
+
+    private bool RestorePreviousSetupProfiles(FirstRunSetupResult result)
+    {
+        if (result.PreviousProfiles is not { } previousProfiles)
         {
-            SubmitBindingProfileStore.Save(_layout, previousProfiles);
+            return true;
+        }
+
+        try
+        {
+            var saveResult = SubmitBindingProfileStore.Save(_layout, previousProfiles);
+            if (!saveResult.Succeeded)
+            {
+                _crashDiagnostics.Capture(
+                    new InvalidOperationException("profile_rollback_failed"),
+                    "first_run_setup",
+                    "profile_rollback_failed");
+            }
+
+            return saveResult.Succeeded;
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "first_run_setup", "profile_rollback_failed");
+            return false;
         }
     }
 
@@ -989,6 +1038,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 return "Protected Send: protection is unavailable; retry protection before sending";
             case "content_blocked":
                 return "Protected Send: edit the prompt and send again";
+            case "trace_unavailable":
+                return "Protected Send: trace unavailable; retry protection before sending";
         }
 
         if (state.ComposerProtected)

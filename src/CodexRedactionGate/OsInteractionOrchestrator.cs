@@ -47,13 +47,15 @@ public sealed class OsInteractionOrchestrator
         _confirmationOverlay = confirmationOverlay ?? throw new ArgumentNullException(nameof(confirmationOverlay));
     }
 
-    public OsInteractionResult RunOnce(OsInteractionRunOptions options)
+    public OsInteractionResult RunOnce(
+        OsInteractionRunOptions options,
+        Func<string, string, bool>? traceStage = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         try
         {
-            return RunOnceInternal(options);
+            return RunOnceInternal(options, traceStage);
         }
         catch (Exception ex)
         {
@@ -74,7 +76,9 @@ public sealed class OsInteractionOrchestrator
         }
     }
 
-    private OsInteractionResult RunOnceInternal(OsInteractionRunOptions options)
+    private OsInteractionResult RunOnceInternal(
+        OsInteractionRunOptions options,
+        Func<string, string, bool>? traceStage)
     {
         var discovery = _surfaceDiscovery.DiscoverActiveSurface();
         if (!discovery.Succeeded || discovery.Surface is null || !discovery.Surface.Supported)
@@ -90,6 +94,14 @@ public sealed class OsInteractionOrchestrator
                 discovery.Diagnostics,
                 capture.Diagnostics,
                 ("capture_status", capture.Status)));
+        }
+
+        if (!TryTrace(traceStage, "composer_read", "capture_verified"))
+        {
+            return Finish(OsInteractionStatusIds.FailedClosed, surface, null, null, false, false, Merge(
+                discovery.Diagnostics,
+                capture.Diagnostics,
+                ("trace_status", "composer_read_unavailable")));
         }
 
         var result = _sanitizer.Sanitize(CreateRequest(capture.Text, surface));
@@ -108,6 +120,13 @@ public sealed class OsInteractionOrchestrator
             return Finish(OsInteractionStatusIds.Blocked, surface, result, null, false, false, diagnostics);
         }
 
+        if (!TryTrace(traceStage, "sanitized", "sanitization_verified"))
+        {
+            return Finish(OsInteractionStatusIds.FailedClosed, surface, result, null, false, false, Merge(
+                diagnostics,
+                ("trace_status", "sanitized_unavailable")));
+        }
+
         ConfirmationUiModel? model = null;
         var outgoingText = result.SanitizedText;
 
@@ -120,10 +139,26 @@ public sealed class OsInteractionOrchestrator
                 return Finish(OsInteractionStatusIds.DryRunConfirm, surface, result, model, false, false, diagnostics);
             }
 
-            var decision = _confirmationOverlay.RequestConfirmation(model);
+            if (!TryTrace(traceStage, "overlay_created", "confirmation_requested"))
+            {
+                return Finish(OsInteractionStatusIds.FailedClosed, surface, result, model, false, false, Merge(
+                    diagnostics,
+                    ("trace_status", "overlay_created_unavailable")));
+            }
+
+            var decision = _confirmationOverlay is ITracedConfirmationOverlay tracedOverlay
+                ? tracedOverlay.RequestConfirmation(model, traceStage ?? AlwaysTrace)
+                : _confirmationOverlay.RequestConfirmation(model);
             if (!decision.Approved || decision.Payload is null)
             {
                 return Finish(OsInteractionStatusIds.Canceled, surface, result, model, false, false, diagnostics);
+            }
+
+            if (!TryTrace(traceStage, "approved", "user_approved"))
+            {
+                return Finish(OsInteractionStatusIds.FailedClosed, surface, result, model, false, false, Merge(
+                    diagnostics,
+                    ("trace_status", "approval_unavailable")));
             }
 
             outgoingText = decision.Payload.SanitizedText;
@@ -182,6 +217,13 @@ public sealed class OsInteractionOrchestrator
             }
 
             var submitSurface = preSubmit.Surface ?? surface;
+            if (!TryTrace(traceStage, "send_injected", "submit_requested"))
+            {
+                return Finish(OsInteractionStatusIds.FailedClosed, submitSurface, result, model, true, false, Merge(
+                    unchangedDiagnostics,
+                    ("trace_status", "send_injected_unavailable")));
+            }
+
             var submitWithoutWrite = _submitAction.Submit(submitSurface);
             return submitWithoutWrite.Succeeded
                 ? Finish(OsInteractionStatusIds.Submitted, submitSurface, result, model, true, true, Merge(
@@ -237,6 +279,16 @@ public sealed class OsInteractionOrchestrator
                 ("verification_status", verificationCapture.Status)));
         }
 
+        if (!TryTrace(traceStage, "text_written", "write_verified"))
+        {
+            return Finish(OsInteractionStatusIds.FailedClosed, verificationSurface, result, model, true, false, Merge(
+                diagnostics,
+                replace.Diagnostics,
+                verificationCapture.Diagnostics,
+                ("write_status", replace.Status),
+                ("trace_status", "text_written_unavailable")));
+        }
+
         if (!options.SubmitAfterApply)
         {
             return Finish(OsInteractionStatusIds.Applied, verificationSurface, result, model, true, false, Merge(
@@ -245,6 +297,16 @@ public sealed class OsInteractionOrchestrator
                 verificationCapture.Diagnostics,
                 ("write_status", replace.Status),
                 ("verification_status", verificationCapture.Status)));
+        }
+
+        if (!TryTrace(traceStage, "send_injected", "submit_requested"))
+        {
+            return Finish(OsInteractionStatusIds.FailedClosed, verificationSurface, result, model, true, false, Merge(
+                diagnostics,
+                replace.Diagnostics,
+                verificationCapture.Diagnostics,
+                ("write_status", replace.Status),
+                ("trace_status", "send_injected_unavailable")));
         }
 
         var submit = _submitAction.Submit(verificationSurface);
@@ -262,6 +324,16 @@ public sealed class OsInteractionOrchestrator
                 ("write_status", replace.Status),
                 ("submit_status", submit.Status)));
     }
+
+    private static bool TryTrace(
+        Func<string, string, bool>? traceStage,
+        string stage,
+        string resultCode)
+    {
+        return traceStage?.Invoke(stage, resultCode) ?? true;
+    }
+
+    private static bool AlwaysTrace(string _, string __) => true;
 
     private RediscoveredSurface RediscoverSameSurface(TextSurfaceDescriptor expectedSurface)
     {

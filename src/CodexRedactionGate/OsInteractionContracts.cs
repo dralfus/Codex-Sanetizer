@@ -206,3 +206,10 @@ public interface IConfirmationOverlay
 {
     ConfirmationDecision RequestConfirmation(ConfirmationUiModel model);
 }
+
+public interface ITracedConfirmationOverlay : IConfirmationOverlay
+{
+    ConfirmationDecision RequestConfirmation(
+        ConfirmationUiModel model,
+        Func<string, string, bool> traceStage);
+}

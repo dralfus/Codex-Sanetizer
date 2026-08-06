@@ -2024,6 +2024,52 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void OsInteractionOrchestrator_ReportsProtectedStagesBeforeSideEffects()
+    {
+        var surface = new ProductFlowTextSurface("Connect to 192.168.10.25");
+        var stages = new List<string>();
+        var orchestrator = CreateProductFlowOrchestrator(surface, ConfirmationDecisionContract.Confirm);
+
+        var result = orchestrator.RunOnce(
+            OsInteractionRunOptions.ConfirmAndSend,
+            (stage, _) =>
+            {
+                stages.Add(stage);
+                return true;
+            });
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Submitted));
+        Assert.That(result.Submitted, Is.True);
+        Assert.That(stages, Is.EqualTo(new[]
+        {
+            "composer_read",
+            "sanitized",
+            "overlay_created",
+            "overlay_foreground_confirmed",
+            "approved",
+            "text_written",
+            "send_injected"
+        }));
+        Assert.That(surface.SubmitCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void OsInteractionOrchestrator_BlocksSubmitWhenTraceCannotAdvance()
+    {
+        var surface = new ProductFlowTextSurface("Safe prompt");
+        var submitTraceAllowed = false;
+        var orchestrator = CreateProductFlowOrchestrator(surface, ConfirmationDecisionContract.Confirm);
+
+        var result = orchestrator.RunOnce(
+            OsInteractionRunOptions.ConfirmAndSend,
+            (stage, _) => stage != "send_injected" || submitTraceAllowed);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+        Assert.That(result.Submitted, Is.False);
+        Assert.That(surface.SubmitCount, Is.Zero);
+    }
+
+    [Test]
     public void Sanitize_NoSensitivePrompt_ReturnsAllowWithUnchangedText()
     {
         var input = "Normal prompt text";
@@ -4975,7 +5021,7 @@ public partial class SanitizerTests
         }
     }
 
-    private sealed class ProductFlowConfirmationOverlay : IConfirmationOverlay
+    private sealed class ProductFlowConfirmationOverlay : ITracedConfirmationOverlay
     {
         private readonly Func<ConfirmationUiModel, ConfirmationDecision> _decisionFactory;
 
@@ -4986,6 +5032,18 @@ public partial class SanitizerTests
 
         public ConfirmationDecision RequestConfirmation(ConfirmationUiModel model)
         {
+            return _decisionFactory(model);
+        }
+
+        public ConfirmationDecision RequestConfirmation(
+            ConfirmationUiModel model,
+            Func<string, string, bool> traceStage)
+        {
+            if (!traceStage("overlay_foreground_confirmed", "foreground_verified"))
+            {
+                return ConfirmationDecisionContract.Cancel(model);
+            }
+
             return _decisionFactory(model);
         }
     }
@@ -7936,7 +7994,10 @@ public class ResidentFirstRunSetupLaunchTests
                 Succeeded: true,
                 Code: "focused_profile_verified",
                 State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", true, false),
-                Diagnostics: new Dictionary<string, string>(),
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["setup_attempt_id"] = "1"
+                },
                 PreviousProfiles: new[] { oldProfile },
                 PendingProfiles: new[] { candidateProfile }));
             var protection = CreateManualOnlyTrayProtection(layout);
@@ -7978,6 +8039,13 @@ public class ResidentFirstRunSetupLaunchTests
                         new[] { CreateRuntime(candidateHook, profiles.Single()) });
                 });
 
+            protection.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "waiting_for_focus",
+                "focus_message_composer",
+                AttemptId: 1));
+            Assert.That(protection.State.SetupVerificationStatus, Is.EqualTo("waiting_for_focus"));
+            Assert.That(protection.State.SetupVerificationAttemptId, Is.EqualTo(1));
+
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
@@ -7991,6 +8059,134 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(protection.State.ProtectedSendBinding, Is.EqualTo("Ctrl+Enter"));
             Assert.That(protection.State.ComposerProtected, Is.True);
             Assert.That(File.Exists(Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete")), Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_RejectsStaleCandidateWithoutTouchingCurrentRuntime()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var oldProfile = CreateProtectedSetupProfile();
+            var candidateProfile = oldProfile with
+            {
+                SubmitBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+                NewlineBinding = SubmitKeyBinding.Parse("Enter").Binding
+            };
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { oldProfile }).Succeeded, Is.True);
+
+            var queuedWork = new Queue<Action>();
+            var candidateFactoryCalls = 0;
+            var protection = CreateManualOnlyTrayProtection(layout);
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                firstRunSetupControllerFactory: () => new TestSetupController(_ => new FirstRunSetupResult(
+                    Succeeded: true,
+                    Code: "focused_profile_verified",
+                    State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", true, false),
+                    Diagnostics: new Dictionary<string, string>
+                    {
+                        ["setup_attempt_id"] = "1"
+                    },
+                    PreviousProfiles: new[] { oldProfile },
+                    PendingProfiles: new[] { candidateProfile })),
+                backgroundWorkQueue: work => queuedWork.Enqueue(work),
+                uiDispatcher: work => work(),
+                scheduleFirstRunSetup: false,
+                candidateNativeSubmitRuntimeFactory: _ =>
+                {
+                    candidateFactoryCalls++;
+                    return null;
+                });
+
+            protection.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "waiting_for_focus",
+                "focus_message_composer",
+                AttemptId: 2));
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+
+            Assert.That(candidateFactoryCalls, Is.Zero);
+            Assert.That(SubmitBindingProfileStore.Load(layout).Profiles.Single().SubmitBinding!.DisplayText,
+                Is.EqualTo("Enter"));
+            Assert.That(protection.State.ProtectedSendBinding, Is.EqualTo("not_configured"));
+            Assert.That(File.Exists(Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete")), Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_RejectsCandidateWithoutAttemptId()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var oldProfile = CreateProtectedSetupProfile();
+            var candidateProfile = oldProfile with
+            {
+                SubmitBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+                NewlineBinding = SubmitKeyBinding.Parse("Enter").Binding
+            };
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { oldProfile }).Succeeded, Is.True);
+
+            var queuedWork = new Queue<Action>();
+            var candidateFactoryCalls = 0;
+            var protection = CreateManualOnlyTrayProtection(layout);
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                firstRunSetupControllerFactory: () => new TestSetupController(_ => new FirstRunSetupResult(
+                    Succeeded: true,
+                    Code: "focused_profile_verified",
+                    State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", true, false),
+                    Diagnostics: new Dictionary<string, string>(),
+                    PreviousProfiles: new[] { oldProfile },
+                    PendingProfiles: new[] { candidateProfile })),
+                backgroundWorkQueue: work => queuedWork.Enqueue(work),
+                uiDispatcher: work => work(),
+                scheduleFirstRunSetup: false,
+                candidateNativeSubmitRuntimeFactory: _ =>
+                {
+                    candidateFactoryCalls++;
+                    return null;
+                });
+
+            protection.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "waiting_for_focus",
+                "focus_message_composer",
+                AttemptId: 1));
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+
+            Assert.That(candidateFactoryCalls, Is.Zero);
+            Assert.That(SubmitBindingProfileStore.Load(layout).Profiles.Single().SubmitBinding!.DisplayText,
+                Is.EqualTo("Enter"));
+            Assert.That(File.Exists(Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete")), Is.False);
         }
         finally
         {
@@ -8467,6 +8663,11 @@ public class ResidentFirstRunSetupLaunchTests
             ProtectedSendAttemptStatus = "sent_safely",
             ProtectedSendAttemptAction = "none"
         });
+        var traceUnavailableText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState with
+        {
+            ProtectedSendAttemptStatus = "trace_unavailable",
+            ProtectedSendAttemptAction = "retry_protection"
+        });
 
         Assert.That(protectedText, Does.Contain("ChatGPT Desktop"));
         Assert.That(protectedText, Does.Contain("Ctrl+Enter"));
@@ -8475,7 +8676,9 @@ public class ResidentFirstRunSetupLaunchTests
         Assert.That(focusLostText, Does.Contain("focus it and send again"));
         Assert.That(checkingText, Is.EqualTo("Protected Send: checking prompt"));
         Assert.That(sentText, Is.EqualTo("Protected Send: sent safely"));
-        Assert.That(new[] { protectedText, setupText, repairText, focusLostText, checkingText, sentText }
+        Assert.That(traceUnavailableText, Does.Contain("trace unavailable"));
+        Assert.That(traceUnavailableText, Does.Contain("retry protection"));
+        Assert.That(new[] { protectedText, setupText, repairText, focusLostText, checkingText, sentText, traceUnavailableText }
             .All(text => !text.Contains(OsInteractionStatusIds.NativeSubmitSetupRequired, StringComparison.Ordinal)), Is.True);
     }
 

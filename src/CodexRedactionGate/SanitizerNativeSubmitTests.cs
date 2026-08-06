@@ -898,6 +898,7 @@ public partial class SanitizerTests
             (OsInteractionStatusIds.SurfaceUnverified, "binding_not_verified"),
             (OsInteractionStatusIds.NativeSubmitSetupRequired, "setup_required"),
             (OsInteractionStatusIds.FailedClosed, "protection_unavailable"),
+            (OsInteractionStatusIds.TraceUnavailable, "trace_unavailable"),
             (OsInteractionStatusIds.EnterpriseBlocked, "policy_blocked"),
             (OsInteractionStatusIds.BindingUnknown, "binding_not_verified"),
             (OsInteractionStatusIds.NotConfigured, "binding_not_verified")
@@ -927,6 +928,10 @@ public partial class SanitizerTests
 
             Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo(expectedAttemptStatus), flowStatus);
             Assert.That(controller.State.ProtectedSendAttemptStatus, Is.Not.EqualTo("sent_safely"), flowStatus);
+            if (flowStatus == OsInteractionStatusIds.TraceUnavailable)
+            {
+                Assert.That(controller.State.ReadinessStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
+            }
         }
     }
 

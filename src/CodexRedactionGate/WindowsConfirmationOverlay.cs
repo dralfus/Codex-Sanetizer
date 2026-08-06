@@ -8,7 +8,7 @@ using System.Windows.Forms;
 
 namespace CodexRedactionGate;
 
-public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
+public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay
 {
     public static IReadOnlyList<string> ForegroundActivationRequestCapabilities { get; } = new[]
     {
@@ -32,7 +32,15 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
 
     public ConfirmationDecision RequestConfirmation(ConfirmationUiModel model)
     {
+        return RequestConfirmation(model, static (_, _) => true);
+    }
+
+    public ConfirmationDecision RequestConfirmation(
+        ConfirmationUiModel model,
+        Func<string, string, bool> traceStage)
+    {
         ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(traceStage);
 
         if (!OperatingSystem.IsWindows())
         {
@@ -73,7 +81,7 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
                 };
                 Application.ThreadException += threadExceptionHandler;
 
-                using var ownedDialog = new ConfirmationDialog(model);
+                using var ownedDialog = new ConfirmationDialog(model, traceStage);
                 dialog = ownedDialog;
                 var result = dialog.ShowDialog();
                 decision = result == DialogResult.OK
@@ -108,8 +116,14 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
     {
         private readonly RichTextBox _promptBox;
 
-        public ConfirmationDialog(ConfirmationUiModel model)
+        private readonly Func<string, string, bool> _traceStage;
+        private bool _foregroundTracePublished;
+
+        public ConfirmationDialog(
+            ConfirmationUiModel model,
+            Func<string, string, bool> traceStage)
         {
+            _traceStage = traceStage;
             Text = "Codex Redaction Gate";
             StartPosition = FormStartPosition.CenterScreen;
             Width = 820;
@@ -179,7 +193,18 @@ public sealed class WindowsConfirmationOverlay : IConfirmationOverlay
 
         private void BringDialogToFront()
         {
-            ConfirmationOverlayForegroundActivation.Request(this, Win32ConfirmationOverlayNativeMethods.Instance);
+            var result = ConfirmationOverlayForegroundActivation.Request(this, Win32ConfirmationOverlayNativeMethods.Instance);
+            if (result.ForegroundActivated && !_foregroundTracePublished)
+            {
+                _foregroundTracePublished = _traceStage(
+                    "overlay_foreground_confirmed",
+                    "foreground_verified");
+                if (!_foregroundTracePublished)
+                {
+                    DialogResult = DialogResult.Cancel;
+                    Close();
+                }
+            }
         }
 
         private static void Highlight(RichTextBox promptBox, ConfirmationUiModel model)

@@ -935,7 +935,7 @@ internal sealed class TrayProtectionController
         {
             var result = runtime.Controller.CompleteGuardedSubmit(
                 classification,
-                () => RunNativeSubmitFlow(runtime, execution.Target));
+                () => RunNativeSubmitFlow(runtime, execution.Target, static (_, _) => true));
             PublishNativeSubmitState(snapshot,
                 result.Status,
                 NativeSubmitReadinessStatusAfterFlow(result.Status),
@@ -1043,17 +1043,18 @@ internal sealed class TrayProtectionController
         try
         {
             var targetFingerprint = ProtectedSendTrace.TargetFingerprint(execution.Target, runtime.Profile.ProfileId);
-            snapshot = PublishProtectedSendAttempt(
+            var detectedSnapshot = PublishProtectedSendAttempt(
                 snapshot,
                 "detected",
                 "checking_prompt",
                 targetFingerprint,
-                startNewAttempt: true)
-                ?? PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
-            if (snapshot is null)
+                startNewAttempt: true);
+            if (detectedSnapshot is null)
             {
+                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
                 return;
             }
+            snapshot = detectedSnapshot;
 
             snapshot = PublishProtectedSendAttempt(
                 snapshot,
@@ -1066,27 +1067,43 @@ internal sealed class TrayProtectionController
                 return;
             }
 
-            snapshot = PublishProtectedSendTrace(snapshot, targetFingerprint, "target_matched", "target_verified")
-                ?? PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
-            if (snapshot is null)
+            var targetMatchedSnapshot = PublishProtectedSendTrace(
+                snapshot,
+                targetFingerprint,
+                "target_matched",
+                "target_verified");
+            if (targetMatchedSnapshot is null)
             {
+                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
                 return;
+            }
+            snapshot = targetMatchedSnapshot;
+
+            bool TraceStage(string stage, string resultCode)
+            {
+                var tracedSnapshot = PublishProtectedSendTrace(snapshot, targetFingerprint, stage, resultCode);
+                if (tracedSnapshot is null)
+                {
+                    return false;
+                }
+
+                snapshot = tracedSnapshot;
+                return true;
             }
 
             var result = runtime.Controller.CompleteGuardedSubmit(
                 classification,
-                () => RunNativeSubmitFlow(runtime, execution.Target));
+                () => RunNativeSubmitFlow(runtime, execution.Target, TraceStage));
 
-            snapshot = PublishProtectedSendOutcomeTrace(
-                snapshot,
-                targetFingerprint,
-                result.Status,
-                result.Submitted)
-                ?? PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
-            if (snapshot is null)
+            var terminalTrace = result.Submitted
+                ? PublishProtectedSendTrace(snapshot, targetFingerprint, "sent_safely", result.Status)
+                : PublishProtectedSendTrace(snapshot, targetFingerprint, "terminal_blocked", result.Status);
+            if (terminalTrace is null)
             {
+                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
                 return;
             }
+            snapshot = terminalTrace;
 
             var readinessStatus = NativeSubmitReadinessStatusAfterFlow(result.Status);
             var setupRequired = readinessStatus == OsInteractionStatusIds.NativeSubmitSetupRequired;
@@ -1275,38 +1292,6 @@ internal sealed class TrayProtectionController
         }
     }
 
-    private ProtectionSnapshot? PublishProtectedSendOutcomeTrace(
-        ProtectionSnapshot snapshot,
-        string targetFingerprint,
-        string flowStatus,
-        bool submitted)
-    {
-        if (!submitted)
-        {
-            return PublishProtectedSendTrace(snapshot, targetFingerprint, "terminal_blocked", flowStatus);
-        }
-
-        var current = PublishProtectedSendTrace(snapshot, targetFingerprint, "composer_read", "capture_verified");
-        if (current is null)
-        {
-            return null;
-        }
-
-        current = PublishProtectedSendTrace(current, targetFingerprint, "sanitized", "sanitization_verified");
-        if (current is null)
-        {
-            return null;
-        }
-
-        current = PublishProtectedSendTrace(current, targetFingerprint, "send_injected", "submit_requested");
-        if (current is null)
-        {
-            return null;
-        }
-
-        return PublishProtectedSendTrace(current, targetFingerprint, "sent_safely", flowStatus);
-    }
-
     private ProtectionSnapshot? PublishTraceUnavailable(ProtectionSnapshot source, string? profileId)
     {
         var current = ReadSnapshot();
@@ -1403,6 +1388,7 @@ internal sealed class TrayProtectionController
             or OsInteractionStatusIds.BindingUnknown
             or OsInteractionStatusIds.NotConfigured
             or OsInteractionStatusIds.NativeSubmitSetupRequired
+            or OsInteractionStatusIds.TraceUnavailable
             or OsInteractionStatusIds.FocusLost
             or OsInteractionStatusIds.StaleComposer
             ? flowStatus
@@ -1880,11 +1866,42 @@ internal sealed class TrayProtectionController
 
     private static OsInteractionResult RunNativeSubmitFlow(
         NativeSubmitRuntime runtime,
-        NativeSubmitTargetIdentity? target)
+        NativeSubmitTargetIdentity? target,
+        Func<string, string, bool> traceStage)
     {
+        if (runtime.TargetTracedRunner is not null
+            && target is not null
+            && string.Equals(target.ProfileId, runtime.Profile.ProfileId, StringComparison.Ordinal))
+        {
+            return runtime.TargetTracedRunner(target, traceStage);
+        }
+
+        if (runtime.TracedRunner is not null && target is null)
+        {
+            return runtime.TracedRunner(traceStage);
+        }
+
+        if (runtime.TraceRequired)
+        {
+            return new OsInteractionResult(
+                OsInteractionStatusIds.FailedClosed,
+                Surface: null,
+                SanitizationResult: null,
+                ConfirmationModel: null,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["trace_status"] = "trace_runner_unavailable"
+                });
+        }
+
         if (runtime.TargetRunner is null)
         {
-            return runtime.Runner();
+            var result = runtime.Runner();
+            return result.Submitted
+                ? AppendLegacyTestTrace(result, traceStage)
+                : result;
         }
 
         if (target is null || !string.Equals(target.ProfileId, runtime.Profile.ProfileId, StringComparison.Ordinal))
@@ -1902,7 +1919,41 @@ internal sealed class TrayProtectionController
                 });
         }
 
-        return runtime.TargetRunner(target);
+        var targetResult = runtime.TargetRunner(target);
+        return targetResult.Submitted
+            ? AppendLegacyTestTrace(targetResult, traceStage)
+            : targetResult;
+    }
+
+    private static OsInteractionResult AppendLegacyTestTrace(
+        OsInteractionResult result,
+        Func<string, string, bool> traceStage)
+    {
+        // Controller-only tests inject a completed runner instead of an orchestrator.
+        // Production runtimes set TraceRequired and use one of the traced runners above.
+        foreach (var stage in new[]
+        {
+            (Stage: "composer_read", Code: "capture_verified"),
+            (Stage: "sanitized", Code: "sanitization_verified"),
+            (Stage: "send_injected", Code: "submit_requested")
+        })
+        {
+            if (!traceStage(stage.Stage, stage.Code))
+            {
+                return result with
+                {
+                    Status = OsInteractionStatusIds.FailedClosed,
+                    Applied = false,
+                    Submitted = false,
+                    Diagnostics = new Dictionary<string, string>
+                    {
+                        ["trace_status"] = "legacy_trace_unavailable"
+                    }
+                };
+            }
+        }
+
+        return result;
     }
 
     private static IReadOnlyList<NativeSubmitRuntime> CreateSingleRuntimeList(
@@ -1922,7 +1973,10 @@ internal sealed record NativeSubmitRuntime(
     NativeSubmitInterceptionController Controller,
     Func<OsInteractionResult> Runner,
     SubmitBindingProfile Profile,
-    Func<NativeSubmitTargetIdentity, OsInteractionResult>? TargetRunner = null);
+    Func<NativeSubmitTargetIdentity, OsInteractionResult>? TargetRunner = null,
+    Func<Func<string, string, bool>, OsInteractionResult>? TracedRunner = null,
+    Func<NativeSubmitTargetIdentity, Func<string, string, bool>, OsInteractionResult>? TargetTracedRunner = null,
+    bool TraceRequired = false);
 
 internal sealed record NativeSubmitRuntimeSet(
     INativeSubmitHookHost HookHost,
@@ -1999,7 +2053,7 @@ internal static class TrayStatusFormatter
         return value is "idle" or "detected" or "checking" or "in_progress" or "sent_safely"
             or "setup_required" or "binding_not_verified" or "composer_changed" or "canceled"
             or "local_protection_unavailable" or "policy_blocked" or "protection_unavailable"
-            or "content_blocked"
+            or "content_blocked" or "trace_unavailable"
             ? value
             : "unavailable";
     }
@@ -2035,7 +2089,8 @@ internal static class TrayStatusFormatter
                 or OsInteractionStatusIds.NativeSubmitGuarded or OsInteractionStatusIds.NativeSubmitInProgress
                 or OsInteractionStatusIds.NativeSubmitPassThrough or OsInteractionStatusIds.NativeSubmitCrashed
                 or OsInteractionStatusIds.EmergencyDisabled or OsInteractionStatusIds.EnterpriseBlocked
-                or OsInteractionStatusIds.NativeSubmitSetupRequired or OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported
+                or OsInteractionStatusIds.NativeSubmitSetupRequired or OsInteractionStatusIds.TraceUnavailable
+                or OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported
                 or LocalProtectionRecovery.ReadyCode or LocalProtectionRecovery.RecoveryRequiredCode
                 or LocalProtectionRecovery.ConfirmationRequiredCode or LocalProtectionRecovery.RecoveredCode
                 or LocalProtectionRecovery.RecoveryFailedCode or LocalProtectionRecovery.RecoveryNotRequiredCode
