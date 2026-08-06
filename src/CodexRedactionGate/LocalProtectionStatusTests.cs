@@ -33,7 +33,7 @@ public sealed class LocalProtectionStatusTests
 
         Assert.That(form.CurrentRows[0].OperationalState, Is.EqualTo("recovery required"));
         Assert.That(form.CurrentRows[1].OperationalState, Is.EqualTo("unavailable"));
-        Assert.That(form.CurrentRows[1].Action, Is.EqualTo(LocalProtectionStatusAction.None));
+        Assert.That(form.CurrentRows[1].Action, Is.EqualTo(LocalProtectionStatusAction.RepairLocalProtection));
 
         state = state with { LocalProtectionStatus = LocalProtectionRecovery.ReadyCode };
         form.RefreshView();
@@ -249,8 +249,9 @@ public sealed class LocalProtectionStatusTests
 
         Assert.That(view.Rows[0].OperationalState, Is.EqualTo("recovery required"));
         Assert.That(view.Rows[0].Action, Is.EqualTo(LocalProtectionStatusAction.RepairLocalProtection));
-        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("setup required"));
-        Assert.That(view.Rows[1].Consequence, Does.Contain("blocked"));
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("unavailable"));
+        Assert.That(view.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.RepairLocalProtection));
+        Assert.That(view.Rows[1].Consequence, Does.Contain("local protection is ready"));
         Assert.That(view.Rows[2].OperationalState, Is.EqualTo("not configured"));
     }
 
@@ -306,7 +307,7 @@ public sealed class LocalProtectionStatusTests
 
         Assert.That(view.Rows[0].OperationalState, Is.Not.EqualTo("ready"));
         Assert.That(view.Rows[1].OperationalState, Is.EqualTo("unavailable"));
-        Assert.That(view.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.None));
+        Assert.That(view.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.RepairLocalProtection));
     }
 
     [Test]
