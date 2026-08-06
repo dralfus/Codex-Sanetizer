@@ -1227,7 +1227,7 @@ boundary.
   runtime snapshot or attempt.
 - [x] The interruption remains visible as a raw-free recovery state without
   claiming the new runtime completed the old Send.
-- [ ] Tests cover replacement during detection, checking, overlay, write, and
+- [x] Tests cover replacement during detection, checking, overlay, write, and
   replay stages.
 
 ## 313. Prove runtime replacement at every protected-Send stage
@@ -1259,8 +1259,8 @@ cloud services and assert generation identity, attempt identity, no old trace
 entries in the new snapshot, no stale side effects, and raw-free status for
 each stage.
 
-- [ ] Detection replacement is covered.
-- [ ] Checking replacement is covered.
-- [ ] Overlay replacement is covered.
-- [ ] Text-write replacement is covered.
-- [ ] Replay replacement is covered.
+- [x] Detection replacement is covered.
+- [x] Checking replacement is covered.
+- [x] Overlay replacement is covered.
+- [x] Text-write replacement is covered.
+- [x] Replay replacement is covered.

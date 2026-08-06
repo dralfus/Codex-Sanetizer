@@ -898,6 +898,112 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_RuntimeReloadInterruptsAtEveryProtectedSendStage()
+    {
+        foreach (var reloadStage in new[] { "detection", "checking", "overlay", "write", "replay" })
+        {
+            var oldHook = new FakeNativeSubmitHookHost();
+            var replacementHook = new FakeNativeSubmitHookHost();
+            var profile = CreateProtectedProfile();
+            var oldSubmitSideEffects = 0;
+            var replacementSubmitSideEffects = 0;
+            var reloaded = false;
+            TrayProtectionController? controller = null;
+
+            OsInteractionResult SubmittedResult() => new(
+                OsInteractionStatusIds.Submitted,
+                CreateNativeSubmitSurface(profile.ProfileId),
+                null,
+                null,
+                Applied: true,
+                Submitted: true,
+                Diagnostics: new Dictionary<string, string>());
+
+            OsInteractionResult CompleteWithoutSideEffect(
+                Func<string, string, bool>? traceStage = null,
+                bool countSideEffect = false)
+            {
+                var stages = new[]
+                {
+                    (Stage: "composer_read", Code: "capture_verified"),
+                    (Stage: "sanitized", Code: "sanitization_verified"),
+                    (Stage: "overlay_created", Code: "confirmation_requested"),
+                    (Stage: "overlay_foreground_confirmed", Code: "foreground_verified"),
+                    (Stage: "approved", Code: "user_approved"),
+                    (Stage: "text_written", Code: "write_verified"),
+                    (Stage: "send_injected", Code: "submit_requested")
+                };
+                foreach (var stage in stages)
+                {
+                    if (traceStage is not null && !traceStage(stage.Stage, stage.Code))
+                    {
+                        break;
+                    }
+                }
+
+                if (countSideEffect)
+                {
+                    oldSubmitSideEffects++;
+                }
+
+                return SubmittedResult();
+            }
+
+            var replacementRuntime = new NativeSubmitRuntime(
+                replacementHook,
+                new NativeSubmitInterceptionController(
+                    profile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () =>
+                {
+                    replacementSubmitSideEffects++;
+                    return SubmittedResult();
+                },
+                profile);
+
+            var oldRuntime = new NativeSubmitRuntime(
+                oldHook,
+                new NativeSubmitInterceptionController(
+                    profile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () => CompleteWithoutSideEffect(countSideEffect: true),
+                profile,
+                TracedRunner: traceStage => CompleteWithoutSideEffect(traceStage),
+                TraceRequired: true);
+
+            controller = new TrayProtectionController(
+                new FakeTrayHotkeyHost(),
+                () => throw new InvalidOperationException("Manual scan should not run."),
+                oldHook,
+                oldRuntime.Controller,
+                oldRuntime.Runner,
+                profile,
+                protectedSendStageObserver: stage =>
+                {
+                    if (stage == reloadStage && !reloaded)
+                    {
+                        reloaded = true;
+                        Assert.That(controller!.ReloadNativeSubmit(replacementRuntime), Is.True, reloadStage);
+                    }
+                },
+                nativeSubmitRuntimes: new[] { oldRuntime });
+
+            Assert.That(controller.Start(), Is.True, reloadStage);
+            oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+            Assert.That(reloaded, Is.True, reloadStage);
+            Assert.That(oldSubmitSideEffects, Is.Zero, reloadStage);
+            Assert.That(replacementSubmitSideEffects, Is.Zero, reloadStage);
+            Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("idle"), reloadStage);
+            Assert.That(controller.State.ProtectedSendAttemptId, Is.Zero, reloadStage);
+            Assert.That(controller.State.ProtectedSendAttemptTrace, Is.Null.Or.Empty, reloadStage);
+            Assert.That(controller.State.LastProtectedSendInterruption, Is.Not.Null, reloadStage);
+            Assert.That(controller.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("runtime_replaced"), reloadStage);
+            Assert.That(controller.State.LastProtectedSendInterruption.Action, Is.EqualTo("retry_protection"), reloadStage);
+        }
+    }
+
+    [Test]
     public void TrayProtectionController_PublishesDistinctTerminalProtectedSendAttemptStatuses()
     {
         foreach (var (flowStatus, expectedAttemptStatus) in new[]

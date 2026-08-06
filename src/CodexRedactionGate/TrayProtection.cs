@@ -90,6 +90,7 @@ internal sealed class TrayProtectionController
     private readonly NativeSubmitEnterprisePolicy _enterprisePolicy;
     private readonly DefaultStorageLayout _storageLayout;
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
+    private readonly Action<string>? _protectedSendStageObserver;
     private readonly ConcurrentDictionary<CapturedTargetProfileKey, string> _capturedTargetProfiles = new();
     private readonly object _reloadGate = new();
     private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
@@ -113,7 +114,8 @@ internal sealed class TrayProtectionController
         ISendControlDiscovery? sendControlDiscovery = null,
         IReadOnlyList<NativeSubmitRuntime>? nativeSubmitRuntimes = null,
         Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null,
-        Func<IntPtr, string?>? selectedWindowProfileResolver = null)
+        Func<IntPtr, string?>? selectedWindowProfileResolver = null,
+        Action<string>? protectedSendStageObserver = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
@@ -126,6 +128,7 @@ internal sealed class TrayProtectionController
         _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         _storageLayout = storageLayout ?? DefaultStorageLayout.CreateDefault();
         _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
+        _protectedSendStageObserver = protectedSendStageObserver;
         var surfaceDiscovery = activeSurfaceDiscovery ?? (() => TextSurfaceDiscoveryResult.Failure(
             OsInteractionStatusIds.NotComposer,
             new Dictionary<string, string>()));
@@ -1042,6 +1045,7 @@ internal sealed class TrayProtectionController
                 return;
             }
             snapshot = detectedSnapshot;
+            ObserveProtectedSendStage("detection");
 
             var checkingSnapshot = PublishProtectedSendAttempt(
                 snapshot,
@@ -1055,6 +1059,7 @@ internal sealed class TrayProtectionController
                 return;
             }
             snapshot = checkingSnapshot;
+            ObserveProtectedSendStage("checking");
 
             var targetMatchedSnapshot = PublishProtectedSendTrace(
                 snapshot,
@@ -1070,6 +1075,13 @@ internal sealed class TrayProtectionController
 
             bool TraceStage(string stage, string resultCode)
             {
+                ObserveProtectedSendStage(stage switch
+                {
+                    "overlay_created" or "overlay_foreground_confirmed" => "overlay",
+                    "text_written" => "write",
+                    "send_injected" => "replay",
+                    _ => stage
+                });
                 var tracedSnapshot = PublishProtectedSendTrace(snapshot, targetFingerprint, stage, resultCode);
                 if (tracedSnapshot is null)
                 {
@@ -1325,6 +1337,11 @@ internal sealed class TrayProtectionController
     {
         return state.ProtectedSendAttemptStatus is "detected" or "checking" or "in_progress"
             && state.ProtectedSendAttemptId > 0;
+    }
+
+    private void ObserveProtectedSendStage(string stage)
+    {
+        _protectedSendStageObserver?.Invoke(stage);
     }
 
     private static TrayProtectionState CarryRuntimeReloadSendState(
