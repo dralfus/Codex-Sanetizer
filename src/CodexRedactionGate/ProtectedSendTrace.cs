@@ -84,6 +84,7 @@ internal static class ProtectedSendTrace
             "sanitized" => next is "overlay_created" or "send_injected" or "terminal_blocked",
             "overlay_created" => next is "overlay_foreground_confirmed" or "terminal_blocked",
             "overlay_foreground_confirmed" => next is "approved" or "cancelled" or "terminal_blocked",
+            "cancelled" => next is "terminal_blocked",
             "approved" => next is "text_written" or "send_injected" or "terminal_blocked",
             "text_written" => next is "send_injected" or "terminal_blocked",
             "send_injected" => next is "sent_safely" or "terminal_blocked",

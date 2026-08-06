@@ -883,8 +883,8 @@ public partial class SanitizerTests
         Assert.That(controller.Start(), Is.True);
         oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
 
-        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("composer_changed"));
-        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("focus_and_send_again"));
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("trace_unavailable"));
+        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("retry_protection"));
         Assert.That(controller.State.ProtectedSendAttemptId, Is.GreaterThan(0));
     }
 
@@ -3228,6 +3228,32 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(controller.State, Is.EqualTo(before.State));
         Assert.That(oldHook.Started, Is.True);
         Assert.That(failedHook.Started, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_DoesNotPublishRuntimeWhenResidentGateIsDisabled()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var candidateHook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var before = controller.GetCurrentSnapshot();
+        var candidateRuntime = new NativeSubmitRuntime(
+            candidateHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+
+        Assert.That(controller.ReloadNativeSubmit(candidateRuntime), Is.False);
+        Assert.That(controller.GetCurrentSnapshot(), Is.SameAs(before));
+        Assert.That(candidateHook.Started, Is.False);
+        Assert.That(controller.IsNativeSubmitHookReady, Is.False);
     }
 
     [Test]

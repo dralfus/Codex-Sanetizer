@@ -151,6 +151,13 @@ public sealed class OsInteractionOrchestrator
                 : _confirmationOverlay.RequestConfirmation(model);
             if (!decision.Approved || decision.Payload is null)
             {
+                if (!TryTrace(traceStage, "cancelled", "user_cancelled"))
+                {
+                    return Finish(OsInteractionStatusIds.FailedClosed, surface, result, model, false, false, Merge(
+                        diagnostics,
+                        ("trace_status", "cancellation_unavailable")));
+                }
+
                 return Finish(OsInteractionStatusIds.Canceled, surface, result, model, false, false, diagnostics);
             }
 

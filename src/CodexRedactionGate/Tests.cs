@@ -2054,6 +2054,34 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void OsInteractionOrchestrator_RecordsCancellationBeforeTerminalOutcome()
+    {
+        var surface = new ProductFlowTextSurface("Connect to 192.168.10.25");
+        var stages = new List<string>();
+        var orchestrator = CreateProductFlowOrchestrator(surface, ConfirmationDecisionContract.Cancel);
+
+        var result = orchestrator.RunOnce(
+            OsInteractionRunOptions.ConfirmAndSend,
+            (stage, _) =>
+            {
+                stages.Add(stage);
+                return true;
+            });
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Canceled));
+        Assert.That(result.Submitted, Is.False);
+        Assert.That(stages, Is.EqualTo(new[]
+        {
+            "composer_read",
+            "sanitized",
+            "overlay_created",
+            "overlay_foreground_confirmed",
+            "cancelled"
+        }));
+        Assert.That(surface.SubmitCount, Is.Zero);
+    }
+
+    [Test]
     public void OsInteractionOrchestrator_BlocksSubmitWhenTraceCannotAdvance()
     {
         var surface = new ProductFlowTextSurface("Safe prompt");

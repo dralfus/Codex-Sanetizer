@@ -444,13 +444,9 @@ internal sealed class TrayProtectionController
 
         if (!previous.State.Enabled)
         {
-            if (!TryPublishRuntimeCandidate(previous, candidate))
-            {
-                return false;
-            }
-
-            previous.RuntimeSet?.HookHost.Stop();
-            return true;
+            // A candidate must never become the active protected runtime while
+            // the resident gate is disabled or its hook is not ready.
+            return false;
         }
 
         if (!StartNativeSubmitHook(candidate.RuntimeSet!))
@@ -1051,7 +1047,7 @@ internal sealed class TrayProtectionController
                 startNewAttempt: true);
             if (detectedSnapshot is null)
             {
-                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
+                PublishTraceUnavailable(ReadSnapshot(), runtime.Profile.ProfileId);
                 return;
             }
             snapshot = detectedSnapshot;
@@ -1064,6 +1060,7 @@ internal sealed class TrayProtectionController
                 startNewAttempt: false);
             if (snapshot is null)
             {
+                PublishTraceUnavailable(ReadSnapshot(), runtime.Profile.ProfileId);
                 return;
             }
 
@@ -1074,7 +1071,7 @@ internal sealed class TrayProtectionController
                 "target_verified");
             if (targetMatchedSnapshot is null)
             {
-                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
+                PublishTraceUnavailable(ReadSnapshot(), runtime.Profile.ProfileId);
                 return;
             }
             snapshot = targetMatchedSnapshot;
@@ -1100,7 +1097,7 @@ internal sealed class TrayProtectionController
                 : PublishProtectedSendTrace(snapshot, targetFingerprint, "terminal_blocked", result.Status);
             if (terminalTrace is null)
             {
-                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
+                PublishTraceUnavailable(ReadSnapshot(), runtime.Profile.ProfileId);
                 return;
             }
             snapshot = terminalTrace;
