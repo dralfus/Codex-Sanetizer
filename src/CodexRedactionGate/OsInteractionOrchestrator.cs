@@ -255,6 +255,12 @@ public sealed class OsInteractionOrchestrator
                 return ExecutionGuardFailed(submitSurface, result, model, true, unchangedDiagnostics);
             }
 
+            if (!CanExecute(executionGuard))
+            {
+                submitLease?.Dispose();
+                return ExecutionGuardFailed(submitSurface, result, model, true, unchangedDiagnostics);
+            }
+
             SubmitActionResult submitWithoutWrite;
             try
             {
@@ -293,6 +299,12 @@ public sealed class OsInteractionOrchestrator
 
         if (!TryAcquireExecutionLease(executionGuard, executionLease, out var writeLease))
         {
+            return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics);
+        }
+
+        if (!CanExecute(executionGuard))
+        {
+            writeLease?.Dispose();
             return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics);
         }
 
@@ -389,6 +401,17 @@ public sealed class OsInteractionOrchestrator
 
         if (!TryAcquireExecutionLease(executionGuard, executionLease, out var replayLease))
         {
+            return ExecutionGuardFailed(verificationSurface, result, model, true, Merge(
+                diagnostics,
+                replace.Diagnostics,
+                verificationCapture.Diagnostics,
+                ("write_status", replace.Status),
+                ("verification_status", verificationCapture.Status)));
+        }
+
+        if (!CanExecute(executionGuard))
+        {
+            replayLease?.Dispose();
             return ExecutionGuardFailed(verificationSurface, result, model, true, Merge(
                 diagnostics,
                 replace.Diagnostics,

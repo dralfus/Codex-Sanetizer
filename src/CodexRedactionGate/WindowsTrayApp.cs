@@ -317,18 +317,17 @@ public static class WindowsTrayApp
                 hookHost,
                 controller,
                 nativeProfile,
-                ResidentTracedRunner: (traceStage, executionGuard, executionLease) => RunConfirmAndSend(
-                    target: null,
-                    traceStage: traceStage,
-                    executionGuard: executionGuard,
-                    executionLease: executionLease),
                 ResidentTargetTracedRunner: (target, traceStage, executionGuard, executionLease) => RunConfirmAndSend(
                     target: target,
                     traceStage: traceStage,
                     executionGuard: executionGuard,
                     executionLease: executionLease));
         }).ToArray();
-        return new NativeSubmitRuntimeSet(hookHost, runtimes, confirmationOverlay);
+        return new NativeSubmitRuntimeSet(
+            hookHost,
+            runtimes,
+            confirmationOverlay,
+            confirmationOverlay.CancelActiveConfirmation);
     }
 
     internal static SubmitBindingProfile? ResolveNativeProfileForProtection(DefaultStorageLayout layout)

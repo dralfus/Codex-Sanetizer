@@ -28,6 +28,28 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
         public ConfirmationDecision? Decision { get; set; }
 
         public ManualResetEventSlim Completed { get; } = new(false);
+
+        private int _cancelled;
+        private int _completed;
+
+        public bool IsCancelled => Volatile.Read(ref _cancelled) != 0;
+
+        public void Cancel()
+        {
+            Interlocked.Exchange(ref _cancelled, 1);
+        }
+
+        public bool TryComplete(ConfirmationDecision decision)
+        {
+            if (Interlocked.Exchange(ref _completed, 1) != 0)
+            {
+                return false;
+            }
+
+            Decision = decision;
+            Completed.Set();
+            return true;
+        }
     }
 
     private readonly BlockingCollection<PendingRequest> _pending = new();
@@ -35,7 +57,9 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
     private readonly Action _cancelActive;
     private readonly object _gate = new();
     private readonly Thread _thread;
+    private PendingRequest? _activeRequest;
     private int _disposed;
+    private int _cancelled;
     private int _uiThreadId;
 
     public ResidentOverlayDispatchQueue(
@@ -69,7 +93,7 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(traceStage);
 
-        if (Volatile.Read(ref _disposed) != 0)
+        if (Volatile.Read(ref _disposed) != 0 || Volatile.Read(ref _cancelled) != 0)
         {
             return ConfirmationDecisionContract.Cancel(model);
         }
@@ -82,7 +106,7 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
         var request = new PendingRequest(model, traceStage);
         lock (_gate)
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (Volatile.Read(ref _disposed) != 0 || Volatile.Read(ref _cancelled) != 0)
             {
                 return ConfirmationDecisionContract.Cancel(model);
             }
@@ -112,10 +136,12 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
         {
             _pending.CompleteAdding();
         }
-        _cancelActive();
-        if (Environment.CurrentManagedThreadId != UiThreadId)
+        CancelPending();
+        var joined = Environment.CurrentManagedThreadId == UiThreadId
+            || _thread.Join(TimeSpan.FromSeconds(5));
+        if (!joined)
         {
-            _thread.Join();
+            return;
         }
 
         while (_pending.TryTake(out var request))
@@ -126,15 +152,44 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
         _pending.Dispose();
     }
 
+    public void CancelPending()
+    {
+        Interlocked.Exchange(ref _cancelled, 1);
+        lock (_gate)
+        {
+            foreach (var request in _pending)
+            {
+                CancelAndComplete(request);
+            }
+
+            if (_activeRequest is not null)
+            {
+                CancelAndComplete(_activeRequest);
+            }
+        }
+
+        _cancelActive();
+    }
+
     private void Run()
     {
         Volatile.Write(ref _uiThreadId, Environment.CurrentManagedThreadId);
         foreach (var request in _pending.GetConsumingEnumerable())
         {
-            var decision = Volatile.Read(ref _disposed) == 0
-                ? Execute(request.Model, request.TraceStage)
-                : ConfirmationDecisionContract.Cancel(request.Model);
-            Complete(request, decision);
+            Volatile.Write(ref _activeRequest, request);
+            try
+            {
+                var decision = Volatile.Read(ref _disposed) == 0
+                    && Volatile.Read(ref _cancelled) == 0
+                    && !request.IsCancelled
+                    ? Execute(request.Model, request.TraceStage)
+                    : ConfirmationDecisionContract.Cancel(request.Model);
+                Complete(request, decision);
+            }
+            finally
+            {
+                Volatile.Write(ref _activeRequest, null);
+            }
         }
     }
 
@@ -144,6 +199,11 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
     {
         try
         {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return ConfirmationDecisionContract.Cancel(model);
+            }
+
             return _handler(model, traceStage)
                 ?? ConfirmationDecisionContract.Cancel(model);
         }
@@ -155,8 +215,13 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
 
     private static void Complete(PendingRequest request, ConfirmationDecision decision)
     {
-        request.Decision = decision;
-        request.Completed.Set();
+        request.TryComplete(decision);
+    }
+
+    private static void CancelAndComplete(PendingRequest request)
+    {
+        request.Cancel();
+        Complete(request, ConfirmationDecisionContract.Cancel(request.Model));
     }
 }
 
@@ -219,6 +284,11 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
         _dispatcher?.Dispose();
     }
 
+    internal void CancelActiveConfirmation()
+    {
+        _dispatcher?.CancelPending();
+    }
+
     private ConfirmationDecision ShowConfirmation(
         ConfirmationUiModel model,
         Func<string, string, bool> traceStage)
@@ -246,6 +316,11 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
             using var ownedDialog = new ConfirmationDialog(model, traceStage);
             dialog = ownedDialog;
             Volatile.Write(ref _activeDialog, dialog);
+            if (dialog.CloseRequested)
+            {
+                return ConfirmationDecisionContract.Cancel(model);
+            }
+
             var result = dialog.ShowDialog();
             return dialogException is null && result == DialogResult.OK
                 ? new ConfirmationDecision(true, new ApprovedSanitizedPayload(dialog.EditedSanitizedText))
@@ -272,30 +347,14 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
 
     private static void CloseDialog(ConfirmationDialog? dialog)
     {
-        if (dialog is null || dialog.IsDisposed)
+        if (dialog is null)
         {
             return;
         }
 
         try
         {
-            void Close()
-            {
-                if (!dialog.IsDisposed)
-                {
-                    dialog.DialogResult = DialogResult.Cancel;
-                    dialog.Close();
-                }
-            }
-
-            if (dialog.InvokeRequired)
-            {
-                dialog.BeginInvoke((Action)Close);
-            }
-            else
-            {
-                Close();
-            }
+            dialog.RequestClose();
         }
         catch
         {
@@ -309,6 +368,7 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
 
         private readonly Func<string, string, bool> _traceStage;
         private bool _foregroundTracePublished;
+        private int _closeRequested;
 
         public ConfirmationDialog(
             ConfirmationUiModel model,
@@ -381,6 +441,44 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
         }
 
         public string EditedSanitizedText => _promptBox.Text;
+
+        public bool CloseRequested => Volatile.Read(ref _closeRequested) != 0;
+
+        public void RequestClose()
+        {
+            Interlocked.Exchange(ref _closeRequested, 1);
+            if (IsDisposed || !IsHandleCreated)
+            {
+                return;
+            }
+
+            void Close()
+            {
+                if (!IsDisposed)
+                {
+                    DialogResult = DialogResult.Cancel;
+                    base.Close();
+                }
+            }
+
+            if (InvokeRequired)
+            {
+                BeginInvoke((Action)Close);
+            }
+            else
+            {
+                Close();
+            }
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            if (CloseRequested)
+            {
+                RequestClose();
+            }
+        }
 
         private void BringDialogToFront()
         {

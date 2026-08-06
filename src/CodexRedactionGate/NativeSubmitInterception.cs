@@ -1380,8 +1380,10 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     private readonly NativeMethods.LowLevelKeyboardProc _callback;
     private readonly NativeMethods.LowLevelMouseProc _mouseCallback;
     private readonly IReadOnlyDictionary<string, SubmitKeyBinding> _submitBindings;
+    private readonly IReadOnlySet<string> _configuredProfiles;
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
-    private readonly ConcurrentDictionary<(nint Window, uint ProcessId), byte> _selectedTargets = new();
+    private readonly ConcurrentDictionary<(nint Window, uint ProcessId), string> _selectedTargets = new();
+    private Timer? _selectedTargetMonitor;
     private IntPtr _hook;
     private IntPtr _mouseHook;
     private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
@@ -1397,7 +1399,13 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     {
         _callback = HookCallback;
         _mouseCallback = MouseHookCallback;
-        _submitBindings = (profiles ?? Array.Empty<SubmitBindingProfile>())
+        var configuredProfiles = (profiles ?? Array.Empty<SubmitBindingProfile>())
+            .Where(profile => profile.Enabled)
+            .ToArray();
+        _configuredProfiles = configuredProfiles
+            .Select(profile => profile.ProfileId)
+            .ToHashSet(StringComparer.Ordinal);
+        _submitBindings = configuredProfiles
             .Where(profile => profile.Enabled && profile.SubmitBinding is not null)
             .ToDictionary(profile => profile.ProfileId, profile => profile.SubmitBinding!, StringComparer.Ordinal);
         _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
@@ -1441,12 +1449,21 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             return false;
         }
 
+        RefreshSelectedTarget();
+        _selectedTargetMonitor = new Timer(
+            static state => ((WindowsNativeSubmitHookHost)state!).RefreshSelectedTarget(),
+            this,
+            TimeSpan.Zero,
+            TimeSpan.FromMilliseconds(100));
         LastErrorCode = null;
         return true;
     }
 
     public void Stop()
     {
+        _selectedTargetMonitor?.Dispose();
+        _selectedTargetMonitor = null;
+
         if (_hook != IntPtr.Zero)
         {
             NativeMethods.UnhookWindowsHookEx(_hook);
@@ -1465,6 +1482,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         _classifyPointer = null;
         _onSuppressedPointerSubmit = null;
         _shouldSuppressPointerClassificationFailure = null;
+        _selectedTargets.Clear();
     }
 
     public bool StartPointer(
@@ -1535,15 +1553,12 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        var result = ClassifyKeyboardWithinBudget(gesture);
-
-        if (!result.SuppressOriginalInput)
+        if (!IsSelectedSubmitGesture(gesture))
         {
             return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        QueueKeyboardSuppressedSubmit(gesture, result);
-
+        QueueKeyboardClassification(gesture);
         return new IntPtr(1);
     }
 
@@ -1578,7 +1593,8 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     {
         return ClassifyWithinBudget(
             () => _classifyPointer!(gesture),
-            () => ShouldSuppressPointerClassificationFailure(gesture),
+            () => ShouldSuppressPointerClassificationFailure(gesture)
+                || IsSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId),
             result => RememberSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId, result),
             result => QueuePointerSuppressedSubmit(gesture, result),
             "pointer");
@@ -1592,6 +1608,29 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             result => RememberSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId, result),
             result => QueueKeyboardSuppressedSubmit(gesture, result),
             "keyboard");
+    }
+
+    private void QueueKeyboardClassification(NativeKeyGesture gesture)
+    {
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            NativeSubmitInterceptionResult result;
+            try
+            {
+                result = _classify!(gesture);
+                RememberSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId, result);
+            }
+            catch
+            {
+                result = CompletedClassificationUnavailableResult("keyboard");
+            }
+
+            QueueKeyboardSuppressedSubmit(
+                gesture,
+                result.SuppressOriginalInput
+                    ? result
+                    : CompletedClassificationUnavailableResult("keyboard"));
+        });
     }
 
     private void QueueKeyboardSuppressedSubmit(
@@ -1636,23 +1675,23 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             return false;
         }
 
-        return IsKnownSelectedSubmit(gesture)
-            || IsKnownSelectedProfileWithoutBinding(gesture.TargetWindow);
+        // The low-level callback only uses the resident selected-target verdict.
+        // Surface and UI Automation checks run after the event is suppressed.
+        return virtualKey == VkReturn && IsSelectedSubmitGesture(gesture);
     }
 
-    private bool IsKnownSelectedSubmit(NativeKeyGesture gesture)
+    private bool IsSelectedSubmitGesture(NativeKeyGesture gesture)
     {
-        var profileId = ResolveSelectedWindowProfile(gesture.TargetWindow);
-        return !string.IsNullOrWhiteSpace(profileId)
-            && _submitBindings.TryGetValue(profileId, out var submitBinding)
-            && submitBinding.Matches(gesture);
-    }
+        if (!IsSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId))
+        {
+            return false;
+        }
 
-    private bool IsKnownSelectedProfileWithoutBinding(IntPtr targetWindow)
-    {
-        var profileId = ResolveSelectedWindowProfile(targetWindow);
-        return !string.IsNullOrWhiteSpace(profileId)
-            && !_submitBindings.ContainsKey(profileId);
+        var key = ((nint)RootWindow(gesture.TargetWindow), gesture.TargetProcessId);
+        return _selectedTargets.TryGetValue(key, out var profileId)
+            && (_submitBindings.TryGetValue(profileId, out var submitBinding)
+                ? submitBinding.Matches(gesture)
+                : _configuredProfiles.Contains(profileId));
     }
 
     private string? ResolveSelectedWindowProfile(IntPtr targetWindow)
@@ -1670,6 +1709,46 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         {
             return null;
         }
+    }
+
+    private void RefreshSelectedTarget()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var window = NativeMethods.GetForegroundWindow();
+        var processId = NativeMethods.GetWindowProcessId(window);
+        if (window == IntPtr.Zero || processId == 0)
+        {
+            return;
+        }
+
+        var profileId = ResolveSelectedWindowProfile(window);
+        if (!string.IsNullOrWhiteSpace(profileId))
+        {
+            _selectedTargets[((nint)RootWindow(window), processId)] = profileId;
+        }
+    }
+
+    internal void RefreshSelectedTargetForTest(IntPtr window, uint processId, string? profileId)
+    {
+        if (window != IntPtr.Zero && processId != 0 && !string.IsNullOrWhiteSpace(profileId))
+        {
+            _selectedTargets[((nint)RootWindow(window), processId)] = profileId;
+        }
+    }
+
+    private static IntPtr RootWindow(IntPtr window)
+    {
+        if (window == IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+
+        var root = NativeMethods.GetAncestor(window, 2);
+        return root == IntPtr.Zero ? window : root;
     }
 
     internal bool IsPotentialKeyboardInterceptionForTest(NativeKeyGesture gesture, uint virtualKey)
@@ -1810,19 +1889,20 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         NativeSubmitInterceptionResult result)
     {
         if (targetWindow == IntPtr.Zero || targetProcessId == 0
-            || !result.Diagnostics.ContainsKey("profile_id"))
+            || !result.Diagnostics.TryGetValue("profile_id", out var profileId)
+            || string.IsNullOrWhiteSpace(profileId))
         {
             return;
         }
 
-        _selectedTargets.TryAdd(((nint)targetWindow, targetProcessId), 0);
+        _selectedTargets[((nint)RootWindow(targetWindow), targetProcessId)] = profileId;
     }
 
     private bool IsSelectedTarget(IntPtr targetWindow, uint targetProcessId)
     {
         return targetWindow != IntPtr.Zero
             && targetProcessId != 0
-            && _selectedTargets.ContainsKey(((nint)targetWindow, targetProcessId));
+            && _selectedTargets.ContainsKey(((nint)RootWindow(targetWindow), targetProcessId));
     }
 
     internal void RememberSelectedTargetForTest(
@@ -1942,6 +2022,9 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetAncestor(IntPtr handle, uint flags);
 
         [DllImport("user32.dll")]
         public static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);

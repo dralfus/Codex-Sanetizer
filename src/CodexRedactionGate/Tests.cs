@@ -2124,12 +2124,21 @@ public partial class SanitizerTests
     public void OsInteractionOrchestrator_StopsBeforeSubmitWhenResidentOperationIsStaleAtReplayBoundary()
     {
         var surface = new ProductFlowTextSurface("Connect to 192.168.10.25");
-        var guardCalls = 0;
+        var invalidatedAtReplay = false;
         var orchestrator = CreateProductFlowOrchestrator(surface, ConfirmationDecisionContract.Confirm);
 
         var result = orchestrator.RunOnce(
             OsInteractionRunOptions.ConfirmAndSend,
-            executionGuard: () => ++guardCalls < 4);
+            traceStage: (stage, _) =>
+            {
+                if (stage == "text_written")
+                {
+                    invalidatedAtReplay = true;
+                }
+
+                return true;
+            },
+            executionGuard: () => !invalidatedAtReplay);
 
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
         Assert.That(result.Submitted, Is.False);

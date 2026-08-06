@@ -685,7 +685,7 @@ runtime changes.
 snapshot replacement prove that no old runner executes, no raw pointer send
 passes through, and unrelated input is not captured.
 
-- [x] A pointer Send whose control discovery is slow or fails is fail-closed
+- [ ] A pointer Send whose control discovery is slow or fails is fail-closed
   only for the selected desktop client; unrelated application clicks remain
   pass-through.
 - [x] Deferred keyboard and pointer results cannot call a runner after Stop or
@@ -695,10 +695,14 @@ passes through, and unrelated input is not captured.
 - [x] If the profile store cannot be read, the tray shows a raw-free settings
   recovery action rather than offering a setup action that cannot run.
 
-**Review follow-up (2026-08-06, resolved):** Invalidation by Stop or runtime
-replacement preserves one terminal raw-free `terminal_blocked` trace for the
-interrupted operation. The same resident operation owner and terminal rule are
-used by deferred keyboard and pointer paths.
+**Review follow-up (2026-08-06):** Invalidation by Stop or runtime replacement
+preserves one terminal raw-free `terminal_blocked` trace for a registered
+operation. Deferred classification failures now create an operation-owned
+raw-free terminal outcome, and keyboard suppression uses a resident
+window/process binding verdict without waiting for UI Automation in the
+low-level callback. The remaining pointer first-click/cache-miss proof is
+tracked in ticket 314; until it is complete, pointer protection is not claimed
+for an unknown target.
 
 ## 298. Publish a raw-free protected-Send attempt status
 
@@ -930,21 +934,22 @@ runner failure without timers, live desktop focus, or cloud access.
 
 - [x] The hook schedules one resident operation after suppressing a matching
   selected keyboard Send and never waits for sanitization or UI work.
-- [ ] The operation revalidates its original generation and target before each
+- [x] The operation revalidates its original generation and target before each
   side effect and cannot invoke a runner after stop or replacement.
-- [ ] A duplicate Send, stale operation, runner failure, and cancellation each
+- [x] A duplicate Send, stale operation, runner failure, and cancellation each
   result in one raw-free terminal trace outcome and no raw replay.
 - [x] Tests prove unrelated applications and configured newline input continue
   to pass through normally.
 
-**Review follow-up (2026-08-06):**
-
-- Keep this ticket open until the resident operation itself owns the attempt
-  identifier and trace lifecycle, including a terminal trace for Stop and
-  runtime replacement; the current interruption projection is not sufficient.
-- The legacy runner compatibility path is intentionally completed by ticket
-  310, and target identity revalidation is completed by ticket 305. Both are
-  required before this ticket can be closed.
+**Review follow-up (2026-08-06, resolved):** The resident operation now owns
+the attempt identifier, target fingerprint, ordered trace, cancellation, and
+completion signal. Stop and runtime replacement cancel pending and active
+overlay work, drain the operation with a bounded wait, and preserve a
+terminal raw-free trace before disposal. Generation checks prevent completion
+or trace publication from entering a newer snapshot. Keyboard suppression
+uses a resident selected-target/binding verdict and schedules the operation
+without waiting for sanitization or UI work. Production has no untargeted
+runner; only the explicit test seam may use one.
 
 ## 304. Dispatch replacement overlays from one resident UI owner
 
@@ -1166,7 +1171,9 @@ failure without a live cloud or timer.
 
 **Review follow-up (2026-08-06, resolved):** Pointer attempts use the same
 resident attempt/trace owner and terminal-trace rule as keyboard attempts;
-keyboard trace success is never reused as pointer evidence.
+keyboard trace success is never reused as pointer evidence. Missing pointer
+identity creates a fresh `send_detected -> terminal_blocked` trace, and child
+window handles are normalized to their root before target comparison.
 
 ## 310. Remove the untraced runtime compatibility path
 
@@ -1196,12 +1203,12 @@ submit call occurs.
 - [x] Tests cover missing traced runner and preserve raw-free diagnostics.
 
 **Review result (2026-08-06):** Resolved. Production runtime no longer
-stores an untraced `Runner`; only `NativeSubmitRuntime.CreateTest` closes over
-the test runner. The production controller constructor no longer accepts a
-raw runner; controller-only fixtures use the explicit
-`TrayProtectionController.CreateTest` seam. Production construction requires
-both guarded resident contracts, and an incomplete fixture is rejected at
-startup with `trace_unavailable`. The resulting status is projected into
+stores an untraced `Runner`; production constructs only the target-aware
+resident runner. Only `NativeSubmitRuntime.CreateTest` closes over an
+untargeted test runner. The production controller constructor no longer
+accepts a raw runner; controller-only fixtures use the explicit
+`TrayProtectionController.CreateTest` seam. An incomplete fixture is rejected
+at startup with `trace_unavailable`. The resulting status is projected into
 resident state, and the lifecycle lease has a deterministic cancellation
 blocking test at the side-effect boundary.
 
@@ -1297,3 +1304,35 @@ each stage.
 - [x] Overlay replacement is covered.
 - [x] Text-write replacement is covered.
 - [x] Replay replacement is covered.
+
+## 314. Prove the first pointer Send before UI Automation classification
+
+**What to build:** Close the remaining mouse-hook gap where the first click
+arrives before the resident target verdict or send-control evidence has been
+cached. The pointer path must decide from resident, precomputed evidence and
+must not wait for UI Automation in the low-level callback.
+
+**Blocked by:** 297. Make all deferred and pointer Send decisions atomic and
+fail-closed; 309. Trace protected pointer Send through the resident operation.
+
+**State owner:** A resident pointer-target evidence owner publishes the
+selected/unrelated verdict and the verified Send-control identity. The low-level
+mouse callback only performs bounded lookup by normalized root window and
+process identity.
+
+**Fail-closed state:** A selected-client pointer Send with missing or stale
+evidence is suppressed and ends as `trace_unavailable`; an unrelated click is
+passed through. No live window text, process, or UI Automation lookup is
+allowed in the callback.
+
+**Deterministic proof:** A controlled target-evidence fixture covers the first
+click after focus change, a child-to-root window transition, slow UI
+Automation, an unrelated click, and Stop/runtime replacement without timers,
+live cloud access, or raw prompt data.
+
+- [ ] First pointer Send is decided from resident evidence before the mouse
+  callback returns.
+- [ ] Slow or unavailable UI Automation cannot pass a selected-client Send or
+  consume an unrelated click.
+- [ ] Tests prove the evidence generation and normalized target identity are
+  carried into the resident pointer operation.

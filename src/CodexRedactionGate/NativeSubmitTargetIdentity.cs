@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 namespace CodexRedactionGate;
 
@@ -28,17 +29,45 @@ internal sealed record NativeSubmitTargetIdentity(
     public static NativeSubmitTargetIdentity? TryCreateForGesture(
         long snapshotGeneration,
         TextSurfaceDescriptor? surface,
-        IntPtr gestureTargetWindow)
+        IntPtr gestureTargetWindow,
+        Func<IntPtr, IntPtr>? rootWindowResolver = null)
     {
         var target = TryCreate(snapshotGeneration, surface);
+        var normalizedGestureWindow = (rootWindowResolver ?? NormalizeGestureTargetWindow)(gestureTargetWindow);
         return target is not null
-            && gestureTargetWindow != IntPtr.Zero
+            && normalizedGestureWindow != IntPtr.Zero
             && string.Equals(
                 target.WindowHandle,
-                gestureTargetWindow.ToInt64().ToString("X"),
+                normalizedGestureWindow.ToInt64().ToString("X"),
                 StringComparison.Ordinal)
             ? target
             : null;
+    }
+
+    private static IntPtr NormalizeGestureTargetWindow(IntPtr gestureTargetWindow)
+    {
+        if (gestureTargetWindow == IntPtr.Zero || !OperatingSystem.IsWindows())
+        {
+            return gestureTargetWindow;
+        }
+
+        try
+        {
+            var root = NativeMethods.GetAncestor(gestureTargetWindow, NativeMethods.GaRoot);
+            return root == IntPtr.Zero ? gestureTargetWindow : root;
+        }
+        catch
+        {
+            return gestureTargetWindow;
+        }
+    }
+
+    private static class NativeMethods
+    {
+        internal const uint GaRoot = 2;
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
     }
 }
 

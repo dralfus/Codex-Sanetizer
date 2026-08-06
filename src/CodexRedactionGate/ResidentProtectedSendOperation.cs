@@ -1,5 +1,9 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace CodexRedactionGate;
 
@@ -10,17 +14,31 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
 {
     private readonly CancellationTokenSource _cancellation = new();
     private readonly object _lifecycleGate = new();
+    private readonly TaskCompletionSource<bool> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly Action? _cancelSideEffects;
+    private IReadOnlyList<ProtectedSendTraceEntry> _trace = Array.Empty<ProtectedSendTraceEntry>();
     private int _completed;
+    private int _cancelled;
+    private int _executionThreadId;
     private bool _disposed;
 
     public ResidentProtectedSendOperation(
         ProtectionSnapshot snapshot,
         NativeSubmitRuntimeSet runtimeSet,
-        NativeSubmitTargetIdentity? target)
+        NativeSubmitTargetIdentity? target,
+        Action? cancelSideEffects = null)
     {
         Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         RuntimeSet = runtimeSet ?? throw new ArgumentNullException(nameof(runtimeSet));
         Target = target;
+        _cancelSideEffects = cancelSideEffects;
+        AttemptId = snapshot.State.ProtectedSendAttemptId == long.MaxValue
+            ? 1
+            : snapshot.State.ProtectedSendAttemptId + 1;
+        TargetFingerprint = ProtectedSendTrace.TargetFingerprint(
+            target,
+            target?.ProfileId ?? runtimeSet.Runtimes.FirstOrDefault()?.Profile.ProfileId);
+        StartedAtTimestamp = Stopwatch.GetTimestamp();
     }
 
     public ProtectionSnapshot Snapshot { get; }
@@ -29,17 +47,28 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
 
     public NativeSubmitTargetIdentity? Target { get; }
 
-    public bool IsCompleted => Volatile.Read(ref _completed) != 0;
+    public long AttemptId { get; }
 
-    public bool IsCancelled
+    public string TargetFingerprint { get; }
+
+    public long StartedAtTimestamp { get; }
+
+    public IReadOnlyList<ProtectedSendTraceEntry> Trace
     {
         get
         {
             lock (_lifecycleGate)
             {
-                return _cancellation.IsCancellationRequested;
+                return _trace.ToArray();
             }
         }
+    }
+
+    public bool IsCompleted => Volatile.Read(ref _completed) != 0;
+
+    public bool IsCancelled
+    {
+        get => Volatile.Read(ref _cancelled) != 0;
     }
 
     public bool CanContinue(ProtectionSnapshot current)
@@ -66,20 +95,143 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
         return new LifecycleLease(_lifecycleGate);
     }
 
-    public void Cancel()
+    public void MarkExecutionStarted()
+    {
+        Volatile.Write(ref _executionThreadId, Environment.CurrentManagedThreadId);
+    }
+
+    public bool TryAppendTrace(
+        string stage,
+        string resultCode,
+        int durationMilliseconds,
+        out IReadOnlyList<ProtectedSendTraceEntry> trace)
     {
         lock (_lifecycleGate)
         {
-            if (!_disposed)
+            if (_disposed
+                || Volatile.Read(ref _completed) != 0
+                || Volatile.Read(ref _cancelled) != 0
+                || !ProtectedSendTrace.TryAppend(
+                    _trace,
+                    AttemptId,
+                    Snapshot.Generation,
+                    TargetFingerprint,
+                    stage,
+                    resultCode,
+                    durationMilliseconds,
+                    out var updated))
+            {
+                trace = _trace;
+                return false;
+            }
+
+            _trace = updated;
+            trace = _trace;
+            return true;
+        }
+    }
+
+    public bool TryEnsureTerminalBlockedTrace(out IReadOnlyList<ProtectedSendTraceEntry> trace)
+    {
+        lock (_lifecycleGate)
+        {
+            if (_disposed || Volatile.Read(ref _completed) != 0)
+            {
+                trace = _trace;
+                return false;
+            }
+
+            if (_trace.Count == 0)
+            {
+                if (!ProtectedSendTrace.TryAppend(
+                        _trace,
+                        AttemptId,
+                        Snapshot.Generation,
+                        TargetFingerprint,
+                        "send_detected",
+                        "checking_prompt",
+                        0,
+                        out var detected))
+                {
+                    trace = _trace;
+                    return false;
+                }
+
+                _trace = detected;
+            }
+
+            if (_trace[^1].Stage is not ("terminal_blocked" or "sent_safely"))
+            {
+                if (!ProtectedSendTrace.TryAppend(
+                        _trace,
+                        AttemptId,
+                        Snapshot.Generation,
+                        TargetFingerprint,
+                        "terminal_blocked",
+                        OsInteractionStatusIds.FailedClosed,
+                        0,
+                        out var terminal))
+                {
+                    trace = _trace;
+                    return false;
+                }
+
+                _trace = terminal;
+            }
+
+            trace = _trace;
+            return true;
+        }
+    }
+
+    public bool WaitForCompletion(TimeSpan timeout)
+    {
+        if (Volatile.Read(ref _executionThreadId) == Environment.CurrentManagedThreadId)
+        {
+            return false;
+        }
+
+        return _completion.Task.Wait(timeout);
+    }
+
+    public void Cancel()
+    {
+        Interlocked.Exchange(ref _cancelled, 1);
+        lock (_lifecycleGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
             {
                 _cancellation.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            try
+            {
+                _cancelSideEffects?.Invoke();
+            }
+            catch
+            {
+                // Cancellation remains fail-closed even if a UI side-effect cannot be closed.
             }
         }
     }
 
     public bool TryComplete()
     {
-        return Interlocked.Exchange(ref _completed, 1) == 0;
+        if (Interlocked.Exchange(ref _completed, 1) != 0)
+        {
+            return false;
+        }
+
+        _completion.TrySetResult(true);
+        return true;
     }
 
     public void Dispose()
@@ -99,6 +251,7 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
     private bool CanContinueUnderLock(ProtectionSnapshot current)
     {
         return Volatile.Read(ref _completed) == 0
+            && Volatile.Read(ref _cancelled) == 0
             && !_cancellation.IsCancellationRequested
             && current.State.Enabled
             && current.HookReady

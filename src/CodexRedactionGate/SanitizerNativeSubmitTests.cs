@@ -414,6 +414,24 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void NativeSubmitTargetIdentity_NormalizesPointerChildWindowToRootWindow()
+    {
+        var surface = CreateNativeSubmitSurface("codex-desktop") with
+        {
+            Metadata = new SurfaceMetadata(WindowHandle: "2A")
+        };
+
+        var target = NativeSubmitTargetIdentity.TryCreateForGesture(
+            snapshotGeneration: 1,
+            surface,
+            gestureTargetWindow: new IntPtr(0x2B),
+            rootWindowResolver: _ => new IntPtr(0x2A));
+
+        Assert.That(target, Is.Not.Null);
+        Assert.That(target!.WindowHandle, Is.EqualTo("2A"));
+    }
+
+    [Test]
     public void NativeSubmitInterception_PassesThroughSubmitBindingWhenForegroundIsUnsupported()
     {
         var profile = CreateProtectedProfile();
@@ -538,7 +556,7 @@ public partial class SanitizerTests
     }
 
     [Test]
-    public void WindowsNativeSubmitHookHost_ClassifiesOnlyPotentialSendKeysForTheSelectedApp()
+    public void WindowsNativeSubmitHookHost_UsesResidentTargetAndBindingBeforeSuppressing()
     {
         var profile = CreateProtectedProfile() with
         {
@@ -550,10 +568,11 @@ public partial class SanitizerTests
             new[] { profile },
             _ => "chatgpt-desktop");
         var target = new IntPtr(42);
+        host.RefreshSelectedTargetForTest(target, 7, "chatgpt-desktop");
 
-        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("A", TargetWindow: target), 0x41), Is.False);
-        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("Enter", TargetWindow: target), 0x0d), Is.False);
-        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("Enter", Ctrl: true, TargetWindow: target), 0x0d), Is.True);
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("A", TargetWindow: target, TargetProcessId: 7), 0x41), Is.False);
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("Enter", TargetWindow: target, TargetProcessId: 7), 0x0d), Is.False);
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("Enter", Ctrl: true, TargetWindow: target, TargetProcessId: 7), 0x0d), Is.True);
     }
 
     [Test]
@@ -563,9 +582,10 @@ public partial class SanitizerTests
             new[] { FirstRunSetupController.CreateDefaultSetupProfile("codex-desktop")! },
             _ => "codex-desktop");
         var target = new IntPtr(42);
+        host.RefreshSelectedTargetForTest(target, 7, "codex-desktop");
 
-        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("A", TargetWindow: target), 0x41), Is.False);
-        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("Enter", TargetWindow: target), 0x0d), Is.True);
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("A", TargetWindow: target, TargetProcessId: 7), 0x41), Is.False);
+        Assert.That(host.IsPotentialKeyboardInterceptionForTest(new NativeKeyGesture("Enter", TargetWindow: target, TargetProcessId: 7), 0x0d), Is.True);
     }
 
     [Test]
@@ -1224,7 +1244,7 @@ public partial class SanitizerTests
     }
 
     [Test]
-    public void WindowsTrayApp_ProductionRuntimeProvidesBothResidentTracedRunners()
+    public void WindowsTrayApp_ProductionRuntimeProvidesOnlyTargetAwareResidentTracedRunner()
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         try
@@ -1239,7 +1259,7 @@ public partial class SanitizerTests
             Assert.That(runtimeSet, Is.Not.Null);
             Assert.That(runtimeSet!.Runtimes, Has.Count.EqualTo(1));
             var runtime = runtimeSet.Runtimes.Single();
-            Assert.That(runtime.ResidentTracedRunner, Is.Not.Null);
+            Assert.That(runtime.ResidentTracedRunner, Is.Null);
             Assert.That(runtime.ResidentTargetTracedRunner, Is.Not.Null);
         }
         finally
@@ -1436,7 +1456,7 @@ public partial class SanitizerTests
     }
 
     [Test]
-    public void ResidentProtectedSendOperation_HoldsLifecycleLeaseAcrossCancellation()
+    public void ResidentProtectedSendOperation_CancellationWaitsForLifecycleLease()
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
@@ -1463,7 +1483,12 @@ public partial class SanitizerTests
             HookReady: true,
             SendControlDiscovery: null,
             ActiveSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)));
-        using var operation = new ResidentProtectedSendOperation(snapshot, runtimeSet, target: null);
+        var sideEffectsCancelled = false;
+        using var operation = new ResidentProtectedSendOperation(
+            snapshot,
+            runtimeSet,
+            target: null,
+            cancelSideEffects: () => sideEffectsCancelled = true);
         using var lease = operation.TryAcquireSideEffect(snapshot);
         Assert.That(lease, Is.Not.Null);
 
@@ -1478,12 +1503,13 @@ public partial class SanitizerTests
         cancellationThread.Start();
 
         Assert.That(cancellationStarted.Wait(TimeSpan.FromSeconds(1)), Is.True);
-        Assert.That(cancellationFinished.Wait(100), Is.False);
-
+        Assert.That(SpinWait.SpinUntil(() => operation.IsCancelled, TimeSpan.FromSeconds(1)), Is.True);
+        Assert.That(cancellationFinished.IsSet, Is.False);
         lease!.Dispose();
         Assert.That(cancellationFinished.Wait(TimeSpan.FromSeconds(1)), Is.True);
         cancellationThread.Join();
         Assert.That(operation.IsCancelled, Is.True);
+        Assert.That(sideEffectsCancelled, Is.True);
     }
 
     private static ConfirmationUiModel CreateOverlayModel(string prompt)
@@ -2744,13 +2770,13 @@ public class HandleButtonClickTests : SanitizerTests
             hook,
             new FixedSendControlDiscovery(new SendControlDiscoveryResult(
                 SendControlClassification.IdentifiedSend,
-                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")))),
+                TextSurfaceDiscoveryResult.Success(CreateNativeSurfaceWithWindow("codex-desktop", "2A")))),
             profile,
             () => submitCalls++);
 
         Assert.That(tray.Start(), Is.True);
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
-        hook.TriggerPointer(new NativePointerGesture(10, 10, "left"));
+        hook.TriggerPointer(new NativePointerGesture(10, 10, "left", new IntPtr(0x2A), 7));
 
         Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
         Assert.That(hook.LastPointerClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
@@ -2767,12 +2793,12 @@ public class HandleButtonClickTests : SanitizerTests
             hook,
             new FixedSendControlDiscovery(new SendControlDiscoveryResult(
                 SendControlClassification.IdentifiedSend,
-                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")))),
+                TextSurfaceDiscoveryResult.Success(CreateNativeSurfaceWithWindow("codex-desktop", "2A")))),
             profile,
             () => submitCalls++);
 
         Assert.That(tray.Start(), Is.True);
-        hook.TriggerPointer(new NativePointerGesture(10, 10, "left"));
+        hook.TriggerPointer(new NativePointerGesture(10, 10, "left", new IntPtr(0x2A), 7));
 
         Assert.That(submitCalls, Is.EqualTo(1));
         Assert.That(tray.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
@@ -2786,6 +2812,29 @@ public class HandleButtonClickTests : SanitizerTests
             "send_injected",
             "sent_safely"
         }));
+    }
+
+    [Test]
+    public void TrayProtectionController_PointerSendWithoutTargetIdentityRemainsFailClosed()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitCalls = 0;
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.IdentifiedSend,
+                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")))),
+            profile,
+            () => submitCalls++);
+
+        Assert.That(tray.Start(), Is.True);
+        hook.TriggerPointer(new NativePointerGesture(10, 10, "left", new IntPtr(0x2A), 7));
+
+        Assert.That(hook.LastPointerClassification?.Status, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
+        Assert.That(hook.LastPointerClassification?.SuppressOriginalInput, Is.True);
+        Assert.That(submitCalls, Is.Zero);
+        Assert.That(tray.State.ProtectedSendAttemptStatus, Is.EqualTo("trace_unavailable"));
     }
 
     [Test]
@@ -2810,13 +2859,13 @@ public class HandleButtonClickTests : SanitizerTests
             profile,
             sendControlDiscovery: new FixedSendControlDiscovery(new SendControlDiscoveryResult(
                 SendControlClassification.IdentifiedSend,
-                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)))),
+                TextSurfaceDiscoveryResult.Success(CreateNativeSurfaceWithWindow(profile.ProfileId, "2A")))),
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(
                 CreateNativeSubmitSurface(profile.ProfileId)),
             nativeSubmitRuntimes: new[] { runtime });
 
         Assert.That(tray.Start(), Is.True);
-        hook.TriggerPointer(new NativePointerGesture(10, 10, "left"));
+        hook.TriggerPointer(new NativePointerGesture(10, 10, "left", new IntPtr(0x2A), 7));
 
         Assert.That(tray.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
         Assert.That(tray.State.LastSubmitted, Is.False);
@@ -2886,6 +2935,43 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(runnerCalls, Is.Zero);
         Assert.That(tray.State.Enabled, Is.False);
         Assert.That(tray.State.NativeSubmitEnabled, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_StopBeforeFirstTracePublishesTerminalTrace()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var runnerCalls = 0;
+        TrayProtectionController? tray = null;
+        tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.IdentifiedSend,
+                TextSurfaceDiscoveryResult.Success(CreateNativeSurfaceWithWindow("codex-desktop", "2A")))),
+            profile,
+            () => runnerCalls++,
+            protectedSendStageObserver: stage =>
+            {
+                if (stage == "operation_started")
+                {
+                    tray!.Stop();
+                }
+            });
+
+        Assert.That(tray.Start(), Is.True);
+        hook.TriggerPointer(new NativePointerGesture(10, 10, "left", new IntPtr(0x2A), 7));
+
+        Assert.That(runnerCalls, Is.Zero);
+        Assert.That(tray.State.Enabled, Is.False);
+        Assert.That(tray.State.ProtectedSendAttemptStatus, Is.EqualTo("trace_unavailable"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
+        {
+            "send_detected",
+            "terminal_blocked"
+        }));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Last().ResultCode, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+        Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("protection_stopped"));
     }
 
     [TestCase("Enter")]
@@ -3212,7 +3298,8 @@ public class HandleButtonClickTests : SanitizerTests
                 SendControlClassification.Unrelated,
                 TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer, new Dictionary<string, string>()))),
             profile,
-            () => { });
+            () => { },
+            selectedWindowProfileResolver: _ => null);
 
         Assert.That(tray.Start(), Is.True);
         hook.Trigger(new NativeKeyGesture("A", TargetWindow: new IntPtr(42), TargetProcessId: 7));
@@ -3280,7 +3367,7 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
-    public void TrayProtectionController_PointerClassificationFailureUsesTargetProfileWithoutCache()
+    public void TrayProtectionController_PointerClassificationFailureDoesNotResolveLiveTargetWithoutCache()
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
@@ -3304,7 +3391,36 @@ public class HandleButtonClickTests : SanitizerTests
         var unrelated = hook.TriggerPointerClassificationFailure(
             new NativePointerGesture(0, 0, "left", new IntPtr(43), 7));
 
-        Assert.That(selected.SuppressOriginalInput, Is.True);
+        Assert.That(selected.SuppressOriginalInput, Is.False);
+        Assert.That(unrelated.SuppressOriginalInput, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_KeyboardClassificationFailureDoesNotResolveLiveTargetWithoutCache()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.Unrelated,
+                TextSurfaceDiscoveryResult.Failure(
+                    OsInteractionStatusIds.NotComposer,
+                    new Dictionary<string, string>()))),
+            profile,
+            () => { },
+            selectedWindowProfileResolver: window => window == new IntPtr(42)
+                ? "codex-desktop"
+                : "other-app");
+
+        Assert.That(tray.Start(), Is.True);
+
+        var selected = hook.TriggerKeyboardClassificationFailure(
+            new NativeKeyGesture("Enter", Ctrl: true, TargetWindow: new IntPtr(42), TargetProcessId: 7));
+        var unrelated = hook.TriggerKeyboardClassificationFailure(
+            new NativeKeyGesture("Enter", Ctrl: true, TargetWindow: new IntPtr(43), TargetProcessId: 7));
+
+        Assert.That(selected.SuppressOriginalInput, Is.False);
         Assert.That(unrelated.SuppressOriginalInput, Is.False);
     }
 
@@ -3685,7 +3801,8 @@ public class HandleButtonClickTests : SanitizerTests
         string activeProfileId = "codex-desktop",
         TextSurfaceDiscoveryResult? activeSurfaceResult = null,
         Func<IntPtr, string?>? selectedWindowProfileResolver = null,
-        IFirstRunSetupController? firstRunSetupController = null)
+        IFirstRunSetupController? firstRunSetupController = null,
+        Action<string>? protectedSendStageObserver = null)
     {
         var runtime = NativeSubmitRuntime.CreateTest(
             hook,
@@ -3709,6 +3826,7 @@ public class HandleButtonClickTests : SanitizerTests
             activeSurfaceDiscovery: () => activeSurfaceResult
                 ?? TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(activeProfileId)),
             selectedWindowProfileResolver: selectedWindowProfileResolver ?? (_ => activeProfileId),
+            protectedSendStageObserver: protectedSendStageObserver,
             nativeSubmitRuntimes: new[] { runtime });
     }
 
