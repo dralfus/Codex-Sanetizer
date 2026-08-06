@@ -883,8 +883,8 @@ public partial class SanitizerTests
         Assert.That(controller.Start(), Is.True);
         oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
 
-        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("trace_unavailable"));
-        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("retry_protection"));
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("composer_changed"));
+        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("focus_and_send_again"));
         Assert.That(controller.State.ProtectedSendAttemptId, Is.GreaterThan(0));
     }
 
@@ -933,6 +933,38 @@ public partial class SanitizerTests
                 Assert.That(controller.State.ReadinessStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
             }
         }
+    }
+
+    [Test]
+    public void TrayProtectionController_DoesNotClaimProtectedWhenTraceRunnerFails()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => new OsInteractionResult(
+                OsInteractionStatusIds.FailedClosed,
+                CreateNativeSubmitSurface(profile.ProfileId),
+                null,
+                null,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["trace_status"] = "send_injected_unavailable"
+                }),
+            profile);
+
+        Assert.That(controller.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
+        Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
+        Assert.That(controller.State.ComposerProtected, Is.False);
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("trace_unavailable"));
     }
 
     [Test]

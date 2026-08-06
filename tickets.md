@@ -844,12 +844,388 @@ hosts prove that candidate-key input cannot pass raw during handoff; failure at
 every boundary retains or restores the previous runtime and binding without
 timers, a live desktop app, or cloud submission.
 
-- [ ] Candidate runtime is prepared from an uncommitted verified binding and
+- [x] Candidate runtime is prepared from an uncommitted verified binding and
   guards both the old and candidate Send binding until atomic publication.
-- [ ] Persistence happens only after resident activation, and every failure
+- [x] Persistence happens only after resident activation, and every failure
   keeps the previous active configuration authoritative.
-- [ ] Tests cover candidate creation, hook start, snapshot publish, persistence,
+- [x] Tests cover candidate creation, hook start, snapshot publish, persistence,
   rollback, stale attempt completion, and no raw candidate Send pass-through.
-- [ ] A stale setup attempt cannot reload the runtime, write the completion
+- [x] A stale setup attempt cannot reload the runtime, write the completion
   marker, or roll back a newer active candidate; rollback-save failure itself
   becomes an explicit fail-closed resident state.
+
+## 302. Record a correlated, raw-free protected-Send trace
+
+**What to build:** Give each guarded keyboard Send one opaque attempt identifier
+and a resident trace that proves its complete local outcome. The tray can show
+a safe summary of the current or latest attempt, while the product can prove
+that one normal safe prompt completed through the guarded path rather than only
+that separate components were enabled.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The resident protection snapshot owns the active attempt and
+its trace. The hook, sanitizer, overlay, runner, tray, and diagnostics only
+append or render transitions through that owner.
+
+**Fail-closed state:** If an attempt cannot create, publish, or complete its
+trace, the original selected-app Send remains blocked with the raw-free reason
+`trace_unavailable`; it is never inferred to be sent safely.
+
+**Allowed transitions:** `send_detected` -> `target_matched` ->
+`composer_read` -> `sanitized` -> `send_injected` -> `sent_safely` for a safe
+prompt, or one terminal raw-free blocked result. Every transition carries the
+same attempt id and snapshot generation. Missing, duplicated, stale, or
+out-of-order transitions are rejected.
+
+**Deterministic proof:** An injected selected keyboard Send, composer reader,
+sanitizer, and submit runner drive one real resident snapshot through the safe
+sequence without timers, desktop focus, or cloud access. Assertions prove no
+raw input, dictionary terms, mappings, paths, control names, or exception text
+are traceable or rendered.
+
+- [x] The resident snapshot publishes an opaque attempt id, snapshot generation,
+  transition code, raw-free target fingerprint, duration, and terminal outcome.
+- [x] A guarded safe keyboard Send produces exactly one ordered trace ending in
+  `sent_safely`; every trace error blocks the original Send with one stable
+  raw-free status.
+- [x] The tray/local status renders the trace outcome only as a projection and
+  does not retain an independent success flag.
+- [x] Tests reject duplicate, skipped, stale, and out-of-order transitions and
+  prove raw values cannot appear in trace or public status output.
+
+## 303. Route one keyboard protected Send through a resident operation
+
+**What to build:** Replace the split deferred keyboard path with one resident
+operation that owns a suppressed Send from classification through a terminal
+result. The low-level hook returns promptly after scheduling work, while the
+operation proves the snapshot is still current before every stage and completes
+only once.
+
+**Blocked by:** 301. Atomically replace a protected Send binding and its resident runtime; 302. Record a correlated, raw-free protected-Send trace.
+
+**State owner:** The resident protected-Send operation owns its captured target,
+snapshot generation, cancellation token, and trace until it reaches a terminal
+outcome. The immutable snapshot remains the authority that admits the operation.
+
+**Fail-closed state:** A stale, stopped, replaced, duplicated, or failed
+operation leaves the original selected-app Send blocked and finishes as one
+raw-free terminal trace outcome. It cannot call an old runner or begin a second
+replay.
+
+**Allowed transitions:** A selected configured keyboard Send is either ordinary
+input and passed through, or is suppressed once and moves from `send_detected`
+through the correlated operation to exactly one terminal result. A duplicate
+gesture while active reports `in_progress` without replacing or sending either
+attempt.
+
+**Deterministic proof:** A controllable hook host and snapshot replacement seam
+exercise normal completion, runtime replacement, stop, duplicate gesture, and
+runner failure without timers, live desktop focus, or cloud access.
+
+- [ ] The hook schedules one resident operation after suppressing a matching
+  selected keyboard Send and never waits for sanitization or UI work.
+- [ ] The operation revalidates its original generation and target before each
+  side effect and cannot invoke a runner after stop or replacement.
+- [ ] A duplicate Send, stale operation, runner failure, and cancellation each
+  result in one raw-free terminal trace outcome and no raw replay.
+- [ ] Tests prove unrelated applications and configured newline input continue
+  to pass through normally.
+
+## 304. Dispatch replacement overlays from one resident UI owner
+
+**What to build:** Make sensitive keyboard Send display its replacement window
+through one long-lived resident UI dispatcher and serialized queue. The user
+gets an active confirmation window for the current attempt, and Windows focus
+failure is visible and fail-closed rather than becoming a hidden or hung dialog.
+
+**Blocked by:** 303. Route one keyboard protected Send through a resident operation.
+
+**State owner:** The resident overlay dispatcher owns queued and displayed
+overlay attempts. The protected-Send operation owns the decision returned for
+its own attempt; the tray only displays the published trace outcome.
+
+**Fail-closed state:** Dispatcher startup failure, queue failure, unavailable
+foreground activation, wrong attempt id, or a disposed resident runtime blocks
+the selected-app Send. It cannot fall back to a per-attempt thread or hidden
+dialog.
+
+**Allowed transitions:** A sensitive operation records `sanitized` ->
+`overlay_created` -> `overlay_foreground_confirmed` -> `approved` or
+`cancelled`, or one terminal blocked result. Only one displayed overlay may own
+the dispatcher at a time; later attempts remain explicitly queued or blocked.
+
+**Deterministic proof:** A controllable dispatcher and foreground activator drive
+approval, cancellation, foreground refusal, dispatcher shutdown, and queued
+attempts without real desktop focus, timing assumptions, or cloud access.
+
+- [ ] The resident runtime creates one persistent UI dispatcher rather than one
+  overlay thread per Send attempt.
+- [ ] A sensitive prompt reaches an active foreground confirmation window with
+  the same attempt id as its trace, while Cancel publishes a terminal blocked
+  result and leaves the next Send ready.
+- [ ] Foreground refusal, dispatcher failure, or stale overlay result blocks
+  submission and reports one raw-free recovery action.
+- [ ] Tests prove the hook callback is never blocked by dialog lifetime and a
+  second sensitive attempt cannot receive or complete the first attempt's
+  approval.
+
+## 305. Revalidate the captured target before write and replay
+
+**What to build:** Make an approved sanitized prompt return only to the original
+composer/window captured for its Send. The product must verify the target and
+snapshot immediately before writing text and again before replaying Send, so a
+focus switch, runtime change, or look-alike window cannot redirect content.
+
+**Blocked by:** 297. Make all deferred and pointer Send decisions atomic and fail-closed; 303. Route one keyboard protected Send through a resident operation; 304. Dispatch replacement overlays from one resident UI owner.
+
+**State owner:** The protected-Send operation owns the captured target contract
+and compares it with the current target through the resident snapshot. The text
+writer and submit runner may act only after that comparison succeeds.
+
+**Fail-closed state:** Changed window, composer, selected profile, snapshot
+generation, write result, or replay target blocks the attempt without writing
+to another window or injecting Send.
+
+**Allowed transitions:** `approved` -> `text_written` -> `send_injected` ->
+`sent_safely` is legal only after both target checks succeed. Any mismatch or
+failure ends in one raw-free blocked result; no retry can reuse the approval.
+
+**Deterministic proof:** Two same-profile windows, a controllable composer
+writer, and a replay runner demonstrate success for the original window and
+block focus changes, write failure, replay failure, and snapshot replacement
+without live desktop focus, timers, or cloud access.
+
+- [ ] Approved text is written only after the original target contract still
+  matches and is never written to a second window with the same profile.
+- [ ] Replay occurs only after a second successful target and generation check;
+  injected replay input is not recaptured as a new attempt.
+- [ ] Target mismatch, text-write failure, replay failure, and stale generation
+  leave the original Send blocked and publish a raw-free terminal trace reason.
+- [ ] Tests cover keyboard and supported mouse-originated attempts through the
+  same compare-before-write-and-send boundary.
+
+## 306. Prove the complete path with a local reference composer
+
+**What to build:** Add a local reference composer that runs the shipped Windows
+input hook, UI Automation discovery, resident operation, overlay dispatcher,
+text writer, and keyboard/mouse replay together. It provides repeatable local
+evidence that the complete protected path works without a ChatGPT cloud account
+or live cloud submission.
+
+**Blocked by:** 302. Record a correlated, raw-free protected-Send trace; 303. Route one keyboard protected Send through a resident operation; 304. Dispatch replacement overlays from one resident UI owner; 305. Revalidate the captured target before write and replay.
+
+**State owner:** The real resident protection snapshot owns each reference
+composer attempt; the fixture only exposes safe observable outcomes and test
+controls.
+
+**Fail-closed state:** A missing trace stage, unconfirmed overlay, target
+mismatch, text-write failure, or replay failure means the reference composer
+records no send and the test fails. A green component mock cannot substitute
+for the end-to-end result.
+
+**Allowed transitions:** The fixture supports a safe no-overlay Send and a
+sensitive `approve` or `cancel` Send through the same public resident path.
+Every test outcome is backed by one terminal attempt trace.
+
+**Deterministic proof:** The acceptance fixture itself is the proof: it runs in
+an STA message loop, uses real Windows mechanisms, and records safe sent text
+locally without a cloud endpoint or timing sleeps.
+
+- [ ] A safe prompt follows one complete trace to `sent_safely` and appears in
+  the fixture only after protected replay.
+- [ ] A sensitive prompt shows the real replacement overlay; approval sends
+  only locally verified sanitized text.
+- [ ] Cancellation, foreground refusal, target change, text-write failure, and
+  replay failure prove that neither raw nor sanitized text is sent.
+- [ ] The fixture can run repeatedly in release smoke with deterministic cleanup
+  of hook, UI dispatcher, windows, and temporary storage.
+
+## 307. Pin a verified ChatGPT Desktop compatibility fingerprint
+
+**What to build:** Turn the currently verified ChatGPT Desktop surface into an
+explicit compatibility fingerprint. The profile is protected only when its
+package/app version, process/window identity, composer UI Automation shape,
+Send/newline pair, and available pre-action Send-control evidence match the
+fingerprint; a mismatch is visibly unsupported rather than optimistically
+protected.
+
+**Blocked by:** 305. Revalidate the captured target before write and replay.
+
+**State owner:** The resident protection snapshot owns the active compatibility
+fingerprint and its verification result. Persistent profile data is a candidate
+input and the tray only renders the published result.
+
+**Fail-closed state:** Missing, changed, incomplete, or unverifiable fingerprint
+evidence puts the selected ChatGPT surface in `unsupported_surface` and blocks
+its configured Send. It must not fall back to a generic profile match.
+
+**Allowed transitions:** `unverified` -> `verifying` -> `protected` for a full
+match, or `unsupported_surface` for any mismatch. A new verified fingerprint
+may replace an old one only through the existing atomic resident-runtime
+activation path.
+
+**Deterministic proof:** Injected app/package, process/window, UI Automation,
+binding, and Send-control evidence exercise full match, one-field mismatch,
+missing evidence, and atomic fingerprint replacement without desktop focus,
+timers, or cloud access.
+
+- [ ] The setup and status flows display a raw-free supported or unsupported
+  result for the exact ChatGPT Desktop fingerprint.
+- [ ] Each fingerprint field participates in verification; a changed field
+  blocks protection rather than silently matching a broader surface.
+- [ ] A verified fingerprint is activated and persisted only after its resident
+  runtime is active; failed updates preserve the prior protected runtime.
+- [ ] Tests prove no prompt text, sensitive values, paths, UI names, or exception
+  details are stored or shown with compatibility evidence.
+
+## 308. Gate the ChatGPT Desktop protected claim on both acceptance proofs
+
+**What to build:** Make `protected` for the pinned ChatGPT Desktop path a
+release-gated claim. The shipped build must have both a passing local reference
+composer acceptance run and a repeatable live desktop contract run that records
+one complete raw-free trace for the pinned keyboard Send binding.
+
+**Blocked by:** 306. Prove the complete path with a local reference composer; 307. Pin a verified ChatGPT Desktop compatibility fingerprint.
+
+**State owner:** The resident protection snapshot owns the current compatibility
+claim and the safe evidence result for the pinned fingerprint. Release tooling
+may publish that evidence but cannot derive `protected` from separate flags.
+
+**Fail-closed state:** Missing, failed, stale, build-mismatched, or fingerprint-
+mismatched evidence makes the release and tray state `unsupported_surface` or
+`degraded`; it cannot display the pinned path as protected.
+
+**Allowed transitions:** A shipped build moves from `unproven` to `protected`
+only after both required proofs pass for the same build and fingerprint. A later
+fingerprint or build change returns it to `unproven` until both proofs are run
+again.
+
+**Deterministic proof:** Release tests validate evidence pairing, build and
+fingerprint matching, expiration on change, raw-free public rendering, and
+rejection of a missing live-contract result. The live run itself is a documented
+repeatable operator acceptance procedure, not an automated cloud assertion.
+
+- [ ] Release smoke runs the reference composer acceptance fixture and fails
+  when any required trace stage or terminal result is absent.
+- [ ] The live ChatGPT Desktop contract procedure records one raw-free keyboard
+  Send trace and exact fingerprint/build pairing without recording prompt text.
+- [ ] The tray and local status call the pinned ChatGPT path protected only when
+  both evidence records match the running build and fingerprint.
+- [ ] Changed app version, binding, UI Automation shape, missing live evidence,
+  or missing reference evidence visibly downgrades the profile and blocks Send.
+
+## 309. Trace protected pointer Send through the resident operation
+
+**What to build:** Apply the same correlated, raw-free resident attempt trace to
+an identified mouse Send in a selected AI app. Pointer Send must not be reported
+as protected merely because the keyboard path is traced.
+
+**Blocked by:** 302. Record a correlated, raw-free protected-Send trace; 304.
+Dispatch replacement overlays from one resident UI owner.
+
+**State owner:** The resident protection snapshot owns the pointer attempt,
+target identity, transitions, and terminal result. Pointer classification only
+starts or suppresses the operation.
+
+**Fail-closed state:** Missing, stale, or failed pointer trace blocks the
+original mouse action with `trace_unavailable`; unrelated and non-Send clicks
+remain pass-through.
+
+**Allowed transitions:** The pointer path uses the same ordered trace and
+terminal states as keyboard Send, with no post-hoc synthetic success trace.
+
+**Deterministic proof:** A local selected-composer fixture drives identified
+Send, unrelated click, target change, overlay cancellation, approval, and trace
+failure without a live cloud or timer.
+
+- [ ] Identified pointer Send starts and completes one resident trace before
+  any submit side effect.
+- [ ] Pointer trace failure suppresses the original click and renders a safe
+  retry reason; unrelated clicks are not intercepted.
+- [ ] Pointer approval and cancellation share the keyboard overlay contract.
+
+## 310. Remove the untraced runtime compatibility path
+
+**What to build:** Remove the production-like fallback that executes an
+untraced runner and appends synthetic trace stages afterward. Every runtime
+accepted by the resident controller must provide a traced runner; controller
+tests use an explicit traced test seam.
+
+**Blocked by:** 302. Record a correlated, raw-free protected-Send trace.
+
+**State owner:** The resident trace owner decides whether a runner is eligible
+to submit; no runner may infer trace stages from a completed result.
+
+**Fail-closed state:** A missing traced runner produces `trace_unavailable` and
+never invokes the submit side effect.
+
+**Allowed transitions:** `unverified` -> `trace_unavailable`, or a complete
+pre-side-effect trace -> its terminal outcome. Synthetic post-submit stages are
+not allowed.
+
+**Deterministic proof:** Runtime construction tests prove every production
+factory supplies a traced runner, while a missing-runner fixture proves no
+submit call occurs.
+
+- [ ] Production runtime construction requires traced runners.
+- [ ] Legacy synthetic trace fallback is removed from the production path.
+- [ ] Tests cover missing traced runner and preserve raw-free diagnostics.
+
+## 311. Type and centralize protected-Send trace transitions
+
+**What to build:** Replace repeated string pairs used for trace stages and
+result codes with one small domain contract and one resident append/failure
+helper. This keeps the state machine readable as it grows and prevents callers
+from inventing unvalidated transition tokens.
+
+**Blocked by:** 302. Record a correlated, raw-free protected-Send trace.
+
+**State owner:** The resident trace component owns the typed transition and
+  validates it before publishing.
+
+**Fail-closed state:** An unknown transition or result code is rejected and
+  leaves the protected Send blocked with `trace_unavailable`.
+
+**Allowed transitions:** The existing trace graph remains unchanged; only the
+  representation and publication seam are consolidated.
+
+**Deterministic proof:** Compile-time construction plus transition tests cover
+  every valid stage, invalid token, duplicate, stale, and out-of-order event.
+
+- [ ] Trace stage/result pairs use a typed domain contract.
+- [ ] Repeated fail-closed publication logic is centralized.
+- [ ] Tests prove the public trace remains raw-free.
+
+## 312. Preserve an interrupted Send outcome without mutating a newer runtime
+
+**What to build:** Make a protected-Send attempt that loses its resident
+snapshot during runtime replacement leave an explicit raw-free outcome for the
+user, while never writing the old attempt into the newer runtime generation.
+
+**Blocked by:** 302. Record a correlated, raw-free protected-Send trace; 303.
+Route one keyboard protected Send through a resident operation.
+
+**State owner:** The resident lifecycle owns the current generation; the
+interrupted operation may report only through a generation-aware outcome
+handoff. The newer snapshot remains authoritative for future Send decisions.
+
+**Fail-closed state:** A stale operation cannot alter the newer runtime, cannot
+submit, and cannot make the new runtime appear protected because of the old
+attempt. The user receives a raw-free retry reason.
+
+**Allowed transitions:** `active(old generation)` -> `interrupted` is recorded
+  only through a generation-safe handoff; the new generation continues from
+  its own state. No old trace entry is appended to a new attempt.
+
+**Deterministic proof:** A controlled runtime replacement during each trace
+stage proves that the old operation is blocked, the new runtime is unchanged
+apart from the safe interruption summary, and no prompt data crosses the
+boundary.
+
+- [ ] A stale trace failure cannot write `trace_unavailable` into a newer
+  runtime snapshot or attempt.
+- [ ] The interruption remains visible as a raw-free recovery state without
+  claiming the new runtime completed the old Send.
+- [ ] Tests cover replacement during detection, checking, overlay, write, and
+  replay stages.

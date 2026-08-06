@@ -1047,22 +1047,23 @@ internal sealed class TrayProtectionController
                 startNewAttempt: true);
             if (detectedSnapshot is null)
             {
-                PublishTraceUnavailable(ReadSnapshot(), runtime.Profile.ProfileId);
+                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
                 return;
             }
             snapshot = detectedSnapshot;
 
-            snapshot = PublishProtectedSendAttempt(
+            var checkingSnapshot = PublishProtectedSendAttempt(
                 snapshot,
                 "checking",
                 "checking_prompt",
                 targetFingerprint,
                 startNewAttempt: false);
-            if (snapshot is null)
+            if (checkingSnapshot is null)
             {
-                PublishTraceUnavailable(ReadSnapshot(), runtime.Profile.ProfileId);
+                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
                 return;
             }
+            snapshot = checkingSnapshot;
 
             var targetMatchedSnapshot = PublishProtectedSendTrace(
                 snapshot,
@@ -1071,7 +1072,7 @@ internal sealed class TrayProtectionController
                 "target_verified");
             if (targetMatchedSnapshot is null)
             {
-                PublishTraceUnavailable(ReadSnapshot(), runtime.Profile.ProfileId);
+                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
                 return;
             }
             snapshot = targetMatchedSnapshot;
@@ -1097,15 +1098,16 @@ internal sealed class TrayProtectionController
                 : PublishProtectedSendTrace(snapshot, targetFingerprint, "terminal_blocked", result.Status);
             if (terminalTrace is null)
             {
-                PublishTraceUnavailable(ReadSnapshot(), runtime.Profile.ProfileId);
+                PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
                 return;
             }
             snapshot = terminalTrace;
 
-            var readinessStatus = NativeSubmitReadinessStatusAfterFlow(result.Status);
+            var publishedStatus = NativeSubmitFlowStatusForPublication(result);
+            var readinessStatus = NativeSubmitReadinessStatusAfterFlow(publishedStatus);
             var setupRequired = readinessStatus == OsInteractionStatusIds.NativeSubmitSetupRequired;
             PublishNativeSubmitState(snapshot,
-                result.Status,
+                publishedStatus,
                 readinessStatus,
                 result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : runtime.Profile.ProfileId,
                 result.Applied,
@@ -1390,6 +1392,14 @@ internal sealed class TrayProtectionController
             or OsInteractionStatusIds.StaleComposer
             ? flowStatus
             : OsInteractionStatusIds.Protected;
+    }
+
+    private static string NativeSubmitFlowStatusForPublication(NativeSubmitInterceptionResult result)
+    {
+        return result.Status == OsInteractionStatusIds.FailedClosed
+            && result.Diagnostics.Keys.Any(key => key == "trace_status")
+            ? OsInteractionStatusIds.TraceUnavailable
+            : result.Status;
     }
 
     private void PublishBlockedNativeSubmitState(
