@@ -2254,7 +2254,6 @@ internal sealed record NativeSubmitRuntime(
     INativeSubmitHookHost HookHost,
     NativeSubmitInterceptionController Controller,
     SubmitBindingProfile Profile,
-    bool TraceRequired = false,
     Func<Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTracedRunner = null,
     Func<NativeSubmitTargetIdentity, Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTargetTracedRunner = null)
 {
@@ -2263,7 +2262,6 @@ internal sealed record NativeSubmitRuntime(
         NativeSubmitInterceptionController controller,
         Func<OsInteractionResult> runner,
         SubmitBindingProfile profile,
-        bool TraceRequired = false,
         Func<Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTracedRunner = null,
         Func<NativeSubmitTargetIdentity, Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTargetTracedRunner = null)
     {
@@ -2271,7 +2269,6 @@ internal sealed record NativeSubmitRuntime(
             hookHost,
             controller,
             profile,
-            TraceRequired,
             ResidentTracedRunner ?? ((traceStage, executionGuard, executionLease) =>
                 RunTestTracedRunner(runner, traceStage, executionGuard, executionLease)),
             ResidentTargetTracedRunner ?? ((target, traceStage, executionGuard, executionLease) =>

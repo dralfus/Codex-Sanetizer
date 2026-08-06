@@ -317,7 +317,6 @@ public static class WindowsTrayApp
                 hookHost,
                 controller,
                 nativeProfile,
-                TraceRequired: true,
                 ResidentTracedRunner: (traceStage, executionGuard, executionLease) => RunConfirmAndSend(
                     target: null,
                     traceStage: traceStage,
