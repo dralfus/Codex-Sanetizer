@@ -226,7 +226,7 @@ public static class WindowsTrayApp
             residentRuntime.ApplyOnlyRunner,
             runtime?.HookHost,
             runtime?.Controller,
-            runtime?.Runner,
+            nativeSubmitRunner: null,
             nativeProfile,
             storageLayout: resolvedLayout,
             sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault(resolvedLayout),
@@ -317,7 +317,6 @@ public static class WindowsTrayApp
             return new NativeSubmitRuntime(
                 hookHost,
                 controller,
-                () => RunConfirmAndSend(target: null, traceStage: null),
                 nativeProfile,
                 TraceRequired: true,
                 ResidentTracedRunner: (traceStage, executionGuard, executionLease) => RunConfirmAndSend(

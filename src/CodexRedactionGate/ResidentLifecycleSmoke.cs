@@ -319,7 +319,7 @@ internal static class ResidentLifecycleSmokeRunner
             () => throw new InvalidOperationException("manual_scan_not_expected"),
             hook,
             runtime.Controller,
-            runtime.Runner,
+            nativeSubmitRunner: null,
             profile,
             nativeSubmitRuntimes: new[] { runtime },
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(captured));

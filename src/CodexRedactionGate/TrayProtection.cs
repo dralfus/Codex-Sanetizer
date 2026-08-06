@@ -60,6 +60,7 @@ public sealed record TrayProtectionState(
     IReadOnlyList<ProtectedSendTraceEntry>? ProtectedSendAttemptTrace = null,
     long ProtectedSendAttemptStartedAtTimestamp = 0,
     ProtectedSendInterruption? LastProtectedSendInterruption = null,
+    string LastProtectedSendTraceStatus = "none",
     string SetupVerificationStatus = "idle",
     string SetupVerificationAction = "none",
     string? SetupVerificationProfileId = null,
@@ -644,7 +645,6 @@ internal sealed class TrayProtectionController
                 || runtimes.Length == 0
                 || runtimes.Any(runtime => runtime is null
                     || runtime.Controller is null
-                    || runtime.Runner is null
                     || runtime.Profile is null
                     || string.IsNullOrWhiteSpace(runtime.Profile.ProfileId)
                     || !HasRequiredResidentTraceRunner(runtime)))
@@ -983,7 +983,8 @@ internal sealed class TrayProtectionController
             NativeSubmitReadinessStatusAfterFlow(result.Status),
             runtime.Profile.ProfileId,
             result.Applied,
-            result.Submitted);
+            result.Submitted,
+            diagnostics: result.Diagnostics);
     }
 
     private static NativeSubmitInterceptionResult PassThroughPointer()
@@ -1181,7 +1182,8 @@ internal sealed class TrayProtectionController
             protectedResult.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : runtime.Profile.ProfileId,
             protectedResult.Applied,
             protectedResult.Submitted,
-            setupRequired);
+            setupRequired,
+            diagnostics: protectedResult.Diagnostics);
     }
 
     private void PublishNativeSubmitState(
@@ -1191,7 +1193,8 @@ internal sealed class TrayProtectionController
         string? profileId,
         bool applied,
         bool submitted,
-        bool setupRequired = false)
+        bool setupRequired = false,
+        IReadOnlyDictionary<string, string>? diagnostics = null)
     {
         while (true)
         {
@@ -1235,6 +1238,7 @@ internal sealed class TrayProtectionController
                 ProtectedSendAttemptTrace: current.State.ProtectedSendAttemptTrace,
                 ProtectedSendAttemptStartedAtTimestamp: current.State.ProtectedSendAttemptStartedAtTimestamp,
                 LastProtectedSendInterruption: current.State.LastProtectedSendInterruption,
+                LastProtectedSendTraceStatus: ProtectedSendTraceStatus(diagnostics, current.State.LastProtectedSendTraceStatus),
                 SetupVerificationStatus: current.State.SetupVerificationStatus,
                 SetupVerificationAction: current.State.SetupVerificationAction,
                 SetupVerificationProfileId: current.State.SetupVerificationProfileId,
@@ -1245,6 +1249,26 @@ internal sealed class TrayProtectionController
                 return;
             }
         }
+    }
+
+    private static string ProtectedSendTraceStatus(
+        IReadOnlyDictionary<string, string>? diagnostics,
+        string currentStatus)
+    {
+        if (diagnostics is null
+            || !diagnostics.TryGetValue("trace_status", out var traceStatus))
+        {
+            return currentStatus;
+        }
+
+        return traceStatus switch
+        {
+            "trace_unavailable"
+                or "test_trace_unavailable"
+                or "resident_operation_unavailable"
+                or "send_injected_unavailable" => traceStatus,
+            _ => "none"
+        };
     }
 
     private ProtectionSnapshot? PublishProtectedSendAttempt(
@@ -2154,7 +2178,6 @@ internal sealed class TrayProtectionController
 internal sealed record NativeSubmitRuntime(
     INativeSubmitHookHost HookHost,
     NativeSubmitInterceptionController Controller,
-    Func<OsInteractionResult> Runner,
     SubmitBindingProfile Profile,
     bool TraceRequired = false,
     Func<Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTracedRunner = null,
@@ -2173,7 +2196,6 @@ internal sealed record NativeSubmitRuntime(
         return new NativeSubmitRuntime(
             hookHost,
             controller,
-            runner,
             profile,
             TraceRequired,
             ResidentTracedRunner ?? ((traceStage, executionGuard, executionLease) =>

@@ -1118,7 +1118,7 @@ public partial class SanitizerTests
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            runtime.Runner,
+            nativeSubmitRunner: null,
             profile,
             nativeSubmitRuntimes: new[] { runtime });
 
@@ -1136,22 +1136,9 @@ public partial class SanitizerTests
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
-        var runnerCalls = 0;
         var runtime = new NativeSubmitRuntime(
             hook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
-            () =>
-            {
-                runnerCalls++;
-                return new OsInteractionResult(
-                    OsInteractionStatusIds.Submitted,
-                    CreateNativeSubmitSurface(profile.ProfileId),
-                    null,
-                    null,
-                    Applied: true,
-                    Submitted: true,
-                    Diagnostics: new Dictionary<string, string>());
-            },
             profile,
             TraceRequired: false,
             ResidentTracedRunner: null,
@@ -1162,7 +1149,7 @@ public partial class SanitizerTests
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            runtime.Runner,
+            nativeSubmitRunner: null,
             profile,
             nativeSubmitRuntimes: new[] { runtime });
 
@@ -1170,7 +1157,7 @@ public partial class SanitizerTests
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
 
         Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
-        Assert.That(runnerCalls, Is.Zero);
+        Assert.That(controller.State.LastProtectedSendTraceStatus, Is.EqualTo("trace_unavailable"));
         var unavailable = TrayProtectionController.TraceRunnerUnavailableResult();
         Assert.That(unavailable.Diagnostics["trace_status"], Is.EqualTo("trace_unavailable"));
         Assert.That(unavailable.Diagnostics.Values, Does.Not.Contain("RESIDENT_SMOKE_SENSITIVE_VALUE"));
@@ -1233,6 +1220,7 @@ public partial class SanitizerTests
             OsInteractionResult CompleteWithoutSideEffect(
                 Func<string, string, bool>? traceStage = null,
                 Func<bool>? executionGuard = null,
+                Func<IDisposable?>? executionLease = null,
                 bool countSideEffect = false)
             {
                 var stages = new[]
@@ -1279,14 +1267,37 @@ public partial class SanitizerTests
                                 });
                         }
 
-                        if (stage.Stage == "text_written")
+                        var lease = executionLease?.Invoke();
+                        if (executionLease is not null && lease is null)
                         {
-                            oldWriteSideEffects++;
+                            return new OsInteractionResult(
+                                OsInteractionStatusIds.FailedClosed,
+                                CreateNativeSubmitSurface(profile.ProfileId),
+                                null,
+                                null,
+                                Applied: false,
+                                Submitted: false,
+                                Diagnostics: new Dictionary<string, string>
+                                {
+                                    ["trace_status"] = "resident_operation_unavailable"
+                                });
                         }
 
-                        if (stage.Stage == "send_injected")
+                        try
                         {
-                            oldReplaySideEffects++;
+                            if (stage.Stage == "text_written")
+                            {
+                                oldWriteSideEffects++;
+                            }
+
+                            if (stage.Stage == "send_injected")
+                            {
+                                oldReplaySideEffects++;
+                            }
+                        }
+                        finally
+                        {
+                            lease?.Dispose();
                         }
                     }
                 }
@@ -1318,10 +1329,10 @@ public partial class SanitizerTests
                     new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
                 () => CompleteWithoutSideEffect(countSideEffect: true),
                 profile,
-                ResidentTracedRunner: (traceStage, executionGuard, _) =>
-                    CompleteWithoutSideEffect(traceStage, executionGuard, countSideEffect: true),
-                ResidentTargetTracedRunner: (target, traceStage, executionGuard, _) =>
-                    CompleteWithoutSideEffect(traceStage, executionGuard, countSideEffect: true),
+                ResidentTracedRunner: (traceStage, executionGuard, executionLease) =>
+                    CompleteWithoutSideEffect(traceStage, executionGuard, executionLease, countSideEffect: true),
+                ResidentTargetTracedRunner: (target, traceStage, executionGuard, executionLease) =>
+                    CompleteWithoutSideEffect(traceStage, executionGuard, executionLease, countSideEffect: true),
                 TraceRequired: true);
 
             controller = new TrayProtectionController(
@@ -1329,7 +1340,7 @@ public partial class SanitizerTests
                 () => throw new InvalidOperationException("Manual scan should not run."),
                 oldHook,
                 oldRuntime.Controller,
-                oldRuntime.Runner,
+                nativeSubmitRunner: null,
                 profile,
                 protectedSendStageObserver: stage =>
                 {
@@ -3112,11 +3123,12 @@ public class HandleButtonClickTests : SanitizerTests
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            runtime.Runner,
+            nativeSubmitRunner: null,
             profile,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
                 OsInteractionStatusIds.SurfaceUnverified,
-                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }));
+                new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }),
+            nativeSubmitRuntimes: new[] { runtime });
 
         Assert.That(tray.Start(), Is.True);
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
@@ -3140,11 +3152,12 @@ public class HandleButtonClickTests : SanitizerTests
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            runtime.Runner,
+            nativeSubmitRunner: null,
             profile,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Failure(
                 OsInteractionStatusIds.SurfaceUnverified,
-                new Dictionary<string, string> { ["profile_id"] = "unrelated-app" }));
+                new Dictionary<string, string> { ["profile_id"] = "unrelated-app" }),
+            nativeSubmitRuntimes: new[] { runtime });
 
         Assert.That(tray.Start(), Is.True);
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
@@ -3176,9 +3189,10 @@ public class HandleButtonClickTests : SanitizerTests
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            runtime.Runner,
+            nativeSubmitRunner: null,
             profile,
-            activeSurfaceDiscovery: () => throw new InvalidOperationException());
+            activeSurfaceDiscovery: () => throw new InvalidOperationException(),
+            nativeSubmitRuntimes: new[] { runtime });
 
         Assert.That(tray.Start(), Is.True);
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
@@ -3223,7 +3237,7 @@ public class HandleButtonClickTests : SanitizerTests
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            runtime.Runner,
+            nativeSubmitRunner: null,
             profile,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(capturedSurface),
             nativeSubmitRuntimes: new[] { runtime });
@@ -3409,12 +3423,13 @@ public class HandleButtonClickTests : SanitizerTests
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtime.Controller,
-            runtime.Runner,
+            nativeSubmitRunner: null,
             profile,
             sendControlDiscovery: sendControlDiscovery,
             activeSurfaceDiscovery: () => activeSurfaceResult
                 ?? TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(activeProfileId)),
-            selectedWindowProfileResolver: selectedWindowProfileResolver ?? (_ => activeProfileId));
+            selectedWindowProfileResolver: selectedWindowProfileResolver ?? (_ => activeProfileId),
+            nativeSubmitRuntimes: new[] { runtime });
     }
 
     private static TextSurfaceDescriptor CreateNativeSurfaceWithWindow(string profileId, string windowHandle)
@@ -3509,10 +3524,11 @@ public class HandleButtonClickTests : SanitizerTests
                 () => throw new InvalidOperationException("Manual scan should not run."),
                 oldHook,
                 oldRuntime.Controller,
-                oldRuntime.Runner,
+                nativeSubmitRunner: null,
                 oldProfile,
                 storageLayout: layout,
-                activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
+                activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+                nativeSubmitRuntimes: new[] { oldRuntime });
 
             Assert.That(tray.Start(), Is.True);
             oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
@@ -3592,7 +3608,7 @@ public class HandleButtonClickTests : SanitizerTests
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtimes[0].Controller,
-            runtimes[0].Runner,
+            nativeSubmitRunner: null,
             runtimes[0].Profile,
             nativeSubmitRuntimes: runtimes,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
@@ -3639,7 +3655,7 @@ public class HandleButtonClickTests : SanitizerTests
             () => throw new InvalidOperationException("Manual scan should not run."),
             hook,
             runtimes[0].Controller,
-            runtimes[0].Runner,
+            nativeSubmitRunner: null,
             runtimes[0].Profile,
             nativeSubmitRuntimes: runtimes,
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));

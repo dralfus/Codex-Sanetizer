@@ -1195,10 +1195,12 @@ submit call occurs.
 - [x] Legacy synthetic trace fallback is removed from the production path.
 - [x] Tests cover missing traced runner and preserve raw-free diagnostics.
 
-**Review follow-up (2026-08-06):** The old `Runner`, `TargetRunner`,
-`TracedRunner`, and `TargetTracedRunner` delegates must not remain executable
-for a runtime accepted by the resident controller. Production construction
-and the explicit test seam must use the guarded traced contract only.
+**Review result (2026-08-06):** Resolved. Production runtime no longer
+stores an untraced `Runner`; only `NativeSubmitRuntime.CreateTest` closes over
+the test runner. Production construction requires both guarded resident
+contracts, and the missing-runner test asserts the trace status projected by
+the real interception flow. Lifecycle smoke/tests also exercise the lease
+contract at side-effect boundaries.
 
 ## 311. Type and centralize protected-Send trace transitions
 
