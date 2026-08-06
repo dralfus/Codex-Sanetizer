@@ -991,6 +991,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             return "Prompt protection: stopped";
         }
 
+        if (state.LastProtectedSendInterruption is not null)
+        {
+            return "Protected Send: previous Send was interrupted; retry protection before sending";
+        }
+
         if (!string.Equals(state.LocalProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
             return "Prompt protection: local protection needs repair before sending";
