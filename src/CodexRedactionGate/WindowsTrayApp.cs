@@ -290,7 +290,9 @@ public static class WindowsTrayApp
                 setupLayout: layout);
             OsInteractionResult RunConfirmAndSend(
                 NativeSubmitTargetIdentity? target,
-                Func<string, string, bool>? traceStage)
+                Func<string, string, bool>? traceStage,
+                Func<bool>? executionGuard = null,
+                Func<IDisposable?>? executionLease = null)
             {
                 var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
                 IActiveTextSurfaceDiscovery composerDiscovery = target is null
@@ -307,7 +309,9 @@ public static class WindowsTrayApp
                     confirmationOverlay);
                 return nativeSubmitOrchestrator.RunOnce(
                     OsInteractionRunOptions.ConfirmAndSend,
-                    traceStage);
+                    traceStage,
+                    executionGuard,
+                    executionLease);
             }
 
             return new NativeSubmitRuntime(
@@ -318,7 +322,17 @@ public static class WindowsTrayApp
                 target => RunConfirmAndSend(target, traceStage: null),
                 TracedRunner: traceStage => RunConfirmAndSend(target: null, traceStage: traceStage),
                 TargetTracedRunner: (target, traceStage) => RunConfirmAndSend(target, traceStage),
-                TraceRequired: true);
+                TraceRequired: true,
+                ResidentTracedRunner: (traceStage, executionGuard, executionLease) => RunConfirmAndSend(
+                    target: null,
+                    traceStage: traceStage,
+                    executionGuard: executionGuard,
+                    executionLease: executionLease),
+                ResidentTargetTracedRunner: (target, traceStage, executionGuard, executionLease) => RunConfirmAndSend(
+                    target: target,
+                    traceStage: traceStage,
+                    executionGuard: executionGuard,
+                    executionLease: executionLease));
         }).ToArray();
         return new NativeSubmitRuntimeSet(hookHost, runtimes, confirmationOverlay);
     }

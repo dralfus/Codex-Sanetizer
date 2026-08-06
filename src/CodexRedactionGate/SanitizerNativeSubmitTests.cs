@@ -1060,6 +1060,72 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_StopCancelsResidentOperationBeforeSubmitSideEffect()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        TrayProtectionController? controller = null;
+        var submitSideEffects = 0;
+
+        OsInteractionResult FailedClosed()
+        {
+            return new OsInteractionResult(
+                OsInteractionStatusIds.FailedClosed,
+                CreateNativeSubmitSurface(profile.ProfileId),
+                null,
+                null,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["trace_status"] = "resident_operation_unavailable"
+                });
+        }
+
+        var runtime = new NativeSubmitRuntime(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("The resident traced runner must be used."),
+            profile,
+            TraceRequired: true,
+            ResidentTracedRunner: (_, executionGuard, _) =>
+            {
+                controller!.Stop();
+                if (!executionGuard())
+                {
+                    return FailedClosed();
+                }
+
+                submitSideEffects++;
+                return new OsInteractionResult(
+                    OsInteractionStatusIds.Submitted,
+                    CreateNativeSubmitSurface(profile.ProfileId),
+                    null,
+                    null,
+                    Applied: true,
+                    Submitted: true,
+                    Diagnostics: new Dictionary<string, string>());
+            });
+
+        controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            runtime.Controller,
+            runtime.Runner,
+            profile,
+            nativeSubmitRuntimes: new[] { runtime });
+
+        Assert.That(controller.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(submitSideEffects, Is.Zero);
+        Assert.That(controller.State.Enabled, Is.False);
+        Assert.That(controller.State.NativeSubmitEnabled, Is.False);
+        Assert.That(hook.Started, Is.False);
+    }
+
+    [Test]
     public void TrayProtectionController_RuntimeReloadInterruptsAtEveryProtectedSendStage()
     {
         foreach (var reloadStage in new[] { "detection", "checking", "overlay", "write", "replay" })
@@ -1085,6 +1151,7 @@ public partial class SanitizerTests
 
             OsInteractionResult CompleteWithoutSideEffect(
                 Func<string, string, bool>? traceStage = null,
+                Func<bool>? executionGuard = null,
                 bool countSideEffect = false)
             {
                 var stages = new[]
@@ -1114,14 +1181,32 @@ public partial class SanitizerTests
                             });
                     }
 
-                    if (countSideEffect && stage.Stage == "text_written")
+                    if (countSideEffect && stage.Stage is "text_written" or "send_injected")
                     {
-                        oldWriteSideEffects++;
-                    }
+                        if (executionGuard is not null && !executionGuard())
+                        {
+                            return new OsInteractionResult(
+                                OsInteractionStatusIds.FailedClosed,
+                                CreateNativeSubmitSurface(profile.ProfileId),
+                                null,
+                                null,
+                                Applied: false,
+                                Submitted: false,
+                                Diagnostics: new Dictionary<string, string>
+                                {
+                                    ["trace_status"] = "resident_operation_unavailable"
+                                });
+                        }
 
-                    if (countSideEffect && stage.Stage == "send_injected")
-                    {
-                        oldReplaySideEffects++;
+                        if (stage.Stage == "text_written")
+                        {
+                            oldWriteSideEffects++;
+                        }
+
+                        if (stage.Stage == "send_injected")
+                        {
+                            oldReplaySideEffects++;
+                        }
                     }
                 }
 
@@ -1152,7 +1237,8 @@ public partial class SanitizerTests
                     new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
                 () => CompleteWithoutSideEffect(countSideEffect: true),
                 profile,
-                TracedRunner: traceStage => CompleteWithoutSideEffect(traceStage, countSideEffect: true),
+                ResidentTracedRunner: (traceStage, executionGuard, _) =>
+                    CompleteWithoutSideEffect(traceStage, executionGuard, countSideEffect: true),
                 TraceRequired: true);
 
             controller = new TrayProtectionController(

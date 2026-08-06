@@ -2121,6 +2121,25 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void OsInteractionOrchestrator_StopsBeforeSubmitWhenResidentOperationIsStaleAtReplayBoundary()
+    {
+        var surface = new ProductFlowTextSurface("Connect to 192.168.10.25");
+        var guardCalls = 0;
+        var orchestrator = CreateProductFlowOrchestrator(surface, ConfirmationDecisionContract.Confirm);
+
+        var result = orchestrator.RunOnce(
+            OsInteractionRunOptions.ConfirmAndSend,
+            executionGuard: () => ++guardCalls < 4);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+        Assert.That(result.Submitted, Is.False);
+        Assert.That(result.Applied, Is.True);
+        Assert.That(result.Diagnostics["trace_status"], Is.EqualTo("resident_operation_unavailable"));
+        Assert.That(surface.WriteCount, Is.EqualTo(1));
+        Assert.That(surface.SubmitCount, Is.Zero);
+    }
+
+    [Test]
     public void Sanitize_NoSensitivePrompt_ReturnsAllowWithUnchangedText()
     {
         var input = "Normal prompt text";

@@ -49,13 +49,15 @@ public sealed class OsInteractionOrchestrator
 
     public OsInteractionResult RunOnce(
         OsInteractionRunOptions options,
-        Func<string, string, bool>? traceStage = null)
+        Func<string, string, bool>? traceStage = null,
+        Func<bool>? executionGuard = null,
+        Func<IDisposable?>? executionLease = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         try
         {
-            return RunOnceInternal(options, traceStage);
+            return RunOnceInternal(options, traceStage, executionGuard, executionLease);
         }
         catch (Exception ex)
         {
@@ -78,7 +80,9 @@ public sealed class OsInteractionOrchestrator
 
     private OsInteractionResult RunOnceInternal(
         OsInteractionRunOptions options,
-        Func<string, string, bool>? traceStage)
+        Func<string, string, bool>? traceStage,
+        Func<bool>? executionGuard,
+        Func<IDisposable?>? executionLease)
     {
         var discovery = _surfaceDiscovery.DiscoverActiveSurface();
         if (!discovery.Succeeded || discovery.Surface is null || !discovery.Surface.Supported)
@@ -144,6 +148,11 @@ public sealed class OsInteractionOrchestrator
                 return Finish(OsInteractionStatusIds.FailedClosed, surface, result, model, false, false, Merge(
                     diagnostics,
                     ("trace_status", "overlay_created_unavailable")));
+            }
+
+            if (!CanExecute(executionGuard))
+            {
+                return ExecutionGuardFailed(surface, result, model, false, diagnostics);
             }
 
             var decision = _confirmationOverlay is ITracedConfirmationOverlay tracedOverlay
@@ -214,6 +223,11 @@ public sealed class OsInteractionOrchestrator
                 return Finish(OsInteractionStatusIds.Applied, surface, result, model, true, false, unchangedDiagnostics);
             }
 
+            if (!CanExecute(executionGuard))
+            {
+                return ExecutionGuardFailed(surface, result, model, true, unchangedDiagnostics);
+            }
+
             var preSubmit = RediscoverSameSurface(surface);
             if (preSubmit.Status is not null)
             {
@@ -231,7 +245,26 @@ public sealed class OsInteractionOrchestrator
                     ("trace_status", "send_injected_unavailable")));
             }
 
-            var submitWithoutWrite = _submitAction.Submit(submitSurface);
+            if (!CanExecute(executionGuard))
+            {
+                return ExecutionGuardFailed(submitSurface, result, model, true, unchangedDiagnostics);
+            }
+
+            if (!TryAcquireExecutionLease(executionGuard, executionLease, out var submitLease))
+            {
+                return ExecutionGuardFailed(submitSurface, result, model, true, unchangedDiagnostics);
+            }
+
+            SubmitActionResult submitWithoutWrite;
+            try
+            {
+                submitWithoutWrite = _submitAction.Submit(submitSurface);
+            }
+            finally
+            {
+                submitLease?.Dispose();
+            }
+
             return submitWithoutWrite.Succeeded
                 ? Finish(OsInteractionStatusIds.Submitted, submitSurface, result, model, true, true, Merge(
                     unchangedDiagnostics,
@@ -253,7 +286,25 @@ public sealed class OsInteractionOrchestrator
         }
 
         var writeSurface = preWrite.Surface ?? surface;
-        var replace = _writer.ReplaceText(writeSurface, outgoingText);
+        if (!CanExecute(executionGuard))
+        {
+            return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics);
+        }
+
+        if (!TryAcquireExecutionLease(executionGuard, executionLease, out var writeLease))
+        {
+            return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics);
+        }
+
+        TextReplacementResult replace;
+        try
+        {
+            replace = _writer.ReplaceText(writeSurface, outgoingText);
+        }
+        finally
+        {
+            writeLease?.Dispose();
+        }
         if (!replace.Succeeded)
         {
             return Finish(OsInteractionStatusIds.WriteFailed, writeSurface, result, model, false, false, Merge(
@@ -306,6 +357,16 @@ public sealed class OsInteractionOrchestrator
                 ("verification_status", verificationCapture.Status)));
         }
 
+        if (!CanExecute(executionGuard))
+        {
+            return ExecutionGuardFailed(verificationSurface, result, model, true, Merge(
+                diagnostics,
+                replace.Diagnostics,
+                verificationCapture.Diagnostics,
+                ("write_status", replace.Status),
+                ("verification_status", verificationCapture.Status)));
+        }
+
         if (!TryTrace(traceStage, "send_injected", "submit_requested"))
         {
             return Finish(OsInteractionStatusIds.FailedClosed, verificationSurface, result, model, true, false, Merge(
@@ -316,7 +377,35 @@ public sealed class OsInteractionOrchestrator
                 ("trace_status", "send_injected_unavailable")));
         }
 
-        var submit = _submitAction.Submit(verificationSurface);
+        if (!CanExecute(executionGuard))
+        {
+            return ExecutionGuardFailed(verificationSurface, result, model, true, Merge(
+                diagnostics,
+                replace.Diagnostics,
+                verificationCapture.Diagnostics,
+                ("write_status", replace.Status),
+                ("verification_status", verificationCapture.Status)));
+        }
+
+        if (!TryAcquireExecutionLease(executionGuard, executionLease, out var replayLease))
+        {
+            return ExecutionGuardFailed(verificationSurface, result, model, true, Merge(
+                diagnostics,
+                replace.Diagnostics,
+                verificationCapture.Diagnostics,
+                ("write_status", replace.Status),
+                ("verification_status", verificationCapture.Status)));
+        }
+
+        SubmitActionResult submit;
+        try
+        {
+            submit = _submitAction.Submit(verificationSurface);
+        }
+        finally
+        {
+            replayLease?.Dispose();
+        }
         return submit.Succeeded
             ? Finish(OsInteractionStatusIds.Submitted, verificationSurface, result, model, true, true, Merge(
                 diagnostics,
@@ -341,6 +430,67 @@ public sealed class OsInteractionOrchestrator
     }
 
     private static bool AlwaysTrace(string _, string __) => true;
+
+    private static bool CanExecute(Func<bool>? executionGuard)
+    {
+        if (executionGuard is null)
+        {
+            return true;
+        }
+
+        try
+        {
+            return executionGuard();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryAcquireExecutionLease(
+        Func<bool>? executionGuard,
+        Func<IDisposable?>? executionLease,
+        out IDisposable? lease)
+    {
+        lease = null;
+        if (!CanExecute(executionGuard))
+        {
+            return false;
+        }
+
+        if (executionLease is null)
+        {
+            return true;
+        }
+
+        try
+        {
+            lease = executionLease();
+            return lease is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static OsInteractionResult ExecutionGuardFailed(
+        TextSurfaceDescriptor submitSurface,
+        SanitizationResult result,
+        ConfirmationUiModel? model,
+        bool applied,
+        IReadOnlyDictionary<string, string> diagnostics)
+    {
+        return Finish(
+            OsInteractionStatusIds.FailedClosed,
+            submitSurface,
+            result,
+            model,
+            applied,
+            false,
+            Merge(diagnostics, ("trace_status", "resident_operation_unavailable")));
+    }
 
     private RediscoveredSurface RediscoverSameSurface(TextSurfaceDescriptor expectedSurface)
     {

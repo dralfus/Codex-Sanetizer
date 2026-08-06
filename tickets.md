@@ -695,6 +695,11 @@ passes through, and unrelated input is not captured.
 - [ ] If the profile store cannot be read, the tray shows a raw-free settings
   recovery action rather than offering a setup action that cannot run.
 
+**Review follow-up (2026-08-06):** Invalidation by Stop or runtime replacement
+must preserve one terminal raw-free trace for the interrupted operation; an
+interruption projection that clears the attempt trace is not sufficient. The
+same rule applies to deferred keyboard and pointer paths.
+
 ## 298. Publish a raw-free protected-Send attempt status
 
 **What to build:** Make each configured keyboard Send attempt visible in the
@@ -923,14 +928,23 @@ attempt.
 exercise normal completion, runtime replacement, stop, duplicate gesture, and
 runner failure without timers, live desktop focus, or cloud access.
 
-- [ ] The hook schedules one resident operation after suppressing a matching
+- [x] The hook schedules one resident operation after suppressing a matching
   selected keyboard Send and never waits for sanitization or UI work.
 - [ ] The operation revalidates its original generation and target before each
   side effect and cannot invoke a runner after stop or replacement.
 - [ ] A duplicate Send, stale operation, runner failure, and cancellation each
   result in one raw-free terminal trace outcome and no raw replay.
-- [ ] Tests prove unrelated applications and configured newline input continue
+- [x] Tests prove unrelated applications and configured newline input continue
   to pass through normally.
+
+**Review follow-up (2026-08-06):**
+
+- Keep this ticket open until the resident operation itself owns the attempt
+  identifier and trace lifecycle, including a terminal trace for Stop and
+  runtime replacement; the current interruption projection is not sufficient.
+- The legacy runner compatibility path is intentionally completed by ticket
+  310, and target identity revalidation is completed by ticket 305. Both are
+  required before this ticket can be closed.
 
 ## 304. Dispatch replacement overlays from one resident UI owner
 
@@ -1004,6 +1018,11 @@ without live desktop focus, timers, or cloud access.
   leave the original Send blocked and publish a raw-free terminal trace reason.
 - [ ] Tests cover keyboard and supported mouse-originated attempts through the
   same compare-before-write-and-send boundary.
+
+**Review follow-up (2026-08-06):** The resident operation must expose the
+captured target contract to this boundary and revalidate profile, window, and
+generation immediately before write and again before replay. A profile-only
+match is insufficient for two same-profile windows.
 
 ## 306. Prove the complete path with a local reference composer
 
@@ -1145,6 +1164,10 @@ failure without a live cloud or timer.
   retry reason; unrelated clicks are not intercepted.
 - [ ] Pointer approval and cancellation share the keyboard overlay contract.
 
+**Review follow-up (2026-08-06):** Pointer attempts must use the same resident
+attempt/trace owner and terminal-trace rule as keyboard attempts; keyboard
+trace success cannot be reused as pointer evidence.
+
 ## 310. Remove the untraced runtime compatibility path
 
 **What to build:** Remove the production-like fallback that executes an
@@ -1171,6 +1194,11 @@ submit call occurs.
 - [ ] Production runtime construction requires traced runners.
 - [ ] Legacy synthetic trace fallback is removed from the production path.
 - [ ] Tests cover missing traced runner and preserve raw-free diagnostics.
+
+**Review follow-up (2026-08-06):** The old `Runner`, `TargetRunner`,
+`TracedRunner`, and `TargetTracedRunner` delegates must not remain executable
+for a runtime accepted by the resident controller. Production construction
+and the explicit test seam must use the guarded traced contract only.
 
 ## 311. Type and centralize protected-Send trace transitions
 
