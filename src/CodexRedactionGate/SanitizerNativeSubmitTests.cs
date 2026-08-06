@@ -104,6 +104,17 @@ public partial class SanitizerTests
             Is.False);
 
         Assert.That(
+            ProtectedSendTrace.TryAppend(
+                Array.Empty<ProtectedSendTraceEntry>(),
+                attemptId: 7,
+                snapshotGeneration: 3,
+                targetFingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                transition: default,
+                durationMilliseconds: 0,
+                out _),
+            Is.False);
+
+        Assert.That(
             ProtectedSendTraceTransition.TryCreate(
                 "send_detected",
                 "checking_prompt",
@@ -1082,7 +1093,17 @@ public partial class SanitizerTests
                 {
                     if (traceStage is not null && !traceStage(stage.Stage, stage.Code))
                     {
-                        break;
+                        return new OsInteractionResult(
+                            OsInteractionStatusIds.FailedClosed,
+                            CreateNativeSubmitSurface(profile.ProfileId),
+                            null,
+                            null,
+                            Applied: false,
+                            Submitted: false,
+                            Diagnostics: new Dictionary<string, string>
+                            {
+                                ["trace_status"] = "trace_unavailable"
+                            });
                     }
                 }
 
@@ -1113,7 +1134,7 @@ public partial class SanitizerTests
                     new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
                 () => CompleteWithoutSideEffect(countSideEffect: true),
                 profile,
-                TracedRunner: traceStage => CompleteWithoutSideEffect(traceStage),
+                TracedRunner: traceStage => CompleteWithoutSideEffect(traceStage, countSideEffect: true),
                 TraceRequired: true);
 
             controller = new TrayProtectionController(

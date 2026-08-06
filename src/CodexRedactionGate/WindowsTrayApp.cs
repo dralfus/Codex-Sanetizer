@@ -231,7 +231,8 @@ public static class WindowsTrayApp
             storageLayout: resolvedLayout,
             sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault(resolvedLayout),
             nativeSubmitRuntimes: runtimeSet?.Runtimes,
-            activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface);
+            activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
+            residentRuntimeOwner: residentRuntime.ApplyOnlyResourceOwner);
     }
 
     internal static ResidentProtectionRuntime CreateResidentProtectionRuntime(
@@ -252,7 +253,8 @@ public static class WindowsTrayApp
             confirmationOverlay);
         return new ResidentProtectionRuntime(
             () => orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly),
-            CreateNativeSubmitRuntimeSet(sanitizer, layout));
+            CreateNativeSubmitRuntimeSet(sanitizer, layout),
+            confirmationOverlay);
     }
 
     internal static NativeSubmitRuntime? CreateNativeSubmitRuntime(ISanitizer sanitizer, DefaultStorageLayout layout)

@@ -91,7 +91,7 @@ internal sealed class TrayProtectionController
     private readonly DefaultStorageLayout _storageLayout;
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
     private readonly Action<string>? _protectedSendStageObserver;
-    private readonly IDisposable? _residentRuntimeOwner;
+    private IDisposable? _residentRuntimeOwner;
     private readonly ConcurrentDictionary<CapturedTargetProfileKey, string> _capturedTargetProfiles = new();
     private readonly object _reloadGate = new();
     private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
@@ -436,14 +436,25 @@ internal sealed class TrayProtectionController
         lock (_reloadGate)
         {
             var previous = ReadSnapshot();
-            return ReloadRuntime(previous, runtime.NativeSubmitRuntimeSet, runtime.ApplyOnlyRunner);
+            var reloaded = ReloadRuntime(
+                previous,
+                runtime.NativeSubmitRuntimeSet,
+                runtime.ApplyOnlyRunner,
+                runtime.ApplyOnlyResourceOwner);
+            if (!reloaded)
+            {
+                runtime.ApplyOnlyResourceOwner?.Dispose();
+            }
+
+            return reloaded;
         }
     }
 
     private bool ReloadRuntime(
         ProtectionSnapshot previous,
         NativeSubmitRuntimeSet runtimeSet,
-        Func<OsInteractionResult> applyOnlyRunner)
+        Func<OsInteractionResult> applyOnlyRunner,
+        IDisposable? residentRuntimeOwner = null)
     {
         var candidate = TryBuildCandidateSnapshot(previous, runtimeSet, applyOnlyRunner);
         if (candidate is null)
@@ -461,13 +472,23 @@ internal sealed class TrayProtectionController
         if (!StartNativeSubmitHook(candidate.RuntimeSet!))
         {
             StopAndDisposeRuntime(candidate.RuntimeSet);
+            residentRuntimeOwner?.Dispose();
             return false;
         }
 
         if (!TryPublishRuntimeCandidate(previous, candidate))
         {
             StopAndDisposeRuntime(candidate.RuntimeSet);
+            residentRuntimeOwner?.Dispose();
             return false;
+        }
+
+        if (residentRuntimeOwner is not null
+            && !ReferenceEquals(_residentRuntimeOwner, residentRuntimeOwner))
+        {
+            var previousOwner = _residentRuntimeOwner;
+            _residentRuntimeOwner = residentRuntimeOwner;
+            previousOwner?.Dispose();
         }
 
         if (previous.RuntimeSet is not null
@@ -2070,7 +2091,8 @@ internal sealed record NativeSubmitRuntimeSet(
 
 internal sealed record ResidentProtectionRuntime(
     Func<OsInteractionResult> ApplyOnlyRunner,
-    NativeSubmitRuntimeSet? NativeSubmitRuntimeSet);
+    NativeSubmitRuntimeSet? NativeSubmitRuntimeSet,
+    IDisposable? ApplyOnlyResourceOwner = null);
 
 internal static class TrayStatusFormatter
 {

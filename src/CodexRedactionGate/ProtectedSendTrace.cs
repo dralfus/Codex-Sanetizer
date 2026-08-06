@@ -38,6 +38,55 @@ internal enum ProtectedSendTraceStage
 
 internal readonly record struct ProtectedSendTraceResultCode
 {
+    private static readonly string[] KnownValues =
+    {
+        "checking_prompt",
+        "target_verified",
+        "capture_verified",
+        "sanitization_verified",
+        "confirmation_requested",
+        "foreground_verified",
+        "user_cancelled",
+        "user_approved",
+        "write_verified",
+        "submit_requested",
+        OsInteractionStatusIds.SupportedSurface,
+        OsInteractionStatusIds.UnsupportedSurface,
+        OsInteractionStatusIds.UnsupportedPlatform,
+        OsInteractionStatusIds.AmbiguousSurface,
+        OsInteractionStatusIds.CaptureFailed,
+        OsInteractionStatusIds.WriteFailed,
+        OsInteractionStatusIds.SubmitFailed,
+        OsInteractionStatusIds.VerificationFailed,
+        OsInteractionStatusIds.FocusLost,
+        OsInteractionStatusIds.StaleComposer,
+        OsInteractionStatusIds.DryRunAllow,
+        OsInteractionStatusIds.DryRunConfirm,
+        OsInteractionStatusIds.Blocked,
+        OsInteractionStatusIds.Canceled,
+        OsInteractionStatusIds.Applied,
+        OsInteractionStatusIds.Submitted,
+        OsInteractionStatusIds.FailedClosed,
+        OsInteractionStatusIds.SafetyDisabled,
+        OsInteractionStatusIds.NotComposer,
+        OsInteractionStatusIds.SupportedComposer,
+        OsInteractionStatusIds.EvidenceMissing,
+        OsInteractionStatusIds.Protected,
+        OsInteractionStatusIds.NotConfigured,
+        OsInteractionStatusIds.BindingUnknown,
+        OsInteractionStatusIds.SurfaceUnverified,
+        OsInteractionStatusIds.DegradedHotkeyOnly,
+        OsInteractionStatusIds.NativeSubmitGuarded,
+        OsInteractionStatusIds.NativeSubmitInProgress,
+        OsInteractionStatusIds.NativeSubmitPassThrough,
+        OsInteractionStatusIds.NativeSubmitCrashed,
+        OsInteractionStatusIds.TraceUnavailable,
+        OsInteractionStatusIds.EmergencyDisabled,
+        OsInteractionStatusIds.EnterpriseBlocked,
+        OsInteractionStatusIds.NativeSubmitSetupRequired,
+        OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported
+    };
+
     private ProtectedSendTraceResultCode(string value)
     {
         Value = value;
@@ -47,7 +96,7 @@ internal readonly record struct ProtectedSendTraceResultCode
 
     public static bool TryCreate(string value, out ProtectedSendTraceResultCode result)
     {
-        if (!IsSafeToken(value))
+        if (!IsSafeToken(value) || Array.IndexOf(KnownValues, value) < 0)
         {
             result = default;
             return false;
@@ -56,6 +105,10 @@ internal readonly record struct ProtectedSendTraceResultCode
         result = new ProtectedSendTraceResultCode(value);
         return true;
     }
+
+    public bool IsValid => !string.IsNullOrWhiteSpace(Value)
+        && IsSafeToken(Value)
+        && Array.IndexOf(KnownValues, Value) >= 0;
 
     private static bool IsSafeToken(string value)
     {
@@ -82,6 +135,23 @@ internal readonly record struct ProtectedSendTraceTransition(
     ProtectedSendTraceStage Stage,
     ProtectedSendTraceResultCode ResultCode)
 {
+    private static readonly IReadOnlyDictionary<ProtectedSendTraceStage, string> StageTokens =
+        new Dictionary<ProtectedSendTraceStage, string>
+        {
+            [ProtectedSendTraceStage.SendDetected] = "send_detected",
+            [ProtectedSendTraceStage.TargetMatched] = "target_matched",
+            [ProtectedSendTraceStage.ComposerRead] = "composer_read",
+            [ProtectedSendTraceStage.Sanitized] = "sanitized",
+            [ProtectedSendTraceStage.OverlayCreated] = "overlay_created",
+            [ProtectedSendTraceStage.OverlayForegroundConfirmed] = "overlay_foreground_confirmed",
+            [ProtectedSendTraceStage.Approved] = "approved",
+            [ProtectedSendTraceStage.Cancelled] = "cancelled",
+            [ProtectedSendTraceStage.TextWritten] = "text_written",
+            [ProtectedSendTraceStage.SendInjected] = "send_injected",
+            [ProtectedSendTraceStage.SentSafely] = "sent_safely",
+            [ProtectedSendTraceStage.TerminalBlocked] = "terminal_blocked"
+        };
+
     public static bool TryCreate(
         string stage,
         string resultCode,
@@ -98,47 +168,24 @@ internal readonly record struct ProtectedSendTraceTransition(
         return true;
     }
 
+    public bool IsValid => StageTokens.ContainsKey(Stage) && ResultCode.IsValid;
+
     public static bool TryParseStageToken(string value, out ProtectedSendTraceStage stage)
     {
-        stage = value switch
+        foreach (var pair in StageTokens)
         {
-            "send_detected" => ProtectedSendTraceStage.SendDetected,
-            "target_matched" => ProtectedSendTraceStage.TargetMatched,
-            "composer_read" => ProtectedSendTraceStage.ComposerRead,
-            "sanitized" => ProtectedSendTraceStage.Sanitized,
-            "overlay_created" => ProtectedSendTraceStage.OverlayCreated,
-            "overlay_foreground_confirmed" => ProtectedSendTraceStage.OverlayForegroundConfirmed,
-            "approved" => ProtectedSendTraceStage.Approved,
-            "cancelled" => ProtectedSendTraceStage.Cancelled,
-            "text_written" => ProtectedSendTraceStage.TextWritten,
-            "send_injected" => ProtectedSendTraceStage.SendInjected,
-            "sent_safely" => ProtectedSendTraceStage.SentSafely,
-            "terminal_blocked" => ProtectedSendTraceStage.TerminalBlocked,
-            _ => default
-        };
+            if (string.Equals(pair.Value, value, StringComparison.Ordinal))
+            {
+                stage = pair.Key;
+                return true;
+            }
+        }
 
-        return value is "send_detected" or "target_matched" or "composer_read"
-            or "sanitized" or "overlay_created" or "overlay_foreground_confirmed"
-            or "approved" or "cancelled" or "text_written" or "send_injected"
-            or "sent_safely" or "terminal_blocked";
+        stage = default;
+        return false;
     }
 
-    public string StageToken => Stage switch
-    {
-        ProtectedSendTraceStage.SendDetected => "send_detected",
-        ProtectedSendTraceStage.TargetMatched => "target_matched",
-        ProtectedSendTraceStage.ComposerRead => "composer_read",
-        ProtectedSendTraceStage.Sanitized => "sanitized",
-        ProtectedSendTraceStage.OverlayCreated => "overlay_created",
-        ProtectedSendTraceStage.OverlayForegroundConfirmed => "overlay_foreground_confirmed",
-        ProtectedSendTraceStage.Approved => "approved",
-        ProtectedSendTraceStage.Cancelled => "cancelled",
-        ProtectedSendTraceStage.TextWritten => "text_written",
-        ProtectedSendTraceStage.SendInjected => "send_injected",
-        ProtectedSendTraceStage.SentSafely => "sent_safely",
-        ProtectedSendTraceStage.TerminalBlocked => "terminal_blocked",
-        _ => "unavailable"
-    };
+    public string StageToken => StageTokens.TryGetValue(Stage, out var token) ? token : "unavailable";
 
     private static bool TryParseStage(string value, out ProtectedSendTraceStage stage)
         => TryParseStageToken(value, out stage);
@@ -199,7 +246,8 @@ internal static class ProtectedSendTrace
             || snapshotGeneration < 0
             || current.Count > 32
             || durationMilliseconds < 0
-            || !IsHexFingerprint(targetFingerprint))
+            || !IsHexFingerprint(targetFingerprint)
+            || !transition.IsValid)
         {
             return false;
         }
