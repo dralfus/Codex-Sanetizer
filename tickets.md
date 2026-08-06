@@ -1336,3 +1336,35 @@ live cloud access, or raw prompt data.
   consume an unrelated click.
 - [ ] Tests prove the evidence generation and normalized target identity are
   carried into the resident pointer operation.
+
+## 315. Make protected-Send trace publication transactional
+
+**What to build:** Remove the remaining split between appending a transition
+to the resident operation and publishing that transition into the immutable
+protection snapshot. A concurrent generation change must have one explicit
+handoff result, never a trace that is silently left only in a completed
+operation.
+
+**Blocked by:** 303. Route one keyboard protected Send through a resident
+operation; 312. Preserve an interrupted Send outcome without mutating a newer
+runtime.
+
+**State owner:** The resident protected-Send operation owns the trace draft;
+the resident lifecycle owns the generation-safe publication handoff. No tray
+fallback may append a transition on behalf of the operation.
+
+**Fail-closed state:** If append and publication cannot commit to the same
+generation, the original Send remains blocked and the handoff publishes one
+raw-free `trace_unavailable` outcome or preserves the already-published
+terminal trace.
+
+**Deterministic proof:** A controlled CAS invalidation is injected between
+each append and publication attempt. Tests prove no transition appears in a
+new generation, every interrupted operation has an explicit outcome, and no
+raw prompt data is retained.
+
+- [ ] Append and snapshot publication use one transactional resident seam or
+  an equivalent generation-safe handoff.
+- [ ] Invalidation between append and publication cannot lose the terminal
+  raw-free outcome.
+- [ ] Tests cover normal, Stop, reload, and same-runtime generation changes.
