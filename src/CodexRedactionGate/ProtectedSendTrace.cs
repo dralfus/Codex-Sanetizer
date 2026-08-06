@@ -108,7 +108,10 @@ internal readonly record struct ProtectedSendTraceResultCode
 
     public bool IsValid => !string.IsNullOrWhiteSpace(Value)
         && IsSafeToken(Value)
-        && Array.IndexOf(KnownValues, Value) >= 0;
+        && IsKnown(Value);
+
+    public static bool IsKnown(string value)
+        => Array.IndexOf(KnownValues, value) >= 0;
 
     private static bool IsSafeToken(string value)
     {
@@ -165,10 +168,12 @@ internal readonly record struct ProtectedSendTraceTransition(
         }
 
         transition = new ProtectedSendTraceTransition(parsedStage, parsedResultCode);
-        return true;
+        return transition.IsValid;
     }
 
-    public bool IsValid => StageTokens.ContainsKey(Stage) && ResultCode.IsValid;
+    public bool IsValid => StageTokens.ContainsKey(Stage)
+        && ResultCode.IsValid
+        && IsAllowedResultCode(Stage, ResultCode.Value);
 
     public static bool TryParseStageToken(string value, out ProtectedSendTraceStage stage)
     {
@@ -186,6 +191,28 @@ internal readonly record struct ProtectedSendTraceTransition(
     }
 
     public string StageToken => StageTokens.TryGetValue(Stage, out var token) ? token : "unavailable";
+
+    private static bool IsAllowedResultCode(
+        ProtectedSendTraceStage stage,
+        string resultCode)
+    {
+        return stage switch
+        {
+            ProtectedSendTraceStage.SendDetected => resultCode == "checking_prompt",
+            ProtectedSendTraceStage.TargetMatched => resultCode == "target_verified",
+            ProtectedSendTraceStage.ComposerRead => resultCode == "capture_verified",
+            ProtectedSendTraceStage.Sanitized => resultCode == "sanitization_verified",
+            ProtectedSendTraceStage.OverlayCreated => resultCode == "confirmation_requested",
+            ProtectedSendTraceStage.OverlayForegroundConfirmed => resultCode == "foreground_verified",
+            ProtectedSendTraceStage.Approved => resultCode == "user_approved",
+            ProtectedSendTraceStage.Cancelled => resultCode == "user_cancelled",
+            ProtectedSendTraceStage.TextWritten => resultCode == "write_verified",
+            ProtectedSendTraceStage.SendInjected => resultCode == "submit_requested",
+            ProtectedSendTraceStage.SentSafely => resultCode == OsInteractionStatusIds.Submitted,
+            ProtectedSendTraceStage.TerminalBlocked => ProtectedSendTraceResultCode.IsKnown(resultCode),
+            _ => false
+        };
+    }
 
     private static bool TryParseStage(string value, out ProtectedSendTraceStage stage)
         => TryParseStageToken(value, out stage);

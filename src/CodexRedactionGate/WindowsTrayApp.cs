@@ -232,7 +232,8 @@ public static class WindowsTrayApp
             sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault(resolvedLayout),
             nativeSubmitRuntimes: runtimeSet?.Runtimes,
             activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
-            residentRuntimeOwner: residentRuntime.ApplyOnlyResourceOwner);
+            residentRuntimeOwner: residentRuntime.ApplyOnlyResourceOwner,
+            nativeSubmitRuntimeOwner: runtimeSet?.ResourceOwner);
     }
 
     internal static ResidentProtectionRuntime CreateResidentProtectionRuntime(

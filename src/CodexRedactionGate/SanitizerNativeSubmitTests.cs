@@ -102,6 +102,12 @@ public partial class SanitizerTests
                 "raw value",
                 out _),
             Is.False);
+        Assert.That(
+            ProtectedSendTraceTransition.TryCreate(
+                "sent_safely",
+                "capture_verified",
+                out _),
+            Is.False);
 
         Assert.That(
             ProtectedSendTrace.TryAppend(
@@ -1062,6 +1068,8 @@ public partial class SanitizerTests
             var replacementHook = new FakeNativeSubmitHookHost();
             var profile = CreateProtectedProfile();
             var oldSubmitSideEffects = 0;
+            var oldWriteSideEffects = 0;
+            var oldReplaySideEffects = 0;
             var replacementSubmitSideEffects = 0;
             var reloaded = false;
             TrayProtectionController? controller = null;
@@ -1104,6 +1112,16 @@ public partial class SanitizerTests
                             {
                                 ["trace_status"] = "trace_unavailable"
                             });
+                    }
+
+                    if (countSideEffect && stage.Stage == "text_written")
+                    {
+                        oldWriteSideEffects++;
+                    }
+
+                    if (countSideEffect && stage.Stage == "send_injected")
+                    {
+                        oldReplaySideEffects++;
                     }
                 }
 
@@ -1159,6 +1177,11 @@ public partial class SanitizerTests
 
             Assert.That(reloaded, Is.True, reloadStage);
             Assert.That(oldSubmitSideEffects, Is.Zero, reloadStage);
+            Assert.That(
+                oldWriteSideEffects,
+                Is.EqualTo(reloadStage == "replay" ? 1 : 0),
+                reloadStage);
+            Assert.That(oldReplaySideEffects, Is.Zero, reloadStage);
             Assert.That(replacementSubmitSideEffects, Is.Zero, reloadStage);
             Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("idle"), reloadStage);
             Assert.That(controller.State.ProtectedSendAttemptId, Is.Zero, reloadStage);

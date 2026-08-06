@@ -117,7 +117,8 @@ internal sealed class TrayProtectionController
         Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null,
         Func<IntPtr, string?>? selectedWindowProfileResolver = null,
         Action<string>? protectedSendStageObserver = null,
-        IDisposable? residentRuntimeOwner = null)
+        IDisposable? residentRuntimeOwner = null,
+        IDisposable? nativeSubmitRuntimeOwner = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
@@ -140,7 +141,9 @@ internal sealed class TrayProtectionController
             0,
             state,
             _applyOnlyRunner,
-            nativeSubmitHookHost is null ? null : new NativeSubmitRuntimeSet(nativeSubmitHookHost, runtimes.ToArray()),
+            nativeSubmitHookHost is null
+                ? null
+                : new NativeSubmitRuntimeSet(nativeSubmitHookHost, runtimes.ToArray(), nativeSubmitRuntimeOwner),
             HookReady: false,
             sendControlDiscovery,
             surfaceDiscovery);
@@ -646,7 +649,10 @@ internal sealed class TrayProtectionController
                 return null;
             }
 
-            var candidateRuntimeSet = new NativeSubmitRuntimeSet(runtimeSet.HookHost, runtimes);
+            var candidateRuntimeSet = new NativeSubmitRuntimeSet(
+                runtimeSet.HookHost,
+                runtimes,
+                runtimeSet.ResourceOwner);
             var setupRequired = IsAnySelectedProfileSetupRequired(candidateRuntimeSet);
             var state = CreateState(
                 enabled: previous.State.Enabled,
