@@ -646,7 +646,8 @@ internal sealed class TrayProtectionController
                     || runtime.Controller is null
                     || runtime.Runner is null
                     || runtime.Profile is null
-                    || string.IsNullOrWhiteSpace(runtime.Profile.ProfileId)))
+                    || string.IsNullOrWhiteSpace(runtime.Profile.ProfileId)
+                    || !HasRequiredResidentTraceRunner(runtime)))
             {
                 return null;
             }
@@ -768,6 +769,11 @@ internal sealed class TrayProtectionController
 
     private bool StartNativeSubmitHook(NativeSubmitRuntimeSet runtimeSet)
     {
+        if (runtimeSet.Runtimes.Any(runtime => !HasRequiredResidentTraceRunner(runtime)))
+        {
+            return false;
+        }
+
         var keyboardStarted = runtimeSet.HookHost.Start(
             gesture => ClassifyNativeGesture(runtimeSet, gesture),
             (gesture, classification) => RunNativeSubmitOnce(runtimeSet, gesture, classification),
@@ -1958,6 +1964,19 @@ internal sealed class TrayProtectionController
         return true;
     }
 
+    private static bool HasRequiredResidentTraceRunner(NativeSubmitRuntime runtime)
+    {
+        if (runtime.TraceRequired)
+        {
+            return runtime.ResidentTracedRunner is not null
+                && runtime.ResidentTargetTracedRunner is not null;
+        }
+
+        return runtime.TestOnly
+            || (runtime.ResidentTracedRunner is not null
+                && runtime.ResidentTargetTracedRunner is not null);
+    }
+
     private static void StopAndDisposeRuntime(NativeSubmitRuntimeSet? runtimeSet)
     {
         if (runtimeSet is null)
@@ -2088,60 +2107,7 @@ internal sealed class TrayProtectionController
             return runtime.ResidentTracedRunner(traceStage, executionGuard, executionLease);
         }
 
-        if (runtime.TargetTracedRunner is not null
-            && target is not null
-            && string.Equals(target.ProfileId, runtime.Profile.ProfileId, StringComparison.Ordinal))
-        {
-            return runtime.TargetTracedRunner(target, traceStage);
-        }
-
-        if (runtime.TracedRunner is not null && target is null)
-        {
-            return runtime.TracedRunner(traceStage);
-        }
-
-        if (runtime.TraceRequired)
-        {
-            return new OsInteractionResult(
-                OsInteractionStatusIds.FailedClosed,
-                Surface: null,
-                SanitizationResult: null,
-                ConfirmationModel: null,
-                Applied: false,
-                Submitted: false,
-                Diagnostics: new Dictionary<string, string>
-                {
-                    ["trace_status"] = "trace_runner_unavailable"
-                });
-        }
-
-        if (runtime.TargetRunner is null)
-        {
-            var result = runtime.Runner();
-            return result.Submitted
-                ? AppendLegacyTestTrace(result, traceStage)
-                : result;
-        }
-
-        if (target is null || !string.Equals(target.ProfileId, runtime.Profile.ProfileId, StringComparison.Ordinal))
-        {
-            return new OsInteractionResult(
-                OsInteractionStatusIds.StaleComposer,
-                Surface: null,
-                SanitizationResult: null,
-                ConfirmationModel: null,
-                Applied: false,
-                Submitted: false,
-                Diagnostics: new Dictionary<string, string>
-                {
-                    ["target_identity"] = "unavailable"
-                });
-        }
-
-        var targetResult = runtime.TargetRunner(target);
-        return targetResult.Submitted
-            ? AppendLegacyTestTrace(targetResult, traceStage)
-            : targetResult;
+        return TraceRunnerUnavailableResult();
     }
 
     private static NativeSubmitInterceptionResult FailedClosedNativeSubmitResult()
@@ -2157,12 +2123,72 @@ internal sealed class TrayProtectionController
             });
     }
 
-    private static OsInteractionResult AppendLegacyTestTrace(
-        OsInteractionResult result,
-        Func<string, string, bool> traceStage)
+    private static IReadOnlyList<NativeSubmitRuntime> CreateSingleRuntimeList(
+        INativeSubmitHookHost? hookHost,
+        NativeSubmitInterceptionController? controller,
+        Func<OsInteractionResult>? runner,
+        SubmitBindingProfile? profile)
     {
-        // Controller-only tests inject a completed runner instead of an orchestrator.
-        // Production runtimes set TraceRequired and use one of the traced runners above.
+        return hookHost is not null && controller is not null && runner is not null && profile is not null
+            ? new[] { NativeSubmitRuntime.CreateTest(hookHost, controller, runner, profile) }
+            : Array.Empty<NativeSubmitRuntime>();
+    }
+
+    internal static OsInteractionResult TraceRunnerUnavailableResult()
+    {
+        return new OsInteractionResult(
+            OsInteractionStatusIds.TraceUnavailable,
+            Surface: null,
+            SanitizationResult: null,
+            ConfirmationModel: null,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["trace_status"] = "trace_unavailable"
+            });
+    }
+
+}
+
+internal sealed record NativeSubmitRuntime(
+    INativeSubmitHookHost HookHost,
+    NativeSubmitInterceptionController Controller,
+    Func<OsInteractionResult> Runner,
+    SubmitBindingProfile Profile,
+    bool TraceRequired = false,
+    Func<Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTracedRunner = null,
+    Func<NativeSubmitTargetIdentity, Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTargetTracedRunner = null,
+    bool TestOnly = false)
+{
+    public static NativeSubmitRuntime CreateTest(
+        INativeSubmitHookHost hookHost,
+        NativeSubmitInterceptionController controller,
+        Func<OsInteractionResult> runner,
+        SubmitBindingProfile profile,
+        bool TraceRequired = false,
+        Func<Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTracedRunner = null,
+        Func<NativeSubmitTargetIdentity, Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTargetTracedRunner = null)
+    {
+        return new NativeSubmitRuntime(
+            hookHost,
+            controller,
+            runner,
+            profile,
+            TraceRequired,
+            ResidentTracedRunner ?? ((traceStage, executionGuard, executionLease) =>
+                RunTestTracedRunner(runner, traceStage, executionGuard, executionLease)),
+            ResidentTargetTracedRunner ?? ((target, traceStage, executionGuard, executionLease) =>
+                RunTestTracedRunner(runner, traceStage, executionGuard, executionLease)),
+            TestOnly: true);
+    }
+
+    private static OsInteractionResult RunTestTracedRunner(
+        Func<OsInteractionResult> runner,
+        Func<string, string, bool> traceStage,
+        Func<bool> executionGuard,
+        Func<IDisposable?> executionLease)
+    {
         foreach (var stage in new[]
         {
             (Stage: "composer_read", Code: "capture_verified"),
@@ -2172,45 +2198,46 @@ internal sealed class TrayProtectionController
         {
             if (!traceStage(stage.Stage, stage.Code))
             {
-                return result with
-                {
-                    Status = OsInteractionStatusIds.FailedClosed,
-                    Applied = false,
-                    Submitted = false,
-                    Diagnostics = new Dictionary<string, string>
-                    {
-                        ["trace_status"] = "legacy_trace_unavailable"
-                    }
-                };
+                return TraceUnavailableResult("test_trace_unavailable");
             }
         }
 
-        return result;
+        if (!executionGuard())
+        {
+            return TraceUnavailableResult("resident_operation_unavailable");
+        }
+
+        var lease = executionLease();
+        if (lease is null)
+        {
+            return TraceUnavailableResult("resident_operation_unavailable");
+        }
+
+        try
+        {
+            return runner();
+        }
+        finally
+        {
+            lease.Dispose();
+        }
     }
 
-    private static IReadOnlyList<NativeSubmitRuntime> CreateSingleRuntimeList(
-        INativeSubmitHookHost? hookHost,
-        NativeSubmitInterceptionController? controller,
-        Func<OsInteractionResult>? runner,
-        SubmitBindingProfile? profile)
+    private static OsInteractionResult TraceUnavailableResult(string status)
     {
-        return hookHost is not null && controller is not null && runner is not null && profile is not null
-            ? new[] { new NativeSubmitRuntime(hookHost, controller, runner, profile) }
-            : Array.Empty<NativeSubmitRuntime>();
+        return new OsInteractionResult(
+            OsInteractionStatusIds.FailedClosed,
+            Surface: null,
+            SanitizationResult: null,
+            ConfirmationModel: null,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["trace_status"] = status
+            });
     }
 }
-
-internal sealed record NativeSubmitRuntime(
-    INativeSubmitHookHost HookHost,
-    NativeSubmitInterceptionController Controller,
-    Func<OsInteractionResult> Runner,
-    SubmitBindingProfile Profile,
-    Func<NativeSubmitTargetIdentity, OsInteractionResult>? TargetRunner = null,
-    Func<Func<string, string, bool>, OsInteractionResult>? TracedRunner = null,
-    Func<NativeSubmitTargetIdentity, Func<string, string, bool>, OsInteractionResult>? TargetTracedRunner = null,
-    bool TraceRequired = false,
-    Func<Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTracedRunner = null,
-    Func<NativeSubmitTargetIdentity, Func<string, string, bool>, Func<bool>, Func<IDisposable?>, OsInteractionResult>? ResidentTargetTracedRunner = null);
 
 internal sealed record NativeSubmitRuntimeSet(
     INativeSubmitHookHost HookHost,

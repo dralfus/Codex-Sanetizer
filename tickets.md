@@ -1191,9 +1191,9 @@ not allowed.
 factory supplies a traced runner, while a missing-runner fixture proves no
 submit call occurs.
 
-- [ ] Production runtime construction requires traced runners.
-- [ ] Legacy synthetic trace fallback is removed from the production path.
-- [ ] Tests cover missing traced runner and preserve raw-free diagnostics.
+- [x] Production runtime construction requires traced runners.
+- [x] Legacy synthetic trace fallback is removed from the production path.
+- [x] Tests cover missing traced runner and preserve raw-free diagnostics.
 
 **Review follow-up (2026-08-06):** The old `Runner`, `TargetRunner`,
 `TracedRunner`, and `TargetTracedRunner` delegates must not remain executable

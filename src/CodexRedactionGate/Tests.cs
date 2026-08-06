@@ -7968,7 +7968,7 @@ public class ResidentFirstRunSetupLaunchTests
                     if (++retryFactoryCalls == 1)
                     {
                         var activeHook = new SanitizerTests.FakeNativeSubmitHookHost();
-                        var activeRuntime = new NativeSubmitRuntime(
+                        var activeRuntime = NativeSubmitRuntime.CreateTest(
                             activeHook,
                             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
                             CreateProtectedInteractionResult,
@@ -7980,7 +7980,7 @@ public class ResidentFirstRunSetupLaunchTests
                     {
                         OnStarted = _ => throw new InvalidOperationException(retryFailure)
                     };
-                    var runtime = new NativeSubmitRuntime(
+                    var runtime = NativeSubmitRuntime.CreateTest(
                         failedRetryHook,
                         new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
                         CreateProtectedInteractionResult,
@@ -8076,7 +8076,7 @@ public class ResidentFirstRunSetupLaunchTests
                 SanitizerTests.FakeNativeSubmitHookHost hook,
                 SubmitBindingProfile profile)
             {
-                return new NativeSubmitRuntime(
+                return NativeSubmitRuntime.CreateTest(
                     hook,
                     new NativeSubmitInterceptionController(
                         profile,
@@ -8298,7 +8298,7 @@ public class ResidentFirstRunSetupLaunchTests
                 SanitizerTests.FakeNativeSubmitHookHost hook,
                 SubmitBindingProfile profile)
             {
-                return new NativeSubmitRuntime(
+                return NativeSubmitRuntime.CreateTest(
                     hook,
                     new NativeSubmitInterceptionController(
                         profile,
@@ -8924,7 +8924,7 @@ public class ResidentFirstRunSetupLaunchTests
         {
             OnStarted = _ => onHookStarted?.Invoke()
         };
-        var runtime = new NativeSubmitRuntime(
+                    var runtime = NativeSubmitRuntime.CreateTest(
             hook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             CreateProtectedInteractionResult,

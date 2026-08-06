@@ -129,7 +129,7 @@ internal static class ResidentLifecycleSmokeRunner
                 instance,
                 () => new NativeSubmitRuntimeSet(
                     reloadedHook,
-                    new[] { new NativeSubmitRuntime(reloadedHook, reloadedController, NoCloudSubmission, protectedProfile) }),
+                    new[] { NativeSubmitRuntime.CreateTest(reloadedHook, reloadedController, NoCloudSubmission, protectedProfile) }),
                 () => setup,
                 _ =>
                 {
@@ -140,7 +140,7 @@ internal static class ResidentLifecycleSmokeRunner
                     var rejectedCandidate = new UnavailableNativeSubmitHookHost("resident_smoke_candidate_unavailable");
                     runtimeRollbackPassed = !protection.ReloadNativeSubmit(new NativeSubmitRuntimeSet(
                         rejectedCandidate,
-                        new[] { new NativeSubmitRuntime(rejectedCandidate, reloadedController, NoCloudSubmission, protectedProfile) }))
+                        new[] { NativeSubmitRuntime.CreateTest(rejectedCandidate, reloadedController, NoCloudSubmission, protectedProfile) }))
                         && reloadedHook.IsKeyboardHookRegistered
                         && protection.State.NativeSubmitStatus == OsInteractionStatusIds.Protected
                         && protection.State.ComposerProtected;
@@ -231,25 +231,86 @@ internal static class ResidentLifecycleSmokeRunner
         var changed = WithWindowHandle(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface(profile.ProfileId), "2");
         var hook = new ControlledNativeSubmitHookHost();
         var targetRunnerCalls = 0;
-        var runtime = new NativeSubmitRuntime(
+        var runtime = NativeSubmitRuntime.CreateTest(
             hook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => throw new InvalidOperationException("untargeted_runner_not_expected"),
             profile,
-            target =>
+            ResidentTargetTracedRunner: (target, traceStage, executionGuard, executionLease) =>
             {
-                targetRunnerCalls++;
-                var result = new CapturedTargetSurfaceDiscovery(
-                    new StaticSurfaceDiscovery(changed),
-                    target).DiscoverActiveSurface();
-                return new OsInteractionResult(
-                    result.Status,
-                    result.Surface,
-                    SanitizationResult: null,
-                    ConfirmationModel: null,
-                    Applied: false,
-                    Submitted: false,
-                    result.Diagnostics);
+                foreach (var stage in new[]
+                {
+                    (Stage: "composer_read", Code: "capture_verified"),
+                    (Stage: "sanitized", Code: "sanitization_verified"),
+                    (Stage: "send_injected", Code: "submit_requested")
+                })
+                {
+                    if (!traceStage(stage.Stage, stage.Code))
+                    {
+                        return new OsInteractionResult(
+                            OsInteractionStatusIds.FailedClosed,
+                            Surface: null,
+                            SanitizationResult: null,
+                            ConfirmationModel: null,
+                            Applied: false,
+                            Submitted: false,
+                            Diagnostics: new Dictionary<string, string>
+                            {
+                                ["trace_status"] = "trace_unavailable"
+                            });
+                    }
+                }
+
+                if (!executionGuard())
+                {
+                    return new OsInteractionResult(
+                        OsInteractionStatusIds.FailedClosed,
+                        Surface: null,
+                        SanitizationResult: null,
+                        ConfirmationModel: null,
+                        Applied: false,
+                        Submitted: false,
+                        Diagnostics: new Dictionary<string, string>
+                        {
+                            ["trace_status"] = "resident_operation_unavailable"
+                        });
+                }
+
+                var lease = executionLease();
+                if (lease is null)
+                {
+                    return new OsInteractionResult(
+                        OsInteractionStatusIds.FailedClosed,
+                        Surface: null,
+                        SanitizationResult: null,
+                        ConfirmationModel: null,
+                        Applied: false,
+                        Submitted: false,
+                        Diagnostics: new Dictionary<string, string>
+                        {
+                            ["trace_status"] = "resident_operation_unavailable"
+                        });
+                }
+
+                try
+                {
+                    targetRunnerCalls++;
+                    var result = new CapturedTargetSurfaceDiscovery(
+                        new StaticSurfaceDiscovery(changed),
+                        target).DiscoverActiveSurface();
+                    return new OsInteractionResult(
+                        result.Status,
+                        result.Surface,
+                        SanitizationResult: null,
+                        ConfirmationModel: null,
+                        Applied: false,
+                        Submitted: false,
+                        result.Diagnostics);
+                }
+                finally
+                {
+                    lease.Dispose();
+                }
             });
         var protection = new TrayProtectionController(
             new UnavailableTrayHotkeyHost(

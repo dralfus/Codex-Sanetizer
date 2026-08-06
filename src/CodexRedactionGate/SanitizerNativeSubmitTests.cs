@@ -947,6 +947,9 @@ public partial class SanitizerTests
         {
             "send_detected",
             "target_matched",
+            "composer_read",
+            "sanitized",
+            "send_injected",
             "terminal_blocked"
         }));
         Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
@@ -1024,7 +1027,7 @@ public partial class SanitizerTests
             Submitted: true,
             Diagnostics: new Dictionary<string, string>());
         TrayProtectionController? controller = null;
-        var replacementRuntime = new NativeSubmitRuntime(
+        var replacementRuntime = NativeSubmitRuntime.CreateTest(
             replacementHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             submittedResult,
@@ -1082,30 +1085,33 @@ public partial class SanitizerTests
                 });
         }
 
-        var runtime = new NativeSubmitRuntime(
+        OsInteractionResult RunResident(Func<bool> executionGuard)
+        {
+            controller!.Stop();
+            if (!executionGuard())
+            {
+                return FailedClosed();
+            }
+
+            submitSideEffects++;
+            return new OsInteractionResult(
+                OsInteractionStatusIds.Submitted,
+                CreateNativeSubmitSurface(profile.ProfileId),
+                null,
+                null,
+                Applied: true,
+                Submitted: true,
+                Diagnostics: new Dictionary<string, string>());
+        }
+
+        var runtime = NativeSubmitRuntime.CreateTest(
             hook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => throw new InvalidOperationException("The resident traced runner must be used."),
             profile,
             TraceRequired: true,
-            ResidentTracedRunner: (_, executionGuard, _) =>
-            {
-                controller!.Stop();
-                if (!executionGuard())
-                {
-                    return FailedClosed();
-                }
-
-                submitSideEffects++;
-                return new OsInteractionResult(
-                    OsInteractionStatusIds.Submitted,
-                    CreateNativeSubmitSurface(profile.ProfileId),
-                    null,
-                    null,
-                    Applied: true,
-                    Submitted: true,
-                    Diagnostics: new Dictionary<string, string>());
-            });
+            ResidentTracedRunner: (_, executionGuard, _) => RunResident(executionGuard),
+            ResidentTargetTracedRunner: (_, _, executionGuard, _) => RunResident(executionGuard));
 
         controller = new TrayProtectionController(
             new FakeTrayHotkeyHost(),
@@ -1123,6 +1129,81 @@ public partial class SanitizerTests
         Assert.That(controller.State.Enabled, Is.False);
         Assert.That(controller.State.NativeSubmitEnabled, Is.False);
         Assert.That(hook.Started, Is.False);
+    }
+
+    [Test]
+    public void TrayProtectionController_MissingResidentRunnerFailsClosedWithTraceUnavailable()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var runnerCalls = 0;
+        var runtime = new NativeSubmitRuntime(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                runnerCalls++;
+                return new OsInteractionResult(
+                    OsInteractionStatusIds.Submitted,
+                    CreateNativeSubmitSurface(profile.ProfileId),
+                    null,
+                    null,
+                    Applied: true,
+                    Submitted: true,
+                    Diagnostics: new Dictionary<string, string>());
+            },
+            profile,
+            TraceRequired: false,
+            ResidentTracedRunner: null,
+            ResidentTargetTracedRunner: null,
+            TestOnly: true);
+        var controller = new TrayProtectionController(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            runtime.Controller,
+            runtime.Runner,
+            profile,
+            nativeSubmitRuntimes: new[] { runtime });
+
+        Assert.That(controller.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
+        Assert.That(runnerCalls, Is.Zero);
+        var unavailable = TrayProtectionController.TraceRunnerUnavailableResult();
+        Assert.That(unavailable.Diagnostics["trace_status"], Is.EqualTo("trace_unavailable"));
+        Assert.That(unavailable.Diagnostics.Values, Does.Not.Contain("RESIDENT_SMOKE_SENSITIVE_VALUE"));
+    }
+
+    [Test]
+    public void WindowsTrayApp_ProductionRuntimeProvidesBothResidentTracedRunners()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var profile = CreateProtectedProfile();
+            using var runtimeSet = WindowsTrayApp.CreateNativeSubmitRuntimeSet(
+                TestSanitizers.Create(),
+                layout,
+                new[] { profile });
+
+            Assert.That(runtimeSet, Is.Not.Null);
+            Assert.That(runtimeSet!.Runtimes, Has.Count.EqualTo(1));
+            var runtime = runtimeSet.Runtimes.Single();
+            Assert.That(runtime.TraceRequired, Is.True);
+            Assert.That(runtime.TestOnly, Is.False);
+            Assert.That(runtime.ResidentTracedRunner, Is.Not.Null);
+            Assert.That(runtime.ResidentTargetTracedRunner, Is.Not.Null);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
     }
 
     [Test]
@@ -1218,7 +1299,7 @@ public partial class SanitizerTests
                 return SubmittedResult();
             }
 
-            var replacementRuntime = new NativeSubmitRuntime(
+            var replacementRuntime = NativeSubmitRuntime.CreateTest(
                 replacementHook,
                 new NativeSubmitInterceptionController(
                     profile,
@@ -1230,7 +1311,7 @@ public partial class SanitizerTests
                 },
                 profile);
 
-            var oldRuntime = new NativeSubmitRuntime(
+            var oldRuntime = NativeSubmitRuntime.CreateTest(
                 oldHook,
                 new NativeSubmitInterceptionController(
                     profile,
@@ -1238,6 +1319,8 @@ public partial class SanitizerTests
                 () => CompleteWithoutSideEffect(countSideEffect: true),
                 profile,
                 ResidentTracedRunner: (traceStage, executionGuard, _) =>
+                    CompleteWithoutSideEffect(traceStage, executionGuard, countSideEffect: true),
+                ResidentTargetTracedRunner: (target, traceStage, executionGuard, _) =>
                     CompleteWithoutSideEffect(traceStage, executionGuard, countSideEffect: true),
                 TraceRequired: true);
 
@@ -3019,7 +3102,7 @@ public class HandleButtonClickTests : SanitizerTests
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
-        var runtime = new NativeSubmitRuntime(
+        var runtime = NativeSubmitRuntime.CreateTest(
             hook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => throw new InvalidOperationException("Guarded flow must not run."),
@@ -3047,7 +3130,7 @@ public class HandleButtonClickTests : SanitizerTests
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
-        var runtime = new NativeSubmitRuntime(
+        var runtime = NativeSubmitRuntime.CreateTest(
             hook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => throw new InvalidOperationException("Guarded flow must not run."),
@@ -3076,7 +3159,7 @@ public class HandleButtonClickTests : SanitizerTests
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
         var runnerCalls = 0;
-        var runtime = new NativeSubmitRuntime(
+        var runtime = NativeSubmitRuntime.CreateTest(
             hook,
             new NativeSubmitInterceptionController(
                 profile,
@@ -3114,12 +3197,12 @@ public class HandleButtonClickTests : SanitizerTests
         var changedSurface = CreateNativeSurfaceWithWindow("codex-desktop", "2");
         var targetRunnerCalls = 0;
         NativeSubmitTargetIdentity? capturedTarget = null;
-        var runtime = new NativeSubmitRuntime(
+        var runtime = NativeSubmitRuntime.CreateTest(
             hook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => throw new InvalidOperationException("Untargeted runner must not be used."),
             profile,
-            target =>
+            ResidentTargetTracedRunner: (target, _, _, _) =>
             {
                 targetRunnerCalls++;
                 capturedTarget = target;
@@ -3309,7 +3392,7 @@ public class HandleButtonClickTests : SanitizerTests
         Func<IntPtr, string?>? selectedWindowProfileResolver = null,
         IFirstRunSetupController? firstRunSetupController = null)
     {
-        var runtime = new NativeSubmitRuntime(
+        var runtime = NativeSubmitRuntime.CreateTest(
             hook,
             new NativeSubmitInterceptionController(
                 profile,
@@ -3407,7 +3490,7 @@ public class HandleButtonClickTests : SanitizerTests
 
             var oldHook = new FakeNativeSubmitHookHost();
             var oldSubmitCalls = 0;
-            var oldRuntime = new NativeSubmitRuntime(
+            var oldRuntime = NativeSubmitRuntime.CreateTest(
                 oldHook,
                 new NativeSubmitInterceptionController(
                     oldProfile,
@@ -3445,7 +3528,7 @@ public class HandleButtonClickTests : SanitizerTests
 
             var verifiedHook = new FakeNativeSubmitHookHost();
             var verifiedSubmitCalls = 0;
-            var verifiedRuntime = new NativeSubmitRuntime(
+            var verifiedRuntime = NativeSubmitRuntime.CreateTest(
                 verifiedHook,
                 new NativeSubmitInterceptionController(
                     verifiedProfile,
@@ -3483,7 +3566,7 @@ public class HandleButtonClickTests : SanitizerTests
         var chatGptCalls = 0;
         var runtimes = new[]
         {
-            new NativeSubmitRuntime(
+                NativeSubmitRuntime.CreateTest(
                 hook,
                 new NativeSubmitInterceptionController(codexProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
                     activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop"))),
@@ -3493,7 +3576,7 @@ public class HandleButtonClickTests : SanitizerTests
                     return CreateSubmittedResult("codex-desktop");
                 },
                 codexProfile),
-            new NativeSubmitRuntime(
+            NativeSubmitRuntime.CreateTest(
                 hook,
                 new NativeSubmitInterceptionController(chatGptProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
                     activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"))),
@@ -3536,12 +3619,12 @@ public class HandleButtonClickTests : SanitizerTests
         var chatGptCalls = 0;
         var runtimes = new[]
         {
-            new NativeSubmitRuntime(
+            NativeSubmitRuntime.CreateTest(
                 hook,
                 new NativeSubmitInterceptionController(codexProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
                 () => CreateSubmittedResult("codex-desktop"),
                 codexProfile),
-            new NativeSubmitRuntime(
+            NativeSubmitRuntime.CreateTest(
                 hook,
                 new NativeSubmitInterceptionController(chatGptProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
                 () =>
@@ -3617,7 +3700,7 @@ public class HandleButtonClickTests : SanitizerTests
                 return CreateSubmittedResult(profile.ProfileId);
             },
             profile);
-        var candidateRuntime = new NativeSubmitRuntime(
+        var candidateRuntime = NativeSubmitRuntime.CreateTest(
             candidateHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () =>
@@ -3654,7 +3737,7 @@ public class HandleButtonClickTests : SanitizerTests
             profile);
         controller.Start();
         var before = controller.GetCurrentSnapshot();
-        var failedRuntime = new NativeSubmitRuntime(
+        var failedRuntime = NativeSubmitRuntime.CreateTest(
             failedHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
@@ -3683,7 +3766,7 @@ public class HandleButtonClickTests : SanitizerTests
             () => CreateSubmittedResult(profile.ProfileId),
             profile);
         var before = controller.GetCurrentSnapshot();
-        var candidateRuntime = new NativeSubmitRuntime(
+        var candidateRuntime = NativeSubmitRuntime.CreateTest(
             candidateHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
@@ -3722,7 +3805,7 @@ public class HandleButtonClickTests : SanitizerTests
                 () => CreateSubmittedResult(profile.ProfileId),
                 profile,
                 storageLayout: layout);
-            var candidateRuntime = new NativeSubmitRuntime(
+            var candidateRuntime = NativeSubmitRuntime.CreateTest(
                 candidateHook,
                 new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
                 () => CreateSubmittedResult(profile.ProfileId),
@@ -3755,7 +3838,7 @@ public class HandleButtonClickTests : SanitizerTests
             () => CreateSubmittedResult(profile.ProfileId),
             profile);
         controller.Start();
-        var candidateRuntime = new NativeSubmitRuntime(
+        var candidateRuntime = NativeSubmitRuntime.CreateTest(
             candidateHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
@@ -3788,7 +3871,7 @@ public class HandleButtonClickTests : SanitizerTests
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
             profile);
-        var candidateRuntime = new NativeSubmitRuntime(
+        var candidateRuntime = NativeSubmitRuntime.CreateTest(
             candidateHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () =>
@@ -3839,7 +3922,7 @@ public class HandleButtonClickTests : SanitizerTests
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
             profile);
-        var failedRuntime = new NativeSubmitRuntime(
+        var failedRuntime = NativeSubmitRuntime.CreateTest(
             failedHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
@@ -3885,7 +3968,7 @@ public class HandleButtonClickTests : SanitizerTests
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
             profile);
-        var candidateRuntime = new NativeSubmitRuntime(
+        var candidateRuntime = NativeSubmitRuntime.CreateTest(
             candidateHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
@@ -3922,12 +4005,12 @@ public class HandleButtonClickTests : SanitizerTests
             () => CreateSubmittedResult(profile.ProfileId),
             profile);
         controller.Start();
-        var firstRuntime = new NativeSubmitRuntime(
+        var firstRuntime = NativeSubmitRuntime.CreateTest(
             firstCandidateHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
             profile);
-        var secondRuntime = new NativeSubmitRuntime(
+        var secondRuntime = NativeSubmitRuntime.CreateTest(
             secondCandidateHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),

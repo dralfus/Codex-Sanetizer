@@ -319,9 +319,6 @@ public static class WindowsTrayApp
                 controller,
                 () => RunConfirmAndSend(target: null, traceStage: null),
                 nativeProfile,
-                target => RunConfirmAndSend(target, traceStage: null),
-                TracedRunner: traceStage => RunConfirmAndSend(target: null, traceStage: traceStage),
-                TargetTracedRunner: (target, traceStage) => RunConfirmAndSend(target, traceStage),
                 TraceRequired: true,
                 ResidentTracedRunner: (traceStage, executionGuard, executionLease) => RunConfirmAndSend(
                     target: null,
