@@ -1225,13 +1225,16 @@ internal sealed class TrayProtectionController
                 continue;
             }
 
-            if (!ProtectedSendTrace.TryAppend(
+            if (!ProtectedSendTraceTransition.TryCreate(
+                    "send_detected",
+                    action,
+                    out var detectedTransition)
+                || !ProtectedSendTrace.TryAppend(
                     existingTrace,
                     attemptId,
                     current.Generation,
                     targetFingerprint,
-                    "send_detected",
-                    action,
+                    detectedTransition,
                     DurationSince(0),
                     out var trace))
             {
@@ -1263,6 +1266,16 @@ internal sealed class TrayProtectionController
         string stage,
         string resultCode)
     {
+        return ProtectedSendTraceTransition.TryCreate(stage, resultCode, out var transition)
+            ? PublishProtectedSendTrace(snapshot, targetFingerprint, transition)
+            : null;
+    }
+
+    private ProtectionSnapshot? PublishProtectedSendTrace(
+        ProtectionSnapshot snapshot,
+        string targetFingerprint,
+        ProtectedSendTraceTransition transition)
+    {
         while (true)
         {
             var current = ReadSnapshot();
@@ -1277,8 +1290,7 @@ internal sealed class TrayProtectionController
                     current.State.ProtectedSendAttemptId,
                     current.Generation,
                     targetFingerprint,
-                    stage,
-                    resultCode,
+                    transition,
                     DurationSince(current.State.ProtectedSendAttemptStartedAtTimestamp),
                     out var trace))
             {

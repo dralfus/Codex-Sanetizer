@@ -1193,9 +1193,9 @@ from inventing unvalidated transition tokens.
 **Deterministic proof:** Compile-time construction plus transition tests cover
   every valid stage, invalid token, duplicate, stale, and out-of-order event.
 
-- [ ] Trace stage/result pairs use a typed domain contract.
-- [ ] Repeated fail-closed publication logic is centralized.
-- [ ] Tests prove the public trace remains raw-free.
+- [x] Trace stage/result pairs use a typed domain contract.
+- [x] Repeated fail-closed publication logic is centralized.
+- [x] Tests prove the public trace remains raw-free.
 
 ## 312. Preserve an interrupted Send outcome without mutating a newer runtime
 

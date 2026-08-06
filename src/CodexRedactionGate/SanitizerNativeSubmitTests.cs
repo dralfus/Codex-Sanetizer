@@ -88,6 +88,59 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void ProtectedSendTrace_TypedTransitionContractRejectsUnknownStageAndUnsafeResult()
+    {
+        Assert.That(
+            ProtectedSendTraceTransition.TryCreate(
+                "unknown_stage",
+                "capture_verified",
+                out _),
+            Is.False);
+        Assert.That(
+            ProtectedSendTraceTransition.TryCreate(
+                "composer_read",
+                "raw value",
+                out _),
+            Is.False);
+
+        Assert.That(
+            ProtectedSendTraceTransition.TryCreate(
+                "send_detected",
+                "checking_prompt",
+                out var transition),
+            Is.True);
+        Assert.That(transition.Stage, Is.EqualTo(ProtectedSendTraceStage.SendDetected));
+        Assert.That(transition.StageToken, Is.EqualTo("send_detected"));
+        Assert.That(transition.ResultCode.Value, Is.EqualTo("checking_prompt"));
+    }
+
+    [Test]
+    public void ProtectedSendTrace_TypedAppendKeepsStoredTraceRawFree()
+    {
+        const string fingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        Assert.That(
+            ProtectedSendTraceTransition.TryCreate(
+                "send_detected",
+                "checking_prompt",
+                out var transition),
+            Is.True);
+
+        Assert.That(
+            ProtectedSendTrace.TryAppend(
+                Array.Empty<ProtectedSendTraceEntry>(),
+                attemptId: 7,
+                snapshotGeneration: 3,
+                fingerprint,
+                transition,
+                durationMilliseconds: 0,
+                out var trace),
+            Is.True);
+        Assert.That(trace.Single().Stage, Is.EqualTo("send_detected"));
+        Assert.That(trace.Single().ResultCode, Is.EqualTo("checking_prompt"));
+        Assert.That(trace.Single().ResultCode, Does.Not.Contain("raw"));
+    }
+
+    [Test]
     public void ProtectedSendTrace_TargetFingerprintIsOpaqueAndRawFree()
     {
         var identity = new NativeSubmitTargetIdentity(4, "chatgpt-desktop", "ABC123");
