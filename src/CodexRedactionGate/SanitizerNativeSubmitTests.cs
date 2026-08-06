@@ -892,6 +892,9 @@ public partial class SanitizerTests
         Assert.That(controller.State.LastProtectedSendInterruption.SourceGeneration, Is.EqualTo(0));
         Assert.That(controller.State.LastProtectedSendInterruption.Reason, Is.EqualTo("runtime_replaced"));
         Assert.That(controller.State.LastProtectedSendInterruption.Action, Is.EqualTo("retry_protection"));
+
+        replacementHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(controller.State.LastProtectedSendInterruption, Is.Null);
     }
 
     [Test]

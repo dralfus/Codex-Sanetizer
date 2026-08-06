@@ -1223,9 +1223,44 @@ stage proves that the old operation is blocked, the new runtime is unchanged
 apart from the safe interruption summary, and no prompt data crosses the
 boundary.
 
-- [ ] A stale trace failure cannot write `trace_unavailable` into a newer
+- [x] A stale trace failure cannot write `trace_unavailable` into a newer
   runtime snapshot or attempt.
-- [ ] The interruption remains visible as a raw-free recovery state without
+- [x] The interruption remains visible as a raw-free recovery state without
   claiming the new runtime completed the old Send.
 - [ ] Tests cover replacement during detection, checking, overlay, write, and
   replay stages.
+
+## 313. Prove runtime replacement at every protected-Send stage
+
+**What to build:** Extend the deterministic resident-operation test seam so a
+controlled runtime replacement can be requested at detection, checking,
+overlay, text-write, and replay stages. Prove that every stale continuation is
+blocked and that the replacement publishes only the raw-free interruption
+summary from ticket 312.
+
+**Blocked by:** 312. Preserve an interrupted Send outcome without mutating a
+newer runtime.
+
+**State owner:** The resident protected-Send operation owns the stage callback;
+the resident lifecycle owns the replacement generation and interruption
+handoff. The test seam must not become a second state owner.
+
+**Fail-closed state:** A replacement at any listed stage suppresses the stale
+continuation, performs no old-generation submit or replay, and leaves the new
+runtime usable only for a new protected Send.
+
+**Allowed transitions:** A stage callback may request one controlled runtime
+replacement; the old operation may only terminate as interrupted. The new
+generation may publish its safe interruption summary and may start a separate
+attempt later.
+
+**Deterministic proof:** Parameterized tests run without timers, UI dialogs, or
+cloud services and assert generation identity, attempt identity, no old trace
+entries in the new snapshot, no stale side effects, and raw-free status for
+each stage.
+
+- [ ] Detection replacement is covered.
+- [ ] Checking replacement is covered.
+- [ ] Overlay replacement is covered.
+- [ ] Text-write replacement is covered.
+- [ ] Replay replacement is covered.

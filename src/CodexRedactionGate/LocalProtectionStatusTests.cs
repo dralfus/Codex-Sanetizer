@@ -152,6 +152,36 @@ public sealed class LocalProtectionStatusTests
     }
 
     [Test]
+    public void StatusView_PrioritizesInterruptedSendOutcomeOverSetupOrRecoveryState()
+    {
+        var interruption = new ProtectedSendInterruption(
+            AttemptId: 12,
+            SourceGeneration: 7,
+            Reason: "runtime_replaced",
+            Action: "retry_protection");
+
+        foreach (var state in new[]
+        {
+            ProtectedTrayState() with
+            {
+                SetupRequired = true,
+                LastProtectedSendInterruption = interruption
+            },
+            ProtectedTrayState() with
+            {
+                LocalProtectionStatus = LocalProtectionRecovery.RecoveryRequiredCode,
+                LastProtectedSendInterruption = interruption
+            }
+        })
+        {
+            var view = LocalProtectionStatusView.Create(state);
+
+            Assert.That(view.Rows[1].OperationalState, Is.EqualTo("previous Send interrupted"));
+            Assert.That(view.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.RetryPromptProtection));
+        }
+    }
+
+    [Test]
     public void StatusView_ExplainsEveryBlockedProtectedSendAttemptWithoutRawValues()
     {
         foreach (var (attemptStatus, expectedState, expectedAction, expectedConsequence) in new[]
