@@ -959,14 +959,14 @@ the dispatcher at a time; later attempts remain explicitly queued or blocked.
 approval, cancellation, foreground refusal, dispatcher shutdown, and queued
 attempts without real desktop focus, timing assumptions, or cloud access.
 
-- [ ] The resident runtime creates one persistent UI dispatcher rather than one
+- [x] The resident runtime creates one persistent UI dispatcher rather than one
   overlay thread per Send attempt.
-- [ ] A sensitive prompt reaches an active foreground confirmation window with
+- [x] A sensitive prompt reaches an active foreground confirmation window with
   the same attempt id as its trace, while Cancel publishes a terminal blocked
   result and leaves the next Send ready.
-- [ ] Foreground refusal, dispatcher failure, or stale overlay result blocks
+- [x] Foreground refusal, dispatcher failure, or stale overlay result blocks
   submission and reports one raw-free recovery action.
-- [ ] Tests prove the hook callback is never blocked by dialog lifetime and a
+- [x] Tests prove the hook callback is never blocked by dialog lifetime and a
   second sensitive attempt cannot receive or complete the first attempt's
   approval.
 

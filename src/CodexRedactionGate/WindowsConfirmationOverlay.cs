@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -8,8 +9,170 @@ using System.Windows.Forms;
 
 namespace CodexRedactionGate;
 
-public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay
+internal sealed class ResidentOverlayDispatchQueue : IDisposable
 {
+    private sealed class PendingRequest
+    {
+        public PendingRequest(
+            ConfirmationUiModel model,
+            Func<string, string, bool> traceStage)
+        {
+            Model = model;
+            TraceStage = traceStage;
+        }
+
+        public ConfirmationUiModel Model { get; }
+
+        public Func<string, string, bool> TraceStage { get; }
+
+        public ConfirmationDecision? Decision { get; set; }
+
+        public ManualResetEventSlim Completed { get; } = new(false);
+    }
+
+    private readonly BlockingCollection<PendingRequest> _pending = new();
+    private readonly Func<ConfirmationUiModel, Func<string, string, bool>, ConfirmationDecision> _handler;
+    private readonly Action _cancelActive;
+    private readonly object _gate = new();
+    private readonly Thread _thread;
+    private int _disposed;
+    private int _uiThreadId;
+
+    public ResidentOverlayDispatchQueue(
+        Func<ConfirmationUiModel, Func<string, string, bool>, ConfirmationDecision> handler,
+        Action cancelActive)
+    {
+        _handler = handler ?? throw new ArgumentNullException(nameof(handler));
+        _cancelActive = cancelActive ?? throw new ArgumentNullException(nameof(cancelActive));
+        _thread = new Thread(Run)
+        {
+            IsBackground = true,
+            Name = "CodexRedactionGate.ConfirmationOverlay"
+        };
+        try
+        {
+            _thread.SetApartmentState(ApartmentState.STA);
+        }
+        catch (PlatformNotSupportedException)
+        {
+        }
+
+        _thread.Start();
+    }
+
+    public int UiThreadId => Volatile.Read(ref _uiThreadId);
+
+    public ConfirmationDecision Request(
+        ConfirmationUiModel model,
+        Func<string, string, bool> traceStage)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(traceStage);
+
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return ConfirmationDecisionContract.Cancel(model);
+        }
+
+        if (Environment.CurrentManagedThreadId == UiThreadId)
+        {
+            return Execute(model, traceStage);
+        }
+
+        var request = new PendingRequest(model, traceStage);
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return ConfirmationDecisionContract.Cancel(model);
+            }
+
+            try
+            {
+                _pending.Add(request);
+            }
+            catch (InvalidOperationException)
+            {
+                return ConfirmationDecisionContract.Cancel(model);
+            }
+        }
+
+        request.Completed.Wait();
+        return request.Decision ?? ConfirmationDecisionContract.Cancel(model);
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _pending.CompleteAdding();
+        }
+        _cancelActive();
+        if (Environment.CurrentManagedThreadId != UiThreadId)
+        {
+            _thread.Join();
+        }
+
+        while (_pending.TryTake(out var request))
+        {
+            Complete(request, ConfirmationDecisionContract.Cancel(request.Model));
+        }
+
+        _pending.Dispose();
+    }
+
+    private void Run()
+    {
+        Volatile.Write(ref _uiThreadId, Environment.CurrentManagedThreadId);
+        foreach (var request in _pending.GetConsumingEnumerable())
+        {
+            var decision = Volatile.Read(ref _disposed) == 0
+                ? Execute(request.Model, request.TraceStage)
+                : ConfirmationDecisionContract.Cancel(request.Model);
+            Complete(request, decision);
+        }
+    }
+
+    private ConfirmationDecision Execute(
+        ConfirmationUiModel model,
+        Func<string, string, bool> traceStage)
+    {
+        try
+        {
+            return _handler(model, traceStage)
+                ?? ConfirmationDecisionContract.Cancel(model);
+        }
+        catch
+        {
+            return ConfirmationDecisionContract.Cancel(model);
+        }
+    }
+
+    private static void Complete(PendingRequest request, ConfirmationDecision decision)
+    {
+        request.Decision = decision;
+        request.Completed.Set();
+    }
+}
+
+public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDisposable
+{
+    private readonly ResidentOverlayDispatchQueue? _dispatcher;
+    private ConfirmationDialog? _activeDialog;
+
+    public WindowsConfirmationOverlay()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            _dispatcher = new ResidentOverlayDispatchQueue(ShowConfirmation, CloseActiveDialog);
+        }
+    }
+
     public static IReadOnlyList<string> ForegroundActivationRequestCapabilities { get; } = new[]
     {
         "show_in_taskbar",
@@ -47,69 +210,97 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay
             return ConfirmationDecisionContract.Cancel(model);
         }
 
-        ConfirmationDecision? decision = null;
+        return _dispatcher?.Request(model, traceStage)
+            ?? ConfirmationDecisionContract.Cancel(model);
+    }
+
+    public void Dispose()
+    {
+        _dispatcher?.Dispose();
+    }
+
+    private ConfirmationDecision ShowConfirmation(
+        ConfirmationUiModel model,
+        Func<string, string, bool> traceStage)
+    {
+        ThreadExceptionEventHandler? threadExceptionHandler = null;
         Exception? dialogException = null;
-        var thread = new System.Threading.Thread(() =>
+        ConfirmationDialog? dialog = null;
+        try
         {
-            ThreadExceptionEventHandler? threadExceptionHandler = null;
-            ConfirmationDialog? dialog = null;
             try
             {
-                try
-                {
-                    Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-                }
-                catch (InvalidOperationException)
-                {
-                }
-
-                threadExceptionHandler = (_, exceptionEvent) =>
-                {
-                    dialogException = exceptionEvent.Exception;
-                    try
-                    {
-                        if (dialog is not null && !dialog.IsDisposed)
-                        {
-                            dialog.DialogResult = DialogResult.Cancel;
-                            dialog.Close();
-                        }
-                    }
-                    catch (Exception closeException)
-                    {
-                        dialogException = closeException;
-                    }
-                };
-                Application.ThreadException += threadExceptionHandler;
-
-                using var ownedDialog = new ConfirmationDialog(model, traceStage);
-                dialog = ownedDialog;
-                var result = dialog.ShowDialog();
-                decision = result == DialogResult.OK
-                    ? new ConfirmationDecision(true, new ApprovedSanitizedPayload(dialog.EditedSanitizedText))
-                    : ConfirmationDecisionContract.Cancel(model);
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             }
-            catch (Exception exception)
+            catch (InvalidOperationException)
             {
-                dialogException = exception;
             }
-            finally
-            {
-                if (threadExceptionHandler is not null)
-                {
-                    Application.ThreadException -= threadExceptionHandler;
-                }
-            }
-        });
 
-        thread.SetApartmentState(System.Threading.ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (dialogException is not null)
+            threadExceptionHandler = (_, exceptionEvent) =>
+            {
+                dialogException = exceptionEvent.Exception;
+                CloseDialog(dialog);
+            };
+            Application.ThreadException += threadExceptionHandler;
+
+            using var ownedDialog = new ConfirmationDialog(model, traceStage);
+            dialog = ownedDialog;
+            Volatile.Write(ref _activeDialog, dialog);
+            var result = dialog.ShowDialog();
+            return dialogException is null && result == DialogResult.OK
+                ? new ConfirmationDecision(true, new ApprovedSanitizedPayload(dialog.EditedSanitizedText))
+                : ConfirmationDecisionContract.Cancel(model);
+        }
+        catch
         {
             return ConfirmationDecisionContract.Cancel(model);
         }
+        finally
+        {
+            Volatile.Write(ref _activeDialog, null);
+            if (threadExceptionHandler is not null)
+            {
+                Application.ThreadException -= threadExceptionHandler;
+            }
+        }
+    }
 
-        return decision ?? ConfirmationDecisionContract.Cancel(model);
+    private void CloseActiveDialog()
+    {
+        CloseDialog(Volatile.Read(ref _activeDialog));
+    }
+
+    private static void CloseDialog(ConfirmationDialog? dialog)
+    {
+        if (dialog is null || dialog.IsDisposed)
+        {
+            return;
+        }
+
+        try
+        {
+            void Close()
+            {
+                if (!dialog.IsDisposed)
+                {
+                    dialog.DialogResult = DialogResult.Cancel;
+                    dialog.Close();
+                }
+            }
+
+            if (dialog.InvokeRequired)
+            {
+                dialog.BeginInvoke((Action)Close);
+            }
+            else
+            {
+                Close();
+            }
+        }
+        catch
+        {
+            // Disposal is fail-closed; the dispatcher also converts the request to Cancel.
+        }
     }
 
     private sealed class ConfirmationDialog : Form, IConfirmationOverlayWindow

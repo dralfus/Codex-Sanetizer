@@ -141,6 +141,98 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void ResidentOverlayDispatchQueue_SerializesAttemptsOnOneResidentThread()
+    {
+        var firstEntered = new ManualResetEventSlim(false);
+        var releaseFirst = new ManualResetEventSlim(false);
+        var order = new List<string>();
+        var threadIds = new List<int>();
+        var active = 0;
+        var maxActive = 0;
+
+        using var queue = new ResidentOverlayDispatchQueue(
+            (model, _) =>
+            {
+                lock (order)
+                {
+                    order.Add(model.SanitizedPrompt);
+                    threadIds.Add(Environment.CurrentManagedThreadId);
+                    active++;
+                    maxActive = Math.Max(maxActive, active);
+                }
+
+                if (model.SanitizedPrompt == "first")
+                {
+                    firstEntered.Set();
+                    releaseFirst.Wait();
+                }
+
+                lock (order)
+                {
+                    active--;
+                }
+
+                return ConfirmationDecisionContract.Confirm(model);
+            },
+            cancelActive: static () => { });
+
+        ConfirmationDecision? firstDecision = null;
+        ConfirmationDecision? secondDecision = null;
+        var firstThread = new Thread(() => firstDecision = queue.Request(CreateOverlayModel("first"), static (_, _) => true));
+        var secondThread = new Thread(() => secondDecision = queue.Request(CreateOverlayModel("second"), static (_, _) => true));
+
+        firstThread.Start();
+        firstEntered.Wait();
+        secondThread.Start();
+        releaseFirst.Set();
+        firstThread.Join();
+        secondThread.Join();
+
+        Assert.That(firstDecision?.Approved, Is.True);
+        Assert.That(secondDecision?.Approved, Is.True);
+        Assert.That(order, Is.EqualTo(new[] { "first", "second" }));
+        Assert.That(threadIds.Distinct().Count(), Is.EqualTo(1));
+        Assert.That(threadIds[0], Is.EqualTo(queue.UiThreadId));
+        Assert.That(maxActive, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ResidentOverlayDispatchQueue_DisposalCancelsActiveAttempt()
+    {
+        var handlerEntered = new ManualResetEventSlim(false);
+        var releaseHandler = new ManualResetEventSlim(false);
+        var cancelRequested = 0;
+        ResidentOverlayDispatchQueue? queue = null;
+        ConfirmationDecision? decision = null;
+        var requestThread = new Thread(() =>
+        {
+            decision = queue!.Request(CreateOverlayModel("active"), static (_, _) => true);
+        });
+
+        queue = new ResidentOverlayDispatchQueue(
+            (model, _) =>
+            {
+                handlerEntered.Set();
+                releaseHandler.Wait();
+                return Volatile.Read(ref cancelRequested) == 1
+                    ? ConfirmationDecisionContract.Cancel(model)
+                    : ConfirmationDecisionContract.Confirm(model);
+            },
+            cancelActive: () =>
+            {
+                Interlocked.Exchange(ref cancelRequested, 1);
+                releaseHandler.Set();
+            });
+
+        requestThread.Start();
+        handlerEntered.Wait();
+        queue.Dispose();
+        requestThread.Join();
+
+        Assert.That(decision?.Approved, Is.False);
+    }
+
+    [Test]
     public void ProtectedSendTrace_TargetFingerprintIsOpaqueAndRawFree()
     {
         var identity = new NativeSubmitTargetIdentity(4, "chatgpt-desktop", "ABC123");
@@ -1054,6 +1146,18 @@ public partial class SanitizerTests
             Assert.That(controller.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("runtime_replaced"), reloadStage);
             Assert.That(controller.State.LastProtectedSendInterruption.Action, Is.EqualTo("retry_protection"), reloadStage);
         }
+    }
+
+    private static ConfirmationUiModel CreateOverlayModel(string prompt)
+    {
+        return new ConfirmationUiModel(
+            prompt,
+            Array.Empty<HighlightedReplacementSpan>(),
+            new Dictionary<string, int>(),
+            Array.Empty<string>(),
+            "Confirm",
+            "Cancel",
+            RawValuesVisible: false);
     }
 
     [Test]

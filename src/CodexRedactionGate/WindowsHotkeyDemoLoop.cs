@@ -50,6 +50,7 @@ public static class WindowsHotkeyDemoLoop
             Console.WriteLine("Press Ctrl+C in this console to stop.");
 
             var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
+            using var confirmationOverlay = new WindowsConfirmationOverlay();
             var orchestrator = new OsInteractionOrchestrator(
                 sanitizer,
                 WindowsFocusedComposerDiscovery.CreateDefault(),
@@ -77,7 +78,7 @@ public static class WindowsHotkeyDemoLoop
 
                 if (mode == WindowsHotkeyDemoMode.DryRun && result.ConfirmationModel is not null)
                 {
-                    _ = new WindowsConfirmationOverlay().RequestConfirmation(result.ConfirmationModel);
+                    _ = confirmationOverlay.RequestConfirmation(result.ConfirmationModel);
                 }
 
                 PrintRawFreeResult(result);

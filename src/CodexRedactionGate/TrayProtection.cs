@@ -91,6 +91,7 @@ internal sealed class TrayProtectionController
     private readonly DefaultStorageLayout _storageLayout;
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
     private readonly Action<string>? _protectedSendStageObserver;
+    private readonly IDisposable? _residentRuntimeOwner;
     private readonly ConcurrentDictionary<CapturedTargetProfileKey, string> _capturedTargetProfiles = new();
     private readonly object _reloadGate = new();
     private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
@@ -115,7 +116,8 @@ internal sealed class TrayProtectionController
         IReadOnlyList<NativeSubmitRuntime>? nativeSubmitRuntimes = null,
         Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null,
         Func<IntPtr, string?>? selectedWindowProfileResolver = null,
-        Action<string>? protectedSendStageObserver = null)
+        Action<string>? protectedSendStageObserver = null,
+        IDisposable? residentRuntimeOwner = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
@@ -129,6 +131,7 @@ internal sealed class TrayProtectionController
         _storageLayout = storageLayout ?? DefaultStorageLayout.CreateDefault();
         _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
         _protectedSendStageObserver = protectedSendStageObserver;
+        _residentRuntimeOwner = residentRuntimeOwner;
         var surfaceDiscovery = activeSurfaceDiscovery ?? (() => TextSurfaceDiscoveryResult.Failure(
             OsInteractionStatusIds.NotComposer,
             new Dictionary<string, string>()));
@@ -332,6 +335,7 @@ internal sealed class TrayProtectionController
         var nativeStarted = snapshot.RuntimeSet is not null && StartNativeSubmitHook(snapshot.RuntimeSet);
         if (snapshot.RuntimeSet is not null && !nativeStarted)
         {
+            StopAndDisposeRuntime(snapshot.RuntimeSet);
             if (manualHotkeyStarted)
             {
                 _hotkeyHost.Stop();
@@ -385,7 +389,8 @@ internal sealed class TrayProtectionController
     public void Stop()
     {
         var snapshot = ReadSnapshot();
-        snapshot.RuntimeSet?.HookHost.Stop();
+        StopAndDisposeRuntime(snapshot.RuntimeSet);
+        _residentRuntimeOwner?.Dispose();
         _hotkeyHost.Stop();
         PublishSnapshot(snapshot with
         {
@@ -455,20 +460,20 @@ internal sealed class TrayProtectionController
 
         if (!StartNativeSubmitHook(candidate.RuntimeSet!))
         {
-            candidate.RuntimeSet!.HookHost.Stop();
+            StopAndDisposeRuntime(candidate.RuntimeSet);
             return false;
         }
 
         if (!TryPublishRuntimeCandidate(previous, candidate))
         {
-            candidate.RuntimeSet!.HookHost.Stop();
+            StopAndDisposeRuntime(candidate.RuntimeSet);
             return false;
         }
 
         if (previous.RuntimeSet is not null
             && !ReferenceEquals(previous.RuntimeSet.HookHost, candidate.RuntimeSet!.HookHost))
         {
-            previous.RuntimeSet.HookHost.Stop();
+            StopAndDisposeRuntime(previous.RuntimeSet);
         }
 
         return true;
@@ -751,7 +756,7 @@ internal sealed class TrayProtectionController
                 (gesture, classification) => RunNativeSendControlOnce(runtimeSet, gesture, classification),
                 gesture => ShouldSuppressPointerClassificationFailure(runtimeSet, gesture)))
             {
-                runtimeSet.HookHost.Stop();
+                StopAndDisposeRuntime(runtimeSet);
                 return false;
             }
         }
@@ -1903,6 +1908,17 @@ internal sealed class TrayProtectionController
         return true;
     }
 
+    private static void StopAndDisposeRuntime(NativeSubmitRuntimeSet? runtimeSet)
+    {
+        if (runtimeSet is null)
+        {
+            return;
+        }
+
+        runtimeSet.HookHost.Stop();
+        runtimeSet.Dispose();
+    }
+
     private NativeSubmitInterceptionResult RememberSnapshot(
         ProtectionSnapshot snapshot,
         NativeSubmitRuntimeSet runtimeSet,
@@ -2043,7 +2059,14 @@ internal sealed record NativeSubmitRuntime(
 
 internal sealed record NativeSubmitRuntimeSet(
     INativeSubmitHookHost HookHost,
-    IReadOnlyList<NativeSubmitRuntime> Runtimes);
+    IReadOnlyList<NativeSubmitRuntime> Runtimes,
+    IDisposable? ResourceOwner = null) : IDisposable
+{
+    public void Dispose()
+    {
+        ResourceOwner?.Dispose();
+    }
+}
 
 internal sealed record ResidentProtectionRuntime(
     Func<OsInteractionResult> ApplyOnlyRunner,

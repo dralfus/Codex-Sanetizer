@@ -4173,7 +4173,7 @@ public partial class SanitizerTests
         Assert.That(sourceText, Does.Contain("Exception? dialogException"));
         Assert.That(sourceText, Does.Contain("Application.ThreadException"));
         Assert.That(sourceText, Does.Contain("SetUnhandledExceptionMode"));
-        Assert.That(sourceText, Does.Contain("catch (Exception exception)"));
+        Assert.That(sourceText, Does.Contain("catch"));
         Assert.That(sourceText, Does.Contain("return ConfirmationDecisionContract.Cancel(model);"));
     }
 

@@ -242,13 +242,14 @@ public static class WindowsTrayApp
         ArgumentNullException.ThrowIfNull(layout);
 
         var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
+        var confirmationOverlay = new WindowsConfirmationOverlay();
         var orchestrator = new OsInteractionOrchestrator(
             sanitizer,
             WindowsFocusedComposerDiscovery.CreateDefault(),
             liveAdapter,
             liveAdapter,
             liveAdapter,
-            new WindowsConfirmationOverlay());
+            confirmationOverlay);
         return new ResidentProtectionRuntime(
             () => orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly),
             CreateNativeSubmitRuntimeSet(sanitizer, layout));
@@ -275,6 +276,7 @@ public static class WindowsTrayApp
 
         var hookHost = new WindowsNativeSubmitHookHost(profiles);
         var activeSurfaceDiscovery = WindowsFocusedComposerDiscovery.CreateDefault();
+        var confirmationOverlay = new WindowsConfirmationOverlay();
         var runtimes = profiles.Select(nativeProfile =>
         {
             var controller = new NativeSubmitInterceptionController(
@@ -299,7 +301,7 @@ public static class WindowsTrayApp
                     nativeSubmitAdapter,
                     nativeSubmitAdapter,
                     new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
-                    new WindowsConfirmationOverlay());
+                    confirmationOverlay);
                 return nativeSubmitOrchestrator.RunOnce(
                     OsInteractionRunOptions.ConfirmAndSend,
                     traceStage);
@@ -315,7 +317,7 @@ public static class WindowsTrayApp
                 TargetTracedRunner: (target, traceStage) => RunConfirmAndSend(target, traceStage),
                 TraceRequired: true);
         }).ToArray();
-        return new NativeSubmitRuntimeSet(hookHost, runtimes);
+        return new NativeSubmitRuntimeSet(hookHost, runtimes, confirmationOverlay);
     }
 
     internal static SubmitBindingProfile? ResolveNativeProfileForProtection(DefaultStorageLayout layout)
@@ -1252,7 +1254,13 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private static void StopUnactivatedRuntime(NativeSubmitRuntimeSet? runtimeSet)
     {
-        runtimeSet?.HookHost.Stop();
+        if (runtimeSet is null)
+        {
+            return;
+        }
+
+        runtimeSet.HookHost.Stop();
+        runtimeSet.Dispose();
     }
 
     private void PublishRemediationFailure(Exception exception, string component, string code)
