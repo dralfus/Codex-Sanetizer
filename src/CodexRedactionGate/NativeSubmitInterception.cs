@@ -657,13 +657,36 @@ public sealed class NativeSubmitInterceptionController
 
     public bool IsSetupRequired(DefaultStorageLayout layout, string? profileId = null)
     {
+        return GetSetupReadinessStatus(layout, profileId) != OsInteractionStatusIds.Protected;
+    }
+
+    internal string GetSetupReadinessStatus(DefaultStorageLayout layout, string? profileId = null)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+
         if (_firstRunSetupController is null)
         {
-            return false;
+            return _profile.IsSetupComplete
+                ? OsInteractionStatusIds.Protected
+                : OsInteractionStatusIds.NativeSubmitSetupRequired;
         }
 
-        var setupResult = _firstRunSetupController.GetSetupStatus(layout, profileId ?? _profile.ProfileId);
-        return !setupResult.Succeeded || setupResult.State.Required;
+        try
+        {
+            var setupResult = _firstRunSetupController.GetSetupStatus(layout, profileId ?? _profile.ProfileId);
+            if (string.Equals(setupResult.Code, "profiles_load_failed", StringComparison.Ordinal))
+            {
+                return OsInteractionStatusIds.ProfilesUnavailable;
+            }
+
+            return !setupResult.Succeeded || setupResult.State.Required
+                ? OsInteractionStatusIds.NativeSubmitSetupRequired
+                : OsInteractionStatusIds.Protected;
+        }
+        catch (Exception)
+        {
+            return OsInteractionStatusIds.ProfilesUnavailable;
+        }
     }
 
     public NativeSubmitInterceptionController(
@@ -1128,6 +1151,17 @@ public sealed class NativeSubmitInterceptionController
             diagnostics["setup_status_error"] = "true";
             return new NativeSubmitInterceptionResult(
                 OsInteractionStatusIds.NativeSubmitSetupRequired,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: diagnostics);
+        }
+
+        if (string.Equals(setupResult.Code, "profiles_load_failed", StringComparison.Ordinal))
+        {
+            diagnostics["profile_settings_recovery"] = "required";
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.ProfilesUnavailable,
                 SuppressOriginalInput: true,
                 Applied: false,
                 Submitted: false,

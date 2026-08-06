@@ -40,6 +40,7 @@ public static class OsInteractionStatusIds
     public const string EmergencyDisabled = "emergency_disabled";
     public const string EnterpriseBlocked = "enterprise_blocked";
     public const string NativeSubmitSetupRequired = "native_submit_setup_required";
+    public const string ProfilesUnavailable = "profiles_unavailable";
     public const string ProgrammaticUiaInvokeUnsupported = "programmatic_uia_invoke_unsupported";
 }
 

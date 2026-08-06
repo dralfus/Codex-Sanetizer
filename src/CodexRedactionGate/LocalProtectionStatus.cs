@@ -11,7 +11,8 @@ internal enum LocalProtectionStatusAction
     None,
     VerifyProfiles,
     RetryPromptProtection,
-    RepairLocalProtection
+    RepairLocalProtection,
+    RepairProfileSettings
 }
 
 internal sealed record LocalProtectionStatusRow(
@@ -107,6 +108,17 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "setup required",
                 "Send from selected AI apps is blocked until profile verification succeeds.",
                 LocalProtectionStatusAction.VerifyProfiles);
+        }
+
+        if (state.NativeSubmitStatus == OsInteractionStatusIds.ProfilesUnavailable
+            || state.ReadinessStatus == OsInteractionStatusIds.ProfilesUnavailable)
+        {
+            return new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "profile settings unavailable",
+                "Protected Send remains blocked until the local profile settings can be read.",
+                LocalProtectionStatusAction.RepairProfileSettings);
         }
 
         if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
@@ -432,6 +444,7 @@ internal sealed class LocalProtectionStatusForm : Form
             LocalProtectionStatusAction.VerifyProfiles => "Set up prompt protection",
             LocalProtectionStatusAction.RetryPromptProtection => "Retry protection",
             LocalProtectionStatusAction.RepairLocalProtection => "Repair local protection",
+            LocalProtectionStatusAction.RepairProfileSettings => "Open profile settings",
             _ => string.Empty
         };
     }

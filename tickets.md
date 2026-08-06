@@ -685,20 +685,20 @@ runtime changes.
 snapshot replacement prove that no old runner executes, no raw pointer send
 passes through, and unrelated input is not captured.
 
-- [ ] A pointer Send whose control discovery is slow or fails is fail-closed
+- [x] A pointer Send whose control discovery is slow or fails is fail-closed
   only for the selected desktop client; unrelated application clicks remain
   pass-through.
-- [ ] Deferred keyboard and pointer results cannot call a runner after Stop or
+- [x] Deferred keyboard and pointer results cannot call a runner after Stop or
   resident-runtime replacement, including the compare-and-send boundary.
-- [ ] Tests cover two desktop windows with the same profile and prove the send
+- [x] Tests cover two desktop windows with the same profile and prove the send
   cannot be redirected to the second window.
-- [ ] If the profile store cannot be read, the tray shows a raw-free settings
+- [x] If the profile store cannot be read, the tray shows a raw-free settings
   recovery action rather than offering a setup action that cannot run.
 
-**Review follow-up (2026-08-06):** Invalidation by Stop or runtime replacement
-must preserve one terminal raw-free trace for the interrupted operation; an
-interruption projection that clears the attempt trace is not sufficient. The
-same rule applies to deferred keyboard and pointer paths.
+**Review follow-up (2026-08-06, resolved):** Invalidation by Stop or runtime
+replacement preserves one terminal raw-free `terminal_blocked` trace for the
+interrupted operation. The same resident operation owner and terminal rule are
+used by deferred keyboard and pointer paths.
 
 ## 298. Publish a raw-free protected-Send attempt status
 
@@ -1158,15 +1158,15 @@ terminal states as keyboard Send, with no post-hoc synthetic success trace.
 Send, unrelated click, target change, overlay cancellation, approval, and trace
 failure without a live cloud or timer.
 
-- [ ] Identified pointer Send starts and completes one resident trace before
+- [x] Identified pointer Send starts and completes one resident trace before
   any submit side effect.
-- [ ] Pointer trace failure suppresses the original click and renders a safe
+- [x] Pointer trace failure suppresses the original click and renders a safe
   retry reason; unrelated clicks are not intercepted.
-- [ ] Pointer approval and cancellation share the keyboard overlay contract.
+- [x] Pointer approval and cancellation share the keyboard overlay contract.
 
-**Review follow-up (2026-08-06):** Pointer attempts must use the same resident
-attempt/trace owner and terminal-trace rule as keyboard attempts; keyboard
-trace success cannot be reused as pointer evidence.
+**Review follow-up (2026-08-06, resolved):** Pointer attempts use the same
+resident attempt/trace owner and terminal-trace rule as keyboard attempts;
+keyboard trace success is never reused as pointer evidence.
 
 ## 310. Remove the untraced runtime compatibility path
 

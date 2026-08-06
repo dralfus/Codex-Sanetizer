@@ -1063,6 +1063,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 return "Protected Send: edit the prompt and send again";
             case "trace_unavailable":
                 return "Protected Send: trace unavailable; retry protection before sending";
+            case "settings_unavailable":
+                return "Protected Send: profile settings unavailable; repair profile settings before sending";
         }
 
         if (state.ComposerProtected)
@@ -1080,6 +1082,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 => "Prompt was not sent because its original composer changed: focus it and send again",
             OsInteractionStatusIds.DegradedHotkeyOnly
                 => "Prompt protection is unavailable: restart protection, then select Set up prompt protection",
+            OsInteractionStatusIds.ProfilesUnavailable
+                => "Prompt protection is unavailable: repair profile settings before sending",
             _ => "Prompt protection is unavailable: select Set up prompt protection"
         };
     }
@@ -1186,6 +1190,30 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             case LocalProtectionStatusAction.RepairLocalProtection:
                 RepairLocalProtection();
                 break;
+            case LocalProtectionStatusAction.RepairProfileSettings:
+                OpenProfileSettings();
+                break;
+        }
+    }
+
+    private void OpenProfileSettings()
+    {
+        try
+        {
+            _layout.EnsureDirectories();
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"\"{_layout.SettingsDirectory}\"",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "tray_profile_settings", "open_failed");
+            _recoveryMessagePresenter(
+                "Profile settings could not be opened. Protected Send remains blocked.",
+                MessageBoxIcon.Error);
         }
     }
 

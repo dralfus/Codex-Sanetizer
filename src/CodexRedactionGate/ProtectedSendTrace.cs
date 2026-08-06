@@ -84,6 +84,7 @@ internal readonly record struct ProtectedSendTraceResultCode
         OsInteractionStatusIds.EmergencyDisabled,
         OsInteractionStatusIds.EnterpriseBlocked,
         OsInteractionStatusIds.NativeSubmitSetupRequired,
+        OsInteractionStatusIds.ProfilesUnavailable,
         OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported
     };
 
