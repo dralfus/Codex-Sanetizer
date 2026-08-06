@@ -123,7 +123,8 @@ public static class WindowsTrayApp
             enforcement,
             () => CreateNativeSubmitRuntimeSet(sanitizer, layout),
             localProtectionStatus: localProtectionStatus,
-            recoveredRuntimeFactory: recoveredRuntimeFactory ?? (() => CreateResidentProtectionRuntime(sanitizer, layout)));
+            recoveredRuntimeFactory: recoveredRuntimeFactory ?? (() => CreateResidentProtectionRuntime(sanitizer, layout)),
+            candidateNativeSubmitRuntimeFactory: profiles => CreateNativeSubmitRuntimeSet(sanitizer, layout, profiles));
         runMessageLoop(context);
         return 0;
     }
@@ -258,12 +259,15 @@ public static class WindowsTrayApp
         return CreateNativeSubmitRuntimeSet(sanitizer, layout)?.Runtimes.FirstOrDefault();
     }
 
-    internal static NativeSubmitRuntimeSet? CreateNativeSubmitRuntimeSet(ISanitizer sanitizer, DefaultStorageLayout layout)
+    internal static NativeSubmitRuntimeSet? CreateNativeSubmitRuntimeSet(
+        ISanitizer sanitizer,
+        DefaultStorageLayout layout,
+        IReadOnlyList<SubmitBindingProfile>? profilesOverride = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
 
-        var profiles = ResolveNativeProfilesForProtection(layout);
+        var profiles = profilesOverride ?? ResolveNativeProfilesForProtection(layout);
         if (profiles.Count == 0)
         {
             return null;
@@ -500,6 +504,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _repairLocalProtectionItem;
     private readonly SingleInstanceEnforcement? _singleInstanceEnforcement;
     private Func<NativeSubmitRuntimeSet?>? _nativeSubmitRuntimeFactory;
+    private readonly Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?> _candidateNativeSubmitRuntimeFactory;
     private readonly Func<IFirstRunSetupController> _firstRunSetupControllerFactory;
     private readonly Action<FirstRunSetupResult?>? _firstRunSetupCompleted;
     private readonly Func<ResidentProtectionRuntime> _recoveredRuntimeFactory;
@@ -562,7 +567,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         bool scheduleFirstRunSetup = true,
         Func<LocalProtectionRecoveryResult>? localProtectionRecovery = null,
         Func<bool>? recoveryConfirmation = null,
-        Action<string, MessageBoxIcon>? recoveryMessagePresenter = null)
+        Action<string, MessageBoxIcon>? recoveryMessagePresenter = null,
+        Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?>? candidateNativeSubmitRuntimeFactory = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
@@ -572,6 +578,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _crashDiagnostics = LocalCrashDiagnostics.Bootstrap();
         _singleInstanceEnforcement = singleInstanceEnforcement;
         _nativeSubmitRuntimeFactory = nativeSubmitRuntimeFactory;
+        _candidateNativeSubmitRuntimeFactory = candidateNativeSubmitRuntimeFactory
+            ?? (profiles => WindowsTrayApp.CreateNativeSubmitRuntimeSet(
+                Sanitizer.CreateProduction(_layout),
+                _layout,
+                profiles));
         _firstRunSetupControllerFactory = firstRunSetupControllerFactory
             ?? (() => new FirstRunSetupController(_controller.PublishSetupVerificationProgress));
         _firstRunSetupCompleted = firstRunSetupCompleted;
@@ -705,11 +716,15 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
                 _controller.State.ProtectedSendBinding,
                 SetupVerificationAttemptId(result)));
+            NativeSubmitRuntimeSet? candidateRuntimeSet = null;
             try
             {
-                var runtimeSet = _nativeSubmitRuntimeFactory?.Invoke();
-                if (runtimeSet is null || !_controller.ReloadNativeSubmit(runtimeSet))
+                candidateRuntimeSet = result.PendingProfiles is { } candidateProfiles
+                    ? _candidateNativeSubmitRuntimeFactory(candidateProfiles)
+                    : _nativeSubmitRuntimeFactory?.Invoke();
+                if (candidateRuntimeSet is null || !_controller.ReloadNativeSubmit(candidateRuntimeSet))
                 {
+                    candidateRuntimeSet?.HookHost.Stop();
                     RestorePreviousSetupProfiles(result);
                     _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
                         "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
@@ -719,9 +734,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
                 }
-                else
+                else if (CommitActivatedProfiles(result, result.PendingProfiles))
                 {
-                    FirstRunSetupController.MarkSetupComplete(_layout);
                     _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
                         "protected",
                         "none",
@@ -733,7 +747,17 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             catch (Exception exception)
             {
                 LocalCrashDiagnostics.CaptureDefault(exception, "first_run_setup", "runtime_reload_failed");
-                RestorePreviousSetupProfiles(result);
+                var candidatePublished = candidateRuntimeSet is not null
+                    && ReferenceEquals(_controller.GetCurrentSnapshot().RuntimeSet, candidateRuntimeSet);
+                if (candidatePublished)
+                {
+                    RollbackActivatedSetup(result);
+                }
+                else
+                {
+                    candidateRuntimeSet?.HookHost.Stop();
+                    RestorePreviousSetupProfiles(result);
+                }
                 _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
                     "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
                 MessageBox.Show(
@@ -768,6 +792,67 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         catch (Exception exception)
         {
             _crashDiagnostics.Capture(exception, "first_run_setup", "completion_callback_failed");
+        }
+    }
+
+    private bool CommitActivatedProfiles(
+        FirstRunSetupResult result,
+        IReadOnlyList<SubmitBindingProfile>? pendingProfiles)
+    {
+        try
+        {
+            if (pendingProfiles is not null)
+            {
+                var saveResult = SubmitBindingProfileStore.Save(_layout, pendingProfiles);
+                if (!saveResult.Succeeded)
+                {
+                    throw new InvalidOperationException("profile_commit_failed");
+                }
+            }
+
+            FirstRunSetupController.MarkSetupComplete(_layout);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            RollbackActivatedSetup(result);
+            _crashDiagnostics.Capture(exception, "first_run_setup", "profile_commit_failed");
+            _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
+            return false;
+        }
+    }
+
+    private void RollbackActivatedSetup(FirstRunSetupResult result)
+    {
+        var profilesRestored = true;
+        try
+        {
+            RestorePreviousSetupProfiles(result);
+        }
+        catch (Exception exception)
+        {
+            profilesRestored = false;
+            _crashDiagnostics.Capture(exception, "first_run_setup", "profile_rollback_failed");
+        }
+
+        NativeSubmitRuntimeSet? rollbackRuntime = null;
+        try
+        {
+            rollbackRuntime = _nativeSubmitRuntimeFactory?.Invoke();
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "first_run_setup", "runtime_rollback_create_failed");
+        }
+
+        var rollbackSucceeded = profilesRestored
+            && rollbackRuntime is not null
+            && _controller.ReloadNativeSubmit(rollbackRuntime);
+        if (!rollbackSucceeded)
+        {
+            _controller.Stop();
+            _controller.PublishPromptProtectionRetryFailure();
         }
     }
 

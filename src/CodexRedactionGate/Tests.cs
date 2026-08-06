@@ -7914,6 +7914,205 @@ public class ResidentFirstRunSetupLaunchTests
 
     [Test]
     [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_ActivatesCandidateBeforePersistingProfiles()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var oldProfile = CreateProtectedSetupProfile();
+            var candidateProfile = oldProfile with
+            {
+                SubmitBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+                NewlineBinding = SubmitKeyBinding.Parse("Enter").Binding
+            };
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { oldProfile }).Succeeded, Is.True);
+
+            var oldHook = new SanitizerTests.FakeNativeSubmitHookHost();
+            var candidateHook = new SanitizerTests.FakeNativeSubmitHookHost();
+            IReadOnlyList<SubmitBindingProfile>? profilesAtActivation = null;
+            var queuedWork = new Queue<Action>();
+            var setupController = new TestSetupController(_ => new FirstRunSetupResult(
+                Succeeded: true,
+                Code: "focused_profile_verified",
+                State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", true, false),
+                Diagnostics: new Dictionary<string, string>(),
+                PreviousProfiles: new[] { oldProfile },
+                PendingProfiles: new[] { candidateProfile }));
+            var protection = CreateManualOnlyTrayProtection(layout);
+
+            NativeSubmitRuntime CreateRuntime(
+                SanitizerTests.FakeNativeSubmitHookHost hook,
+                SubmitBindingProfile profile)
+            {
+                return new NativeSubmitRuntime(
+                    hook,
+                    new NativeSubmitInterceptionController(
+                        profile,
+                        new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                    CreateProtectedInteractionResult,
+                    profile);
+            }
+
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                nativeSubmitRuntimeFactory: () => new NativeSubmitRuntimeSet(
+                    oldHook,
+                    new[] { CreateRuntime(oldHook, oldProfile) }),
+                firstRunSetupControllerFactory: () => setupController,
+                backgroundWorkQueue: work => queuedWork.Enqueue(work),
+                uiDispatcher: work => work(),
+                scheduleFirstRunSetup: false,
+                candidateNativeSubmitRuntimeFactory: profiles =>
+                {
+                    profilesAtActivation = SubmitBindingProfileStore.Load(layout).Profiles;
+                    candidateHook.OnStarted = _ =>
+                    {
+                        profilesAtActivation = SubmitBindingProfileStore.Load(layout).Profiles;
+                    };
+                    return new NativeSubmitRuntimeSet(
+                        candidateHook,
+                        new[] { CreateRuntime(candidateHook, profiles.Single()) });
+                });
+
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+
+            Assert.That(profilesAtActivation, Is.Not.Null);
+            Assert.That(profilesAtActivation!.Single().SubmitBinding!.DisplayText, Is.EqualTo("Enter"));
+            Assert.That(candidateHook.Started, Is.True);
+            Assert.That(oldHook.Started, Is.False);
+            Assert.That(SubmitBindingProfileStore.Load(layout).Profiles.Single().SubmitBinding!.DisplayText,
+                Is.EqualTo("Ctrl+Enter"));
+            Assert.That(protection.State.ProtectedSendBinding, Is.EqualTo("Ctrl+Enter"));
+            Assert.That(protection.State.ComposerProtected, Is.True);
+            Assert.That(File.Exists(Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete")), Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_RollsBackResidentCandidateWhenProfileCommitFails()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var oldProfile = CreateProtectedSetupProfile();
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { oldProfile }).Succeeded, Is.True);
+
+            var oldHook = new SanitizerTests.FakeNativeSubmitHookHost();
+            var candidateHook = new SanitizerTests.FakeNativeSubmitHookHost();
+            var queuedWork = new Queue<Action>();
+            var rollbackFactoryCalls = 0;
+            var protection = CreateManualOnlyTrayProtection(layout);
+            var setupController = new TestSetupController(_ => new FirstRunSetupResult(
+                Succeeded: true,
+                Code: "focused_profile_verified",
+                State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", true, false),
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["setup_attempt_id"] = "1"
+                },
+                PreviousProfiles: new[] { oldProfile },
+                PendingProfiles: new[] { (SubmitBindingProfile)null! }));
+
+            NativeSubmitRuntime CreateRuntime(
+                SanitizerTests.FakeNativeSubmitHookHost hook,
+                SubmitBindingProfile profile)
+            {
+                return new NativeSubmitRuntime(
+                    hook,
+                    new NativeSubmitInterceptionController(
+                        profile,
+                        new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                    CreateProtectedInteractionResult,
+                    profile);
+            }
+
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                nativeSubmitRuntimeFactory: () =>
+                {
+                    rollbackFactoryCalls++;
+                    return new NativeSubmitRuntimeSet(
+                        oldHook,
+                        new[] { CreateRuntime(oldHook, oldProfile) });
+                },
+                firstRunSetupControllerFactory: () => setupController,
+                backgroundWorkQueue: work => queuedWork.Enqueue(work),
+                uiDispatcher: work => work(),
+                scheduleFirstRunSetup: false,
+                candidateNativeSubmitRuntimeFactory: _ => new NativeSubmitRuntimeSet(
+                    candidateHook,
+                    new[] { CreateRuntime(candidateHook, oldProfile with
+                    {
+                        SubmitBinding = SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+                        NewlineBinding = SubmitKeyBinding.Parse("Enter").Binding
+                    }) }));
+
+            protection.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "waiting_for_focus",
+                "focus_message_composer",
+                AttemptId: 1));
+            protection.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "composer_recognized",
+                "wait_for_verification",
+                "codex-desktop",
+                "Ctrl+Enter",
+                AttemptId: 1));
+            protection.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "verifying_binding",
+                "wait_for_verification",
+                "codex-desktop",
+                "Ctrl+Enter",
+                AttemptId: 1));
+            protection.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "activating_protection",
+                "wait_for_verification",
+                "codex-desktop",
+                "Ctrl+Enter",
+                AttemptId: 1));
+            context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
+
+            Assert.That(candidateHook.Started, Is.False);
+            Assert.That(rollbackFactoryCalls, Is.EqualTo(1),
+                $"candidate_started={candidateHook.Started}; last_status={protection.State.LastStatus}; native_status={protection.State.NativeSubmitStatus}; runtime_present={protection.GetCurrentSnapshot().RuntimeSet is not null}");
+            Assert.That(protection.GetCurrentSnapshot().RuntimeSet?.HookHost, Is.SameAs(oldHook));
+            Assert.That(oldHook.Started, Is.True);
+            Assert.That(protection.State.ProtectedSendBinding, Is.EqualTo("Enter"));
+            Assert.That(protection.State.SetupVerificationStatus, Is.EqualTo("activation_failed"));
+            Assert.That(SubmitBindingProfileStore.Load(layout).Profiles.Single().SubmitBinding!.DisplayText,
+                Is.EqualTo("Enter"));
+            Assert.That(File.Exists(Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete")), Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
     public void WindowsTrayApplicationContext_RemediationDispatcherShutdownReleasesSingleFlightGuard()
     {
         var tempDirectory = CreateTempDirectory();

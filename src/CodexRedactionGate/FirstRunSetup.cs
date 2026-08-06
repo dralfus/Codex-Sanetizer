@@ -21,7 +21,8 @@ public sealed record FirstRunSetupResult(
     string Code,
     FirstRunSetupState State,
     IReadOnlyDictionary<string, string> Diagnostics,
-    IReadOnlyList<SubmitBindingProfile>? PreviousProfiles = null);
+    IReadOnlyList<SubmitBindingProfile>? PreviousProfiles = null,
+    IReadOnlyList<SubmitBindingProfile>? PendingProfiles = null);
 
 public interface IFirstRunSetupController
 {
@@ -293,6 +294,19 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
         var setupCompleted = _showSetupWindow(storeResult.Profiles, layout, this);
         if (setupCompleted)
         {
+            if (_lastFocusedVerificationResult is { Succeeded: true, PendingProfiles: not null } pendingResult
+                && !pendingResult.State.Required)
+            {
+                return pendingResult with
+                {
+                    Diagnostics = Merge(pendingResult.Diagnostics, new Dictionary<string, string>
+                    {
+                        ["user_action"] = "setup_window_closed",
+                        ["all_profiles_verified"] = "true"
+                    })
+                };
+            }
+
             var finalStatus = GetSetupStatus(layout);
             if (finalStatus.Succeeded && !finalStatus.State.Required)
             {
@@ -305,7 +319,8 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
                         ["user_action"] = "setup_window_closed",
                         ["all_profiles_verified"] = "true"
                     }),
-                    PreviousProfiles: _lastFocusedVerificationResult?.PreviousProfiles);
+                    PreviousProfiles: _lastFocusedVerificationResult?.PreviousProfiles,
+                    PendingProfiles: _lastFocusedVerificationResult?.PendingProfiles);
             }
 
             return new FirstRunSetupResult(
@@ -506,27 +521,17 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
                 });
         }
 
-        var saveResult = SubmitBindingProfileStore.Upsert(layout, profile);
-        if (!saveResult.Succeeded)
-        {
-            PublishSetupProgress("verification_failed", "retry_setup", profile.ProfileId, submitBinding);
-            return new FirstRunSetupResult(
-                Succeeded: false,
-                Code: "focused_profile_update_failed",
-                State: GetSetupStatus(layout).State,
-                Diagnostics: new Dictionary<string, string>
-                {
-                    ["profile_id"] = profile.ProfileId,
-                    ["save_status"] = saveResult.Code
-                });
-        }
-
-        var updatedStatus = GetSetupStatus(layout);
+        var pendingProfiles = previousProfiles.Profiles
+            .Where(item => !string.Equals(item.ProfileId, profile.ProfileId, StringComparison.Ordinal))
+            .Append(profile)
+            .OrderBy(item => item.ProfileId, StringComparer.Ordinal)
+            .ToArray();
+        var pendingState = CreateSetupState(pendingProfiles, profile.ProfileId);
         PublishSetupProgress("activating_protection", "wait_for_verification", profile.ProfileId, submitBinding);
         var verifiedResult = new FirstRunSetupResult(
             Succeeded: true,
             Code: "focused_profile_verified",
-            State: updatedStatus.State,
+            State: pendingState,
             Diagnostics: Merge(focusedResult.Diagnostics, new Dictionary<string, string>
             {
                 ["profile_id"] = profile.ProfileId,
@@ -534,7 +539,8 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
                 ["binding_source"] = profile.BindingSource,
                 ["setup_attempt_id"] = _setupAttemptId.ToString(System.Globalization.CultureInfo.InvariantCulture)
             }),
-            PreviousProfiles: previousProfiles.Profiles);
+            PreviousProfiles: previousProfiles.Profiles,
+            PendingProfiles: pendingProfiles);
         _lastFocusedVerificationResult = verifiedResult;
         return verifiedResult;
     }
@@ -641,8 +647,11 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
 
     private static void SetSetupComplete(DefaultStorageLayout layout)
     {
+        layout.EnsureDirectories();
         var setupMarkerPath = Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete");
-        File.WriteAllText(setupMarkerPath, $"complete:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}");
+        AtomicFileWriter.WriteAllBytes(
+            setupMarkerPath,
+            System.Text.Encoding.UTF8.GetBytes($"complete:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}"));
     }
 
     private static IReadOnlyDictionary<string, string> Merge(

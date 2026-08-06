@@ -14,6 +14,92 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void ProtectedSendTrace_RejectsSkippedDuplicateAndStaleTransitions()
+    {
+        var trace = Array.Empty<ProtectedSendTraceEntry>();
+        const long attemptId = 7;
+        const long generation = 3;
+        const string fingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        Assert.That(ProtectedSendTrace.TryAppend(
+            trace,
+            attemptId,
+            generation,
+            fingerprint,
+            "send_detected",
+            "test.secret.com",
+            0,
+            out _), Is.False);
+        Assert.That(ProtectedSendTrace.TryAppend(
+            trace,
+            attemptId,
+            generation,
+            "test.secret.com",
+            "send_detected",
+            "checking_prompt",
+            0,
+            out _), Is.False);
+        Assert.That(ProtectedSendTrace.TryAppend(
+            trace,
+            attemptId,
+            generation,
+            fingerprint,
+            "send_detected",
+            "checking_prompt",
+            0,
+            out var detected), Is.True);
+        Assert.That(ProtectedSendTrace.TryAppend(
+            detected,
+            attemptId,
+            generation,
+            fingerprint,
+            "sanitized",
+            "sanitization_verified",
+            2,
+            out _), Is.False);
+        Assert.That(ProtectedSendTrace.TryAppend(
+            detected,
+            attemptId,
+            generation,
+            fingerprint,
+            "target_matched",
+            "target_verified",
+            3,
+            out var matched), Is.True);
+        Assert.That(ProtectedSendTrace.TryAppend(
+            matched,
+            attemptId,
+            generation,
+            fingerprint,
+            "target_matched",
+            "target_verified",
+            3,
+            out _), Is.False);
+        Assert.That(ProtectedSendTrace.TryAppend(
+            matched,
+            attemptId + 1,
+            generation,
+            fingerprint,
+            "composer_read",
+            "capture_verified",
+            4,
+            out _), Is.False);
+        Assert.That(matched.All(entry => entry.TargetFingerprint == fingerprint), Is.True);
+    }
+
+    [Test]
+    public void ProtectedSendTrace_TargetFingerprintIsOpaqueAndRawFree()
+    {
+        var identity = new NativeSubmitTargetIdentity(4, "chatgpt-desktop", "ABC123");
+
+        var fingerprint = ProtectedSendTrace.TargetFingerprint(identity);
+
+        Assert.That(fingerprint, Does.Match("^[0-9a-f]{64}$"));
+        Assert.That(fingerprint, Does.Not.Contain(identity.ProfileId));
+        Assert.That(fingerprint, Does.Not.Contain(identity.WindowHandle));
+    }
+
+    [Test]
     public void SubmitBindingProfileStore_PersistsBindingsAndRawFreeStatus()
     {
         var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -695,9 +781,29 @@ public partial class SanitizerTests
         Assert.That(submitFlowCalls, Is.EqualTo(2));
         Assert.That(afterCancel.LastStatus, Is.EqualTo(OsInteractionStatusIds.Canceled));
         Assert.That(afterCancel.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+        Assert.That(afterCancel.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
+        {
+            "send_detected",
+            "target_matched",
+            "terminal_blocked"
+        }));
         Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
         Assert.That(controller.State.LastSubmitted, Is.True);
         Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+        Assert.That(controller.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
+        {
+            "send_detected",
+            "target_matched",
+            "composer_read",
+            "sanitized",
+            "send_injected",
+            "sent_safely"
+        }));
+        Assert.That(controller.State.ProtectedSendAttemptTrace!.All(entry =>
+            entry.AttemptId == controller.State.ProtectedSendAttemptId
+            && entry.SnapshotGeneration == controller.GetCurrentSnapshot().Generation
+            && !string.IsNullOrWhiteSpace(entry.TargetFingerprint)
+            && entry.DurationMilliseconds >= 0), Is.True);
     }
 
     [Test]
@@ -1285,10 +1391,44 @@ public partial class SanitizerTests
 
             Assert.That(result.Succeeded, Is.True);
             Assert.That(result.Diagnostics["profile_id"], Is.EqualTo("chatgpt-desktop"));
-            Assert.That(stored, Has.Count.EqualTo(1));
-            Assert.That(stored.Single().ProfileId, Is.EqualTo("chatgpt-desktop"));
-            Assert.That(stored.Single().IsProtected, Is.True);
-            Assert.That(controller.GetSetupStatus(layout).State.Required, Is.False);
+            Assert.That(result.PendingProfiles, Is.Not.Null);
+            Assert.That(result.PendingProfiles!, Has.Count.EqualTo(1));
+            Assert.That(result.PendingProfiles!.Single().ProfileId, Is.EqualTo("chatgpt-desktop"));
+            Assert.That(result.PendingProfiles!.Single().IsProtected, Is.True);
+            Assert.That(stored, Is.Empty);
+            Assert.That(controller.GetSetupStatus(layout).State.Required, Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupController_ClosesSetupWithAnUncommittedFocusedCandidate()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"))),
+                (_, setupLayout, setupController) =>
+                {
+                    var focusedController = (IFocusedProfileSetupController)setupController;
+                    var verification = focusedController.VerifyFocusedProfile("Ctrl+Enter", "Enter", setupLayout);
+                    Assert.That(verification.Succeeded, Is.True);
+                    return true;
+                });
+
+            var result = controller.ConfigureFocusedProfile(layout);
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.PendingProfiles, Is.Not.Null);
+            Assert.That(SubmitBindingProfileStore.Load(layout).Profiles, Is.Empty);
         }
         finally
         {
@@ -3018,6 +3158,7 @@ public class HandleButtonClickTests : SanitizerTests
         TrayProtectionController? controller = null;
         candidateHook.OnStarted = hook =>
         {
+            oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
             hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
             oldRuntimeStatus = controller!.State.LastStatus;
         };
