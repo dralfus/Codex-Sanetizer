@@ -883,9 +883,15 @@ public partial class SanitizerTests
         Assert.That(controller.Start(), Is.True);
         oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
 
-        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("composer_changed"));
-        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("focus_and_send_again"));
-        Assert.That(controller.State.ProtectedSendAttemptId, Is.GreaterThan(0));
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("idle"));
+        Assert.That(controller.State.ProtectedSendAttemptAction, Is.EqualTo("none"));
+        Assert.That(controller.State.ProtectedSendAttemptId, Is.EqualTo(0));
+        Assert.That(controller.State.ProtectedSendAttemptTrace, Is.Null.Or.Empty);
+        Assert.That(controller.State.LastProtectedSendInterruption, Is.Not.Null);
+        Assert.That(controller.State.LastProtectedSendInterruption!.AttemptId, Is.GreaterThan(0));
+        Assert.That(controller.State.LastProtectedSendInterruption.SourceGeneration, Is.EqualTo(0));
+        Assert.That(controller.State.LastProtectedSendInterruption.Reason, Is.EqualTo("runtime_replaced"));
+        Assert.That(controller.State.LastProtectedSendInterruption.Action, Is.EqualTo("retry_protection"));
     }
 
     [Test]

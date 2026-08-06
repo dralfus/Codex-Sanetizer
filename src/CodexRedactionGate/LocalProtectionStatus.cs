@@ -99,6 +99,16 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 LocalProtectionStatusAction.VerifyProfiles);
         }
 
+        if (state.LastProtectedSendInterruption is not null)
+        {
+            return new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "previous Send interrupted",
+                "The previous protected Send was interrupted while protection changed. Retry prompt protection.",
+                LocalProtectionStatusAction.RetryPromptProtection);
+        }
+
         if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
         {
             var attemptRow = CreateProtectedSendAttemptRow(state.ProtectedSendAttemptStatus);

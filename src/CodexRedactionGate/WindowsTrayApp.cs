@@ -1013,6 +1013,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             return $"Emergency bypass is active: {NativeSubmitEmergencyState.BypassDisplayText}";
         }
 
+        if (state.LastProtectedSendInterruption is not null)
+        {
+            return "Protected Send: previous Send was interrupted; retry protection before sending";
+        }
+
         switch (state.ProtectedSendAttemptStatus)
         {
             case "detected":

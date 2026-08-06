@@ -134,6 +134,24 @@ public sealed class LocalProtectionStatusTests
     }
 
     [Test]
+    public void StatusView_RendersInterruptedSendOutcomeSeparatelyFromCurrentAttempt()
+    {
+        var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ProtectedSendAttemptStatus = "idle",
+            LastProtectedSendInterruption = new ProtectedSendInterruption(
+                AttemptId: 12,
+                SourceGeneration: 7,
+                Reason: "runtime_replaced",
+                Action: "retry_protection")
+        });
+
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("previous Send interrupted"));
+        Assert.That(view.Rows[1].Consequence, Does.Contain("Retry prompt protection"));
+        Assert.That(view.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.RetryPromptProtection));
+    }
+
+    [Test]
     public void StatusView_ExplainsEveryBlockedProtectedSendAttemptWithoutRawValues()
     {
         foreach (var (attemptStatus, expectedState, expectedAction, expectedConsequence) in new[]

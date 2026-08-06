@@ -1411,6 +1411,29 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void TrayStatusFormatter_RendersInterruptedSendAsAKnownRawFreeValue()
+    {
+        var status = TrayStatusFormatter.FormatMenuStatus(new TrayProtectionState(
+            Enabled: true,
+            Mode: "NativeSubmit",
+            Hotkey: "Ctrl+Shift+F9",
+            LastStatus: OsInteractionStatusIds.Protected,
+            LastDecision: null,
+            LastReplacementCount: null,
+            LastProfileId: "chatgpt-desktop",
+            LastApplied: false,
+            LastSubmitted: false,
+            LastProtectedSendInterruption: new ProtectedSendInterruption(
+                AttemptId: 12,
+                SourceGeneration: 7,
+                Reason: "DOMAIN_C195C3D8E8F3",
+                Action: "DOMAIN_C195C3D8E8F3")));
+
+        Assert.That(status, Does.Contain("protected_send_interruption=unavailable"));
+        Assert.That(status, Does.Not.Contain("DOMAIN_C195C3D8E8F3"));
+    }
+
+    [Test]
     public void TrayProtectionController_HotkeyRunsApplyOnlyAndStoresRawFreeResult()
     {
         const string rawPrompt = "Discuss ACME Banking status.";
@@ -8696,6 +8719,14 @@ public class ResidentFirstRunSetupLaunchTests
             ProtectedSendAttemptStatus = "trace_unavailable",
             ProtectedSendAttemptAction = "retry_protection"
         });
+        var interruptedText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState with
+        {
+            LastProtectedSendInterruption = new ProtectedSendInterruption(
+                AttemptId: 12,
+                SourceGeneration: 7,
+                Reason: "runtime_replaced",
+                Action: "retry_protection")
+        });
 
         Assert.That(protectedText, Does.Contain("ChatGPT Desktop"));
         Assert.That(protectedText, Does.Contain("Ctrl+Enter"));
@@ -8706,6 +8737,8 @@ public class ResidentFirstRunSetupLaunchTests
         Assert.That(sentText, Is.EqualTo("Protected Send: sent safely"));
         Assert.That(traceUnavailableText, Does.Contain("trace unavailable"));
         Assert.That(traceUnavailableText, Does.Contain("retry protection"));
+        Assert.That(interruptedText, Does.Contain("previous Send was interrupted"));
+        Assert.That(interruptedText, Does.Contain("retry protection"));
         Assert.That(new[] { protectedText, setupText, repairText, focusLostText, checkingText, sentText, traceUnavailableText }
             .All(text => !text.Contains(OsInteractionStatusIds.NativeSubmitSetupRequired, StringComparison.Ordinal)), Is.True);
     }

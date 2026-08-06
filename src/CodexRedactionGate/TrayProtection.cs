@@ -59,6 +59,7 @@ public sealed record TrayProtectionState(
     long ProtectedSendAttemptId = 0,
     IReadOnlyList<ProtectedSendTraceEntry>? ProtectedSendAttemptTrace = null,
     long ProtectedSendAttemptStartedAtTimestamp = 0,
+    ProtectedSendInterruption? LastProtectedSendInterruption = null,
     string SetupVerificationStatus = "idle",
     string SetupVerificationAction = "none",
     string? SetupVerificationProfileId = null,
@@ -482,7 +483,7 @@ internal sealed class TrayProtectionController
 
             var state = ReferenceEquals(current, previous)
                 ? candidate.State
-                : candidate.State with
+                : CarryRuntimeReloadSendState(candidate.State, current) with
                 {
                     Enabled = current.State.Enabled,
                     Mode = current.State.Mode,
@@ -499,15 +500,6 @@ internal sealed class TrayProtectionController
                     ProgrammaticUiaInvokeStatus = current.State.ProgrammaticUiaInvokeStatus,
                     LocalProtectionStatus = current.State.LocalProtectionStatus,
                     PromptProtectionRetryFailed = current.State.PromptProtectionRetryFailed,
-                    ProtectedSendAttemptStatus = ActiveAttemptInterruptedByRuntimeReload(current.State)
-                        ? "composer_changed"
-                        : current.State.ProtectedSendAttemptStatus,
-                    ProtectedSendAttemptAction = ActiveAttemptInterruptedByRuntimeReload(current.State)
-                        ? "focus_and_send_again"
-                        : current.State.ProtectedSendAttemptAction,
-                    ProtectedSendAttemptId = current.State.ProtectedSendAttemptId,
-                    ProtectedSendAttemptTrace = current.State.ProtectedSendAttemptTrace,
-                    ProtectedSendAttemptStartedAtTimestamp = current.State.ProtectedSendAttemptStartedAtTimestamp,
                     SetupVerificationStatus = current.State.SetupVerificationStatus,
                     SetupVerificationAction = current.State.SetupVerificationAction,
                     SetupVerificationProfileId = current.State.SetupVerificationProfileId,
@@ -530,7 +522,14 @@ internal sealed class TrayProtectionController
                 };
             }
 
-            if (PublishSnapshotIfCurrent(current, candidate with { State = state }))
+            var replacement = candidate with
+            {
+                Generation = ReferenceEquals(current, previous)
+                    ? candidate.Generation
+                    : current.Generation + 1,
+                State = state
+            };
+            if (PublishSnapshotIfCurrent(current, replacement))
             {
                 return true;
             }
@@ -630,17 +629,8 @@ internal sealed class TrayProtectionController
                     : OsInteractionStatusIds.NotConfigured,
                 setupRequired: setupRequired,
                 localProtectionStatus: previous.State.LocalProtectionStatus);
-            state = state with
+            state = CarryRuntimeReloadSendState(state, previous) with
             {
-                ProtectedSendAttemptStatus = ActiveAttemptInterruptedByRuntimeReload(previous.State)
-                    ? "composer_changed"
-                    : previous.State.ProtectedSendAttemptStatus,
-                ProtectedSendAttemptAction = ActiveAttemptInterruptedByRuntimeReload(previous.State)
-                    ? "focus_and_send_again"
-                    : previous.State.ProtectedSendAttemptAction,
-                ProtectedSendAttemptId = previous.State.ProtectedSendAttemptId,
-                ProtectedSendAttemptTrace = previous.State.ProtectedSendAttemptTrace,
-                ProtectedSendAttemptStartedAtTimestamp = previous.State.ProtectedSendAttemptStartedAtTimestamp,
                 SetupVerificationStatus = previous.State.SetupVerificationStatus,
                 SetupVerificationAction = previous.State.SetupVerificationAction,
                 SetupVerificationProfileId = previous.State.SetupVerificationProfileId,
@@ -730,6 +720,7 @@ internal sealed class TrayProtectionController
             ProtectedSendAttemptId: snapshot.State.ProtectedSendAttemptId,
             ProtectedSendAttemptTrace: snapshot.State.ProtectedSendAttemptTrace,
             ProtectedSendAttemptStartedAtTimestamp: snapshot.State.ProtectedSendAttemptStartedAtTimestamp,
+            LastProtectedSendInterruption: snapshot.State.LastProtectedSendInterruption,
             SetupVerificationStatus: snapshot.State.SetupVerificationStatus,
             SetupVerificationAction: snapshot.State.SetupVerificationAction,
             SetupVerificationProfileId: snapshot.State.SetupVerificationProfileId,
@@ -1170,6 +1161,7 @@ internal sealed class TrayProtectionController
                 ProtectedSendAttemptId: current.State.ProtectedSendAttemptId,
                 ProtectedSendAttemptTrace: current.State.ProtectedSendAttemptTrace,
                 ProtectedSendAttemptStartedAtTimestamp: current.State.ProtectedSendAttemptStartedAtTimestamp,
+                LastProtectedSendInterruption: current.State.LastProtectedSendInterruption,
                 SetupVerificationStatus: current.State.SetupVerificationStatus,
                 SetupVerificationAction: current.State.SetupVerificationAction,
                 SetupVerificationProfileId: current.State.SetupVerificationProfileId,
@@ -1242,7 +1234,8 @@ internal sealed class TrayProtectionController
                     ProtectedSendAttemptAction = action,
                     ProtectedSendAttemptId = attemptId,
                     ProtectedSendAttemptTrace = trace,
-                    ProtectedSendAttemptStartedAtTimestamp = Stopwatch.GetTimestamp()
+                    ProtectedSendAttemptStartedAtTimestamp = Stopwatch.GetTimestamp(),
+                    LastProtectedSendInterruption = null
                 }
             };
             if (PublishSnapshotIfCurrent(current, replacement))
@@ -1330,7 +1323,41 @@ internal sealed class TrayProtectionController
 
     private static bool ActiveAttemptInterruptedByRuntimeReload(TrayProtectionState state)
     {
-        return state.ProtectedSendAttemptStatus is "detected" or "checking" or "in_progress";
+        return state.ProtectedSendAttemptStatus is "detected" or "checking" or "in_progress"
+            && state.ProtectedSendAttemptId > 0;
+    }
+
+    private static TrayProtectionState CarryRuntimeReloadSendState(
+        TrayProtectionState candidateState,
+        ProtectionSnapshot source)
+    {
+        var interruption = ActiveAttemptInterruptedByRuntimeReload(source.State)
+            ? new ProtectedSendInterruption(
+                source.State.ProtectedSendAttemptId,
+                source.Generation,
+                "runtime_replaced",
+                "retry_protection")
+            : null;
+
+        return candidateState with
+        {
+            ProtectedSendAttemptStatus = interruption is null
+                ? source.State.ProtectedSendAttemptStatus
+                : "idle",
+            ProtectedSendAttemptAction = interruption is null
+                ? source.State.ProtectedSendAttemptAction
+                : "none",
+            ProtectedSendAttemptId = interruption is null
+                ? source.State.ProtectedSendAttemptId
+                : 0,
+            ProtectedSendAttemptTrace = interruption is null
+                ? source.State.ProtectedSendAttemptTrace
+                : null,
+            ProtectedSendAttemptStartedAtTimestamp = interruption is null
+                ? source.State.ProtectedSendAttemptStartedAtTimestamp
+                : 0,
+            LastProtectedSendInterruption = interruption ?? source.State.LastProtectedSendInterruption
+        };
     }
 
     private static string ProtectedSendAttemptStatus(string status, bool submitted)
@@ -2003,7 +2030,7 @@ internal static class TrayStatusFormatter
         var replacements = state.LastReplacementCount is null
             ? "n/a"
             : state.LastReplacementCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return $"status={enabled} mode={DisplayMode(state.Mode)} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} programmatic_uia_invoke={DisplayStatus(state.ProgrammaticUiaInvokeStatus)} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={DisplayProjectFileStatus(state.ProjectFileStatus)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} newline_binding={DisplayBinding(state.NewlineBinding)} manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} protected_send_attempt={DisplayProtectedSendAttempt(state.ProtectedSendAttemptStatus)} attempt_action={DisplayProtectedSendAttemptAction(state.ProtectedSendAttemptAction)} native_submit={DisplayStatus(state.NativeSubmitStatus)} readiness={DisplayStatus(state.ReadinessStatus)} last={DisplayStatus(state.LastStatus)} replacements={replacements}";
+        return $"status={enabled} mode={DisplayMode(state.Mode)} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} programmatic_uia_invoke={DisplayStatus(state.ProgrammaticUiaInvokeStatus)} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={DisplayProjectFileStatus(state.ProjectFileStatus)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} newline_binding={DisplayBinding(state.NewlineBinding)} manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} protected_send_attempt={DisplayProtectedSendAttempt(state.ProtectedSendAttemptStatus)} attempt_action={DisplayProtectedSendAttemptAction(state.ProtectedSendAttemptAction)} protected_send_interruption={DisplayProtectedSendInterruption(state.LastProtectedSendInterruption)} native_submit={DisplayStatus(state.NativeSubmitStatus)} readiness={DisplayStatus(state.ReadinessStatus)} last={DisplayStatus(state.LastStatus)} replacements={replacements}";
     }
 
     public static string FormatNotifyIconText(TrayProtectionState state, string? buildVersion = null)
@@ -2105,6 +2132,15 @@ internal static class TrayStatusFormatter
                 or LocalProtectionRecovery.UnavailableCode => value,
             _ => "unavailable"
         };
+    }
+
+    private static string DisplayProtectedSendInterruption(ProtectedSendInterruption? interruption)
+    {
+        return interruption is { Reason: "runtime_replaced", Action: "retry_protection" }
+            ? "runtime_replaced"
+            : interruption is null
+                ? "none"
+                : "unavailable";
     }
 
     private static string TrimNotifyText(string text)

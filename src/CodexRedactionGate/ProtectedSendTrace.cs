@@ -14,6 +14,12 @@ public sealed record ProtectedSendTraceEntry(
     string ResultCode,
     int DurationMilliseconds);
 
+public sealed record ProtectedSendInterruption(
+    long AttemptId,
+    long SourceGeneration,
+    string Reason,
+    string Action);
+
 internal static class ProtectedSendTrace
 {
     public static string TargetFingerprint(NativeSubmitTargetIdentity? target, string? profileId = null)
