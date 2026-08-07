@@ -286,6 +286,11 @@ public static class SubmitBindingProfileStore
                 File.ReadAllText(path),
                 JsonOptions);
             var profiles = model?.Profiles?.Select(ToProfile).ToArray() ?? Array.Empty<SubmitBindingProfile>();
+            if (profiles.Any(profile => ReferenceOnlyInputSource.IsReservedProfileId(profile.ProfileId)))
+            {
+                return new SubmitBindingProfileStoreResult(false, "reference_profile_forbidden", Array.Empty<SubmitBindingProfile>());
+            }
+
             return new SubmitBindingProfileStoreResult(true, "profiles_loaded", profiles);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
@@ -299,6 +304,11 @@ public static class SubmitBindingProfileStore
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(profiles);
 
+        if (profiles.Any(profile => ReferenceOnlyInputSource.IsReservedProfileId(profile.ProfileId)))
+        {
+            return new SubmitBindingProfileStoreResult(false, "reference_profile_forbidden", Array.Empty<SubmitBindingProfile>());
+        }
+
         var payload = JsonSerializer.Serialize(
             new ProfileFile(profiles.Select(ToFile).ToArray()),
             JsonOptions);
@@ -309,6 +319,11 @@ public static class SubmitBindingProfileStore
     public static SubmitBindingProfileStoreResult Upsert(DefaultStorageLayout layout, SubmitBindingProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        if (ReferenceOnlyInputSource.IsReservedProfileId(profile.ProfileId))
+        {
+            return new SubmitBindingProfileStoreResult(false, "reference_profile_forbidden", Array.Empty<SubmitBindingProfile>());
+        }
+
         var loaded = Load(layout);
         if (!loaded.Succeeded)
         {
@@ -429,6 +444,12 @@ public static class SubmitBindingOnboardingVerifier
             ["verification_mode"] = "user_verified_dry_run",
             ["cloud_submission"] = surfaceMetadata.CloudSubmission ?? "false"
         };
+
+        if (ReferenceOnlyInputSource.IsReservedProfileId(profileId))
+        {
+            diagnostics["reference_source"] = "not_user_configurable";
+            return Failed(profileId, OsInteractionStatusIds.ReferenceSourceUnavailable, diagnostics, evidence);
+        }
 
         var submit = SubmitKeyBinding.Parse(submitBindingText);
         if (!submit.Succeeded || submit.Binding is null)
@@ -1383,6 +1404,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     private readonly IReadOnlySet<string> _configuredProfiles;
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
     private readonly ConcurrentDictionary<(nint Window, uint ProcessId), string> _selectedTargets = new();
+    private readonly object _referenceInputGate = new();
     private Timer? _selectedTargetMonitor;
     private IntPtr _hook;
     private IntPtr _mouseHook;
@@ -1392,6 +1414,8 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     private Func<NativePointerGesture, NativeSubmitInterceptionResult>? _classifyPointer;
     private Action<NativePointerGesture, NativeSubmitInterceptionResult>? _onSuppressedPointerSubmit;
     private Func<NativePointerGesture, bool>? _shouldSuppressPointerClassificationFailure;
+    private ReferenceOnlyInputCapability? _referenceInputCapability;
+    private ReferenceOnlyInputTarget? _referenceInputTarget;
 
     public WindowsNativeSubmitHookHost(
         IReadOnlyList<SubmitBindingProfile>? profiles = null,
@@ -1400,7 +1424,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         _callback = HookCallback;
         _mouseCallback = MouseHookCallback;
         var configuredProfiles = (profiles ?? Array.Empty<SubmitBindingProfile>())
-            .Where(profile => profile.Enabled)
+            .Where(profile => profile.Enabled && !ReferenceOnlyInputSource.IsReservedProfileId(profile.ProfileId))
             .ToArray();
         _configuredProfiles = configuredProfiles
             .Select(profile => profile.ProfileId)
@@ -1483,6 +1507,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         _onSuppressedPointerSubmit = null;
         _shouldSuppressPointerClassificationFailure = null;
         _selectedTargets.Clear();
+        ClearReferenceOnlyInputSource();
     }
 
     public bool StartPointer(
@@ -1548,17 +1573,11 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             TargetWindow: targetWindow,
             TargetProcessId: NativeMethods.GetWindowProcessId(targetWindow));
 
-        if (!IsPotentialKeyboardInterception(gesture, data.vkCode))
+        if (!HandleCapturedKeyboardGesture(gesture, data.vkCode))
         {
             return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        if (!IsSelectedSubmitGesture(gesture))
-        {
-            return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
-        }
-
-        QueueKeyboardClassification(gesture);
         return new IntPtr(1);
     }
 
@@ -1577,16 +1596,126 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             "left",
             targetWindow,
             NativeMethods.GetWindowProcessId(targetWindow));
-        var result = ClassifyPointerWithinBudget(gesture);
-
-        if (!result.SuppressOriginalInput)
+        if (!HandleCapturedPointerGesture(gesture))
         {
             return NativeMethods.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
         }
 
-        QueuePointerSuppressedSubmit(gesture, result);
-
         return new IntPtr(1);
+    }
+
+    internal ReferenceOnlyInputSource OpenReferenceOnlyInputSourceForAcceptance(IntPtr rootWindow)
+    {
+        var target = ReferenceOnlyInputTarget.ForCurrentProcess(RootWindow(rootWindow));
+        lock (_referenceInputGate)
+        {
+            if (_referenceInputCapability is not null)
+            {
+                throw new InvalidOperationException("A reference-only input source is already active.");
+            }
+
+            if (!ReferenceOnlyInputSource.TryCreateForAcceptance(
+                    ReferenceOnlyInputSource.ProfileId,
+                    target,
+                    DispatchReferenceKeyboardGesture,
+                    DispatchReferencePointerGesture,
+                    RevokeReferenceOnlyInputSource,
+                    TimeSpan.FromMinutes(5),
+                    out var source)
+                || source is null)
+            {
+                throw new InvalidOperationException("The reference-only input source could not be created.");
+            }
+
+            _referenceInputCapability = source.Capability;
+            _referenceInputTarget = source.Target;
+            return source;
+        }
+    }
+
+    internal void ConfigureReferenceSourceCallbacksForTest(
+        Func<NativeKeyGesture, NativeSubmitInterceptionResult> classifyKeyboard,
+        Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedKeyboardSubmit,
+        Func<NativeKeyGesture, bool> shouldSuppressKeyboardClassificationFailure,
+        Func<NativePointerGesture, NativeSubmitInterceptionResult> classifyPointer,
+        Action<NativePointerGesture, NativeSubmitInterceptionResult> onSuppressedPointerSubmit,
+        Func<NativePointerGesture, bool> shouldSuppressPointerClassificationFailure)
+    {
+        _classify = classifyKeyboard ?? throw new ArgumentNullException(nameof(classifyKeyboard));
+        _onSuppressedSubmit = onSuppressedKeyboardSubmit ?? throw new ArgumentNullException(nameof(onSuppressedKeyboardSubmit));
+        _shouldSuppressKeyboardClassificationFailure = shouldSuppressKeyboardClassificationFailure
+            ?? throw new ArgumentNullException(nameof(shouldSuppressKeyboardClassificationFailure));
+        _classifyPointer = classifyPointer ?? throw new ArgumentNullException(nameof(classifyPointer));
+        _onSuppressedPointerSubmit = onSuppressedPointerSubmit ?? throw new ArgumentNullException(nameof(onSuppressedPointerSubmit));
+        _shouldSuppressPointerClassificationFailure = shouldSuppressPointerClassificationFailure
+            ?? throw new ArgumentNullException(nameof(shouldSuppressPointerClassificationFailure));
+    }
+
+    private ReferenceOnlyInputDispatchResult DispatchReferenceKeyboardGesture(
+        ReferenceOnlyInputCapability capability,
+        NativeKeyGesture gesture)
+    {
+        if (!HasActiveReferenceOnlyInputSource(capability, gesture)
+            || _classify is null
+            || _onSuppressedSubmit is null
+            || _shouldSuppressKeyboardClassificationFailure is null)
+        {
+            return ReferenceOnlyInputDispatchResult.Unavailable;
+        }
+
+        var suppress = HandleCapturedKeyboardGesture(gesture, ReferenceVirtualKey(gesture.Key));
+        return new ReferenceOnlyInputDispatchResult(
+            Accepted: true,
+            SuppressOriginalInput: suppress,
+            suppress ? OsInteractionStatusIds.NativeSubmitGuarded : OsInteractionStatusIds.NativeSubmitPassThrough);
+    }
+
+    private ReferenceOnlyInputDispatchResult DispatchReferencePointerGesture(
+        ReferenceOnlyInputCapability capability,
+        NativePointerGesture gesture)
+    {
+        if (!HasActiveReferenceOnlyInputSource(capability, gesture)
+            || _classifyPointer is null
+            || _onSuppressedPointerSubmit is null
+            || _shouldSuppressPointerClassificationFailure is null)
+        {
+            return ReferenceOnlyInputDispatchResult.Unavailable;
+        }
+
+        var suppress = HandleCapturedPointerGesture(gesture);
+        return new ReferenceOnlyInputDispatchResult(
+            Accepted: true,
+            SuppressOriginalInput: suppress,
+            suppress ? OsInteractionStatusIds.NativeSubmitGuarded : OsInteractionStatusIds.NativeSubmitPassThrough);
+    }
+
+    private bool HandleCapturedKeyboardGesture(NativeKeyGesture gesture, uint virtualKey)
+    {
+        if (!IsPotentialKeyboardInterception(gesture, virtualKey)
+            || !IsSelectedSubmitGesture(gesture))
+        {
+            return false;
+        }
+
+        QueueKeyboardClassification(gesture);
+        return true;
+    }
+
+    private bool HandleCapturedPointerGesture(NativePointerGesture gesture)
+    {
+        if (!string.Equals(gesture.Button, "left", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var result = ClassifyPointerWithinBudget(gesture);
+        if (!result.SuppressOriginalInput)
+        {
+            return false;
+        }
+
+        QueuePointerSuppressedSubmit(gesture, result);
+        return true;
     }
 
     private NativeSubmitInterceptionResult ClassifyPointerWithinBudget(NativePointerGesture gesture)
@@ -1682,6 +1811,11 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     private bool IsSelectedSubmitGesture(NativeKeyGesture gesture)
     {
+        if (IsReferenceOnlyTarget(gesture.TargetWindow, gesture.TargetProcessId))
+        {
+            return ReferenceOnlyInputSource.SubmitBinding.Matches(gesture);
+        }
+
         if (!IsSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId))
         {
             return false;
@@ -1890,7 +2024,8 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     {
         if (targetWindow == IntPtr.Zero || targetProcessId == 0
             || !result.Diagnostics.TryGetValue("profile_id", out var profileId)
-            || string.IsNullOrWhiteSpace(profileId))
+            || string.IsNullOrWhiteSpace(profileId)
+            || ReferenceOnlyInputSource.IsReservedProfileId(profileId))
         {
             return;
         }
@@ -1900,9 +2035,72 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     private bool IsSelectedTarget(IntPtr targetWindow, uint targetProcessId)
     {
-        return targetWindow != IntPtr.Zero
+        return IsReferenceOnlyTarget(targetWindow, targetProcessId)
+            || (targetWindow != IntPtr.Zero
             && targetProcessId != 0
-            && _selectedTargets.ContainsKey(((nint)RootWindow(targetWindow), targetProcessId));
+            && _selectedTargets.ContainsKey(((nint)RootWindow(targetWindow), targetProcessId)));
+    }
+
+    private bool IsReferenceOnlyTarget(IntPtr targetWindow, uint targetProcessId)
+    {
+        lock (_referenceInputGate)
+        {
+            return _referenceInputCapability is not null
+                && _referenceInputTarget is not null
+                && _referenceInputTarget.ProcessId == targetProcessId
+                && _referenceInputTarget.RootWindow == RootWindow(targetWindow)
+                && _referenceInputTarget.IsCurrentUiThread();
+        }
+    }
+
+    private bool HasActiveReferenceOnlyInputSource(ReferenceOnlyInputCapability capability, NativeKeyGesture gesture)
+    {
+        lock (_referenceInputGate)
+        {
+            return ReferenceEquals(_referenceInputCapability, capability)
+                && _referenceInputTarget is not null
+                && _referenceInputTarget.Matches(gesture);
+        }
+    }
+
+    private bool HasActiveReferenceOnlyInputSource(ReferenceOnlyInputCapability capability, NativePointerGesture gesture)
+    {
+        lock (_referenceInputGate)
+        {
+            return ReferenceEquals(_referenceInputCapability, capability)
+                && _referenceInputTarget is not null
+                && _referenceInputTarget.Matches(gesture);
+        }
+    }
+
+    private void RevokeReferenceOnlyInputSource(ReferenceOnlyInputCapability capability)
+    {
+        lock (_referenceInputGate)
+        {
+            if (ReferenceEquals(_referenceInputCapability, capability))
+            {
+                _referenceInputCapability = null;
+                _referenceInputTarget = null;
+            }
+        }
+    }
+
+    private void ClearReferenceOnlyInputSource()
+    {
+        lock (_referenceInputGate)
+        {
+            _referenceInputCapability = null;
+            _referenceInputTarget = null;
+        }
+    }
+
+    private static uint ReferenceVirtualKey(string key)
+    {
+        return string.Equals(key, "ENTER", StringComparison.OrdinalIgnoreCase)
+            ? (uint)VkReturn
+            : string.Equals(key, "PAUSE", StringComparison.OrdinalIgnoreCase)
+                ? (uint)VkPause
+                : 0;
     }
 
     internal void RememberSelectedTargetForTest(

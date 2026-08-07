@@ -556,6 +556,205 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void ReferenceOnlyInputSource_RejectsSelectedAndPersistedProfiles()
+    {
+        var target = ReferenceOnlyInputTarget.ForCurrentProcess(new IntPtr(42));
+
+        Assert.That(ReferenceOnlyInputSource.TryCreateForAcceptance(
+            "codex-desktop",
+            target,
+            (_, _) => ReferenceOnlyInputDispatchResult.Unavailable,
+            _ => { },
+            out var codex), Is.False);
+        Assert.That(codex, Is.Null);
+        Assert.That(ReferenceOnlyInputSource.TryCreateForAcceptance(
+            "chatgpt-desktop",
+            target,
+            (_, _) => ReferenceOnlyInputDispatchResult.Unavailable,
+            _ => { },
+            out var chatGpt), Is.False);
+        Assert.That(chatGpt, Is.Null);
+        Assert.That(ReferenceOnlyInputSource.TryCreateForAcceptance(
+            "custom-profile",
+            target,
+            (_, _) => ReferenceOnlyInputDispatchResult.Unavailable,
+            _ => { },
+            out var custom), Is.False);
+        Assert.That(custom, Is.Null);
+
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            ReferenceOnlyInputSource.ProfileId,
+            "Enter",
+            "Ctrl+Enter",
+            TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(ReferenceOnlyInputSource.ProfileId)));
+
+        Assert.That(profile.IsProtected, Is.False);
+        Assert.That(profile.CapabilityStatus, Is.EqualTo(OsInteractionStatusIds.ReferenceSourceUnavailable));
+
+        var directory = Path.Combine(Path.GetTempPath(), "CodexRedactionGate", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(directory);
+            var stored = SubmitBindingProfileStore.Save(
+                layout,
+                new[] { profile });
+
+            Assert.That(stored.Succeeded, Is.False);
+            Assert.That(stored.Code, Is.EqualTo("reference_profile_forbidden"));
+
+            layout.EnsureDirectories();
+            File.WriteAllText(
+                SubmitBindingProfileStore.DefaultPath(layout),
+                "{\"Profiles\":[{\"profile_id\":\"reference-composer\",\"enabled\":true}]}");
+            var loaded = SubmitBindingProfileStore.Load(layout);
+
+            Assert.That(loaded.Succeeded, Is.False);
+            Assert.That(loaded.Code, Is.EqualTo("reference_profile_forbidden"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void ReferenceOnlyInputSource_ExpiresBeforeItCanDispatch()
+    {
+        var dispatches = 0;
+        var revocations = 0;
+        var target = ReferenceOnlyInputTarget.ForCurrentProcess(new IntPtr(42));
+        Assert.That(ReferenceOnlyInputSource.TryCreateForAcceptance(
+            ReferenceOnlyInputSource.ProfileId,
+            target,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref dispatches);
+                return new ReferenceOnlyInputDispatchResult(true, true, OsInteractionStatusIds.NativeSubmitGuarded);
+            },
+            _ => Interlocked.Increment(ref revocations),
+            TimeSpan.Zero,
+            out var source), Is.True);
+
+        using (source)
+        {
+            var result = source!.DispatchKeyboard(new NativeKeyGesture(
+                "Enter",
+                TargetWindow: target.RootWindow,
+                TargetProcessId: target.ProcessId));
+
+            Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.ReferenceSourceUnavailable));
+        }
+
+        Assert.That(dispatches, Is.Zero);
+        Assert.That(revocations, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ReferenceOnlyInputSource_UsesHookOwnedKeyboardAndPointerRoutesAndRevokesOnDispose()
+    {
+        using var keyboardDelivered = new ManualResetEventSlim(false);
+        using var pointerDelivered = new ManualResetEventSlim(false);
+        var keyboardClassifications = 0;
+        var pointerClassifications = 0;
+        var host = new WindowsNativeSubmitHookHost();
+        host.ConfigureReferenceSourceCallbacksForTest(
+            gesture =>
+            {
+                Interlocked.Increment(ref keyboardClassifications);
+                return GuardedResult();
+            },
+            (_, _) => keyboardDelivered.Set(),
+            _ => true,
+            gesture =>
+            {
+                Interlocked.Increment(ref pointerClassifications);
+                return GuardedResult();
+            },
+            (_, _) => pointerDelivered.Set(),
+            _ => true);
+
+        var targetWindow = new IntPtr(42);
+        using var source = host.OpenReferenceOnlyInputSourceForAcceptance(targetWindow);
+        var keyboard = source.DispatchKeyboard(new NativeKeyGesture(
+            "Enter",
+            TargetWindow: targetWindow,
+            TargetProcessId: (uint)Environment.ProcessId));
+        var pointer = source.DispatchPointer(new NativePointerGesture(
+            10,
+            10,
+            "left",
+            targetWindow,
+            (uint)Environment.ProcessId));
+
+        Assert.That(keyboard.Accepted, Is.True);
+        Assert.That(keyboard.SuppressOriginalInput, Is.True);
+        Assert.That(pointer.Accepted, Is.True);
+        Assert.That(pointer.SuppressOriginalInput, Is.True);
+        Assert.That(keyboardDelivered.Wait(TimeSpan.FromSeconds(2)), Is.True);
+        Assert.That(pointerDelivered.Wait(TimeSpan.FromSeconds(2)), Is.True);
+        Assert.That(keyboardClassifications, Is.EqualTo(1));
+        Assert.That(pointerClassifications, Is.EqualTo(1));
+
+        var rightButton = source.DispatchPointer(new NativePointerGesture(
+            10,
+            10,
+            "right",
+            targetWindow,
+            (uint)Environment.ProcessId));
+        Assert.That(rightButton.Accepted, Is.True);
+        Assert.That(rightButton.SuppressOriginalInput, Is.False);
+        Assert.That(pointerClassifications, Is.EqualTo(1));
+
+        var wrongProcess = source.DispatchKeyboard(new NativeKeyGesture(
+            "Enter",
+            TargetWindow: targetWindow,
+            TargetProcessId: (uint)Environment.ProcessId + 1));
+        Assert.That(wrongProcess.Accepted, Is.False);
+        Assert.That(wrongProcess.Status, Is.EqualTo(OsInteractionStatusIds.ReferenceSourceUnavailable));
+
+        ReferenceOnlyInputDispatchResult? wrongThread = null;
+        var thread = new Thread(() =>
+        {
+            wrongThread = source.DispatchKeyboard(new NativeKeyGesture(
+                "Enter",
+                TargetWindow: targetWindow,
+                TargetProcessId: (uint)Environment.ProcessId));
+        });
+        thread.Start();
+        Assert.That(thread.Join(TimeSpan.FromSeconds(2)), Is.True);
+        Assert.That(wrongThread, Is.Not.Null);
+        Assert.That(wrongThread!.Status, Is.EqualTo(OsInteractionStatusIds.ReferenceSourceUnavailable));
+
+        source.Dispose();
+        var revoked = source.DispatchKeyboard(new NativeKeyGesture(
+            "Enter",
+            TargetWindow: targetWindow,
+            TargetProcessId: (uint)Environment.ProcessId));
+        Assert.That(revoked.Accepted, Is.False);
+        Assert.That(revoked.Status, Is.EqualTo(OsInteractionStatusIds.ReferenceSourceUnavailable));
+
+        using var replacement = host.OpenReferenceOnlyInputSourceForAcceptance(targetWindow);
+        var replacementDispatch = replacement.DispatchKeyboard(new NativeKeyGesture(
+            "Enter",
+            TargetWindow: targetWindow,
+            TargetProcessId: (uint)Environment.ProcessId));
+        Assert.That(replacementDispatch.Accepted, Is.True);
+    }
+
+    private static NativeSubmitInterceptionResult GuardedResult()
+    {
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitGuarded,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>());
+    }
+
+    [Test]
     public void WindowsNativeSubmitHookHost_UsesResidentTargetAndBindingBeforeSuppressing()
     {
         var profile = CreateProtectedProfile() with

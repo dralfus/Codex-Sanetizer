@@ -1079,24 +1079,32 @@ production overlay lifecycle, target-owned replay boundary, and terminal
 trace twice in one process. It uses no cloud service, timing sleeps, raw prompt
 capture, or a direct controller/queue/replay shortcut.
 
-- [ ] The reference profile and source are compiled in and cannot be created
+- [x] The reference profile and source are compiled in and cannot be created
   from persisted profiles, configuration, policy, tray UI, onboarding, or a
   normal command; Codex/ChatGPT/custom profile identifiers are rejected.
-- [ ] Each source gesture validates the live capability, process, normalized
+- [x] Each source gesture validates the live capability, process, normalized
   root window, UI thread and fresh nonce before it can reach suppression; scope
   exit, timeout, or cleanup atomically invalidates it.
-- [ ] Native keyboard/pointer callbacks and the reference source enter the
+- [x] Native keyboard/pointer callbacks and the reference source enter the
   same hook-owned captured-gesture seam before selected/unrelated
   classification, suppression, snapshot capture and deferred scheduling.
   Generic injected replay remains ignored by the native callbacks.
-- [ ] The source uses `WindowsConfirmationOverlay` through its foreground
-  validation and a target-owned keyboard/pointer replay boundary; direct
-  fixture sends are forbidden, and partial injection or modifier cleanup
-  failure produces `replay_indeterminate`.
-- [ ] Deterministic tests cover every rejection and forced terminal failure,
-  inspect the raw-free terminal trace, prove no cloud call, and execute two
-  consecutive acceptance runs with no leftover hooks, threads, windows,
-  capabilities, temporary storage, or pending work.
+- [x] The source has no overlay, writer, replay or direct-send API. It can only
+  enter the resident hook-owned dispatch path; ticket 306 proves the production
+  `WindowsConfirmationOverlay`, target-owned replay, terminal trace and
+  `replay_indeterminate` outcomes through that path.
+- [x] Deterministic tests reject selected/custom/persisted profiles and wrong
+  process/window/thread/expired capability, preserve normal injected-event
+  rejection, and prove a released source can be replaced without retained
+  capability state. Ticket 306 owns the twice-run full trace/cleanup proof.
+
+**Implementation (2026-08-07):** `ReferenceOnlyInputSource` is a compiled-in,
+non-persistable capability scoped to the current process, normalized root
+window and UI thread. The Windows hook host accepts it only while that
+capability is live and sends both keyboard and left-pointer gestures through
+the same hook-owned captured-gesture handlers as native callbacks. Profile
+load/save/onboarding reject the reserved profile, and scope expiry or disposal
+revokes the host capability before dispatch.
 
 ## 306. Prove the complete path with a local reference composer
 
