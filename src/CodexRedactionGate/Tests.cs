@@ -2151,18 +2151,28 @@ public partial class SanitizerTests
     [Test]
     public void ProductConfirmAndSend_CapturedTargetChangeImmediatelyBeforeReplayBlocksSubmission()
     {
-        var surface = new ProductFlowTextSurface("Connect to 192.168.10.25")
-        {
-            ReturnDifferentSurfaceOnDiscovery = 4
-        };
+        var surface = new ProductFlowTextSurface("Connect to 192.168.10.25");
         var target = new NativeSubmitTargetIdentity(7, "codex-desktop", "1");
         var orchestrator = CreateProductFlowOrchestrator(
             surface,
             ConfirmationDecisionContract.Confirm,
             new CapturedTargetSurfaceDiscovery(surface, target));
 
-        var result = orchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
+        var replayBoundaryReached = false;
+        var result = orchestrator.RunOnce(
+            OsInteractionRunOptions.ConfirmAndSend,
+            traceStage: (stage, _) =>
+            {
+                if (stage == "text_written")
+                {
+                    replayBoundaryReached = true;
+                    surface.ReturnDifferentSurfaceAtReplayBoundary = true;
+                }
 
+                return true;
+            });
+
+        Assert.That(replayBoundaryReached, Is.True);
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.StaleComposer));
         Assert.That(result.Applied, Is.True);
         Assert.That(result.Submitted, Is.False);
@@ -5044,7 +5054,7 @@ public partial class SanitizerTests
 
         public bool ReturnDifferentSurfaceAfterWrite { get; init; }
 
-        public int? ReturnDifferentSurfaceOnDiscovery { get; init; }
+        public bool ReturnDifferentSurfaceAtReplayBoundary { get; set; }
 
         public bool FailInitialCapture { get; init; }
 
@@ -5063,7 +5073,7 @@ public partial class SanitizerTests
         public TextSurfaceDiscoveryResult DiscoverActiveSurface()
         {
             DiscoveryCount++;
-            if (ReturnDifferentSurfaceOnDiscovery == DiscoveryCount)
+            if (ReturnDifferentSurfaceAtReplayBoundary)
             {
                 return TextSurfaceDiscoveryResult.Success(_staleSurface);
             }
