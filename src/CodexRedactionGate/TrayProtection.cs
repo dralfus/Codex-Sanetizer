@@ -1727,15 +1727,17 @@ internal sealed class TrayProtectionController
 
             var replacement = current with { State = state };
             _beforeProtectedSendTracePublishForTesting?.Invoke();
-            if (operation.IsCancelled && !allowCancelledOperation)
-            {
-                return false;
-            }
-
-            if (TryReplaceSnapshotIfCurrent(current, replacement))
+            if (operation.TryPublishIfCancellationAllows(
+                    allowCancelledOperation,
+                    () => TryReplaceSnapshotIfCurrent(current, replacement)))
             {
                 published = replacement;
                 return true;
+            }
+
+            if (operation.IsCancelled && !allowCancelledOperation)
+            {
+                return false;
             }
         }
 

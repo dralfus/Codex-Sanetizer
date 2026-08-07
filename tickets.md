@@ -1382,5 +1382,7 @@ publication CAS. Lifecycle cancellation is visible before the callback may
 continue; a captured operation is carried into the successor snapshot even if
 the callback completes first. Normal publication rejects a cancelled
 operation, while the terminal handoff may publish one raw-free outcome. The
-tests prove the original Send is not submitted and no trace entry is stamped
-with the replacement generation.
+cancellation request and CAS share one publication gate, so a non-terminal
+trace cannot be published after cancellation. The tests prove the original
+Send is not submitted and every trace entry retains the source, never the
+replacement, generation.

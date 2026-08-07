@@ -2867,12 +2867,13 @@ public partial class SanitizerTests
 public class HandleButtonClickTests : SanitizerTests
 {
     [Test]
-    public void TrayProtectionController_ReplaysTracePublicationAfterSameRuntimeCasInvalidation()
+    public void TrayProtectionController_SameRuntimeGenerationChangeAtTracePublicationBoundaryCarriesTerminalTrace()
     {
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
         TrayProtectionController? tray = null;
         var publicationInvalidations = 0;
+        var generationChanged = false;
         var submitCalls = 0;
         tray = CreatePointerTray(
             hook,
@@ -2885,24 +2886,23 @@ public class HandleButtonClickTests : SanitizerTests
             {
                 if (publicationInvalidations++ == 0)
                 {
-                    tray!.PublishSyntheticDiagnosticsForTesting(
-                        LocalProtectionRecovery.ReadyCode,
-                        "not_configured",
-                        OsInteractionStatusIds.NativeSubmitInProgress,
-                        profile.ProfileId,
-                        "Ctrl+Enter");
+                    generationChanged = tray!.TryPublishLocalProtectionReady();
                 }
             });
 
         Assert.That(tray.Start(), Is.True);
+        var sourceGeneration = tray.GetCurrentSnapshot().Generation;
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
 
-        Assert.That(publicationInvalidations, Is.GreaterThanOrEqualTo(2));
-        Assert.That(submitCalls, Is.EqualTo(1));
-        Assert.That(tray.State.ProtectedSendAttemptTrace!.Last().Stage, Is.EqualTo("sent_safely"));
-        Assert.That(
-            tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.AttemptId).Distinct(),
-            Is.EqualTo(new[] { tray.State.ProtectedSendAttemptId }));
+        Assert.That(publicationInvalidations, Is.GreaterThanOrEqualTo(1));
+        Assert.That(generationChanged, Is.True);
+        Assert.That(submitCalls, Is.Zero);
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
+        {
+            "send_detected",
+            "terminal_blocked"
+        }));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
     }
 
     [Test]
@@ -2955,6 +2955,7 @@ public class HandleButtonClickTests : SanitizerTests
         };
 
         Assert.That(tray.Start(), Is.True);
+        var sourceGeneration = tray.GetCurrentSnapshot().Generation;
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
 
         Assert.That(generationChanged, Is.True);
@@ -2964,9 +2965,9 @@ public class HandleButtonClickTests : SanitizerTests
             "send_detected",
             "terminal_blocked"
         }));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
         Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("runtime_replaced"));
-        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.SnapshotGeneration).Distinct(),
-            Is.Not.EqualTo(new[] { tray.GetCurrentSnapshot().Generation }));
+        Assert.That(tray.GetCurrentSnapshot().Generation, Is.GreaterThan(sourceGeneration));
     }
 
     [Test]
@@ -3005,6 +3006,7 @@ public class HandleButtonClickTests : SanitizerTests
             });
 
         Assert.That(tray.Start(), Is.True);
+        var sourceGeneration = tray.GetCurrentSnapshot().Generation;
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
         stopThread!.Join();
 
@@ -3015,6 +3017,7 @@ public class HandleButtonClickTests : SanitizerTests
             "send_detected",
             "terminal_blocked"
         }));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
         Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("protection_stopped"));
     }
 
@@ -3066,6 +3069,7 @@ public class HandleButtonClickTests : SanitizerTests
             });
 
         Assert.That(tray.Start(), Is.True);
+        var sourceGeneration = tray.GetCurrentSnapshot().Generation;
         oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
         reloadThread!.Join();
 
@@ -3078,9 +3082,8 @@ public class HandleButtonClickTests : SanitizerTests
             "terminal_blocked"
         }));
         Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("runtime_replaced"));
-        Assert.That(
-            tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.SnapshotGeneration).Distinct(),
-            Is.Not.EqualTo(new[] { tray.GetCurrentSnapshot().Generation }));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
+        Assert.That(tray.GetCurrentSnapshot().Generation, Is.GreaterThan(sourceGeneration));
     }
 
     [Test]

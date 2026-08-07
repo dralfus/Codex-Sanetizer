@@ -14,6 +14,7 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
 {
     private readonly CancellationTokenSource _cancellation = new();
     private readonly object _lifecycleGate = new();
+    private readonly object _publicationGate = new();
     private readonly TaskCompletionSource<bool> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Action? _cancelSideEffects;
     private IReadOnlyList<ProtectedSendTraceEntry> _trace = Array.Empty<ProtectedSendTraceEntry>();
@@ -253,7 +254,21 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
 
     public void RequestCancellation()
     {
-        Interlocked.Exchange(ref _cancelled, 1);
+        lock (_publicationGate)
+        {
+            Interlocked.Exchange(ref _cancelled, 1);
+        }
+    }
+
+    public bool TryPublishIfCancellationAllows(bool allowCancelledOperation, Func<bool> publish)
+    {
+        ArgumentNullException.ThrowIfNull(publish);
+
+        lock (_publicationGate)
+        {
+            return (allowCancelledOperation || Volatile.Read(ref _cancelled) == 0)
+                && publish();
+        }
     }
 
     public bool TryComplete()
