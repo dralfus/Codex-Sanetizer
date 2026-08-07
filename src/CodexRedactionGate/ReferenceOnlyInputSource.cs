@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 
@@ -17,9 +18,10 @@ internal sealed class ReferenceOnlyInputCapability
 internal sealed record ReferenceOnlyInputTarget(
     uint ProcessId,
     IntPtr RootWindow,
-    int UiThreadId)
+    int ManagedUiThreadId,
+    uint? WindowsUiThreadId)
 {
-    public static ReferenceOnlyInputTarget ForCurrentProcess(IntPtr rootWindow)
+    internal static ReferenceOnlyInputTarget ForCurrentProcessForTest(IntPtr rootWindow)
     {
         if (rootWindow == IntPtr.Zero)
         {
@@ -29,7 +31,34 @@ internal sealed record ReferenceOnlyInputTarget(
         return new ReferenceOnlyInputTarget(
             (uint)Environment.ProcessId,
             rootWindow,
-            Environment.CurrentManagedThreadId);
+            Environment.CurrentManagedThreadId,
+            WindowsUiThreadId: null);
+    }
+
+    internal static bool TryCreateForCurrentProcessWindow(
+        IntPtr rootWindow,
+        out ReferenceOnlyInputTarget? target)
+    {
+        target = null;
+        if (!OperatingSystem.IsWindows() || rootWindow == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var windowThreadId = NativeMethods.GetWindowThreadProcessId(rootWindow, out var processId);
+        if (processId != (uint)Environment.ProcessId
+            || windowThreadId == 0
+            || windowThreadId != NativeMethods.GetCurrentThreadId())
+        {
+            return false;
+        }
+
+        target = new ReferenceOnlyInputTarget(
+            processId,
+            rootWindow,
+            Environment.CurrentManagedThreadId,
+            windowThreadId);
+        return true;
     }
 
     public bool Matches(NativeKeyGesture gesture)
@@ -45,13 +74,24 @@ internal sealed record ReferenceOnlyInputTarget(
     }
 
     public bool IsCurrentUiThread()
-        => UiThreadId == Environment.CurrentManagedThreadId;
+        => WindowsUiThreadId is { } windowsUiThreadId
+            ? windowsUiThreadId == NativeMethods.GetCurrentThreadId()
+            : ManagedUiThreadId == Environment.CurrentManagedThreadId;
 
     private bool Matches(IntPtr targetWindow, uint targetProcessId)
     {
         return targetProcessId == ProcessId
             && targetWindow == RootWindow
             && IsCurrentUiThread();
+    }
+
+    private static class NativeMethods
+    {
+        [DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
+
+        [DllImport("kernel32.dll")]
+        internal static extern uint GetCurrentThreadId();
     }
 }
 

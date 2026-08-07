@@ -1606,7 +1606,25 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     internal ReferenceOnlyInputSource OpenReferenceOnlyInputSourceForAcceptance(IntPtr rootWindow)
     {
-        var target = ReferenceOnlyInputTarget.ForCurrentProcess(RootWindow(rootWindow));
+        if (!ReferenceOnlyInputTarget.TryCreateForCurrentProcessWindow(
+                RootWindow(rootWindow),
+                out var target)
+            || target is null)
+        {
+            throw new InvalidOperationException("The reference composer window is unavailable.");
+        }
+
+        return OpenReferenceOnlyInputSource(target);
+    }
+
+    internal ReferenceOnlyInputSource OpenReferenceOnlyInputSourceForTest(IntPtr rootWindow)
+    {
+        return OpenReferenceOnlyInputSource(
+            ReferenceOnlyInputTarget.ForCurrentProcessForTest(RootWindow(rootWindow)));
+    }
+
+    private ReferenceOnlyInputSource OpenReferenceOnlyInputSource(ReferenceOnlyInputTarget target)
+    {
         lock (_referenceInputGate)
         {
             if (_referenceInputCapability is not null)

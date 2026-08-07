@@ -558,7 +558,7 @@ public partial class SanitizerTests
     [Test]
     public void ReferenceOnlyInputSource_RejectsSelectedAndPersistedProfiles()
     {
-        var target = ReferenceOnlyInputTarget.ForCurrentProcess(new IntPtr(42));
+        var target = ReferenceOnlyInputTarget.ForCurrentProcessForTest(new IntPtr(42));
 
         Assert.That(ReferenceOnlyInputSource.TryCreateForAcceptance(
             "codex-desktop",
@@ -625,7 +625,7 @@ public partial class SanitizerTests
     {
         var dispatches = 0;
         var revocations = 0;
-        var target = ReferenceOnlyInputTarget.ForCurrentProcess(new IntPtr(42));
+        var target = ReferenceOnlyInputTarget.ForCurrentProcessForTest(new IntPtr(42));
         Assert.That(ReferenceOnlyInputSource.TryCreateForAcceptance(
             ReferenceOnlyInputSource.ProfileId,
             target,
@@ -677,7 +677,10 @@ public partial class SanitizerTests
             _ => true);
 
         var targetWindow = new IntPtr(42);
-        using var source = host.OpenReferenceOnlyInputSourceForAcceptance(targetWindow);
+        Assert.That(
+            () => host.OpenReferenceOnlyInputSourceForAcceptance(targetWindow),
+            Throws.TypeOf<InvalidOperationException>());
+        using var source = host.OpenReferenceOnlyInputSourceForTest(targetWindow);
         var keyboard = source.DispatchKeyboard(new NativeKeyGesture(
             "Enter",
             TargetWindow: targetWindow,
@@ -736,7 +739,7 @@ public partial class SanitizerTests
         Assert.That(revoked.Accepted, Is.False);
         Assert.That(revoked.Status, Is.EqualTo(OsInteractionStatusIds.ReferenceSourceUnavailable));
 
-        using var replacement = host.OpenReferenceOnlyInputSourceForAcceptance(targetWindow);
+        using var replacement = host.OpenReferenceOnlyInputSourceForTest(targetWindow);
         var replacementDispatch = replacement.DispatchKeyboard(new NativeKeyGesture(
             "Enter",
             TargetWindow: targetWindow,
