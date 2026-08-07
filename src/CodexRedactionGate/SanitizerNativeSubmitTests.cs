@@ -2970,6 +2970,120 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_StopAtTracePublicationBoundaryPublishesOnlyTerminalOutcome()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        TrayProtectionController? tray = null;
+        using var stopRequested = new ManualResetEventSlim(false);
+        Thread? stopThread = null;
+        var boundaryEntered = false;
+        var submitCalls = 0;
+        tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.IdentifiedSend,
+                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)))),
+            profile,
+            () => submitCalls++,
+            protectedSendStageObserver: stage =>
+            {
+                if (stage == "stop_cancellation_requested")
+                {
+                    stopRequested.Set();
+                }
+            },
+            beforeProtectedSendTracePublishForTesting: () =>
+            {
+                if (!boundaryEntered)
+                {
+                    boundaryEntered = true;
+                    stopThread = new Thread(() => tray!.Stop());
+                    stopThread.Start();
+                    Assert.That(stopRequested.Wait(TimeSpan.FromSeconds(1)), Is.True);
+                }
+            });
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        stopThread!.Join();
+
+        Assert.That(submitCalls, Is.Zero);
+        Assert.That(tray.State.Enabled, Is.False);
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
+        {
+            "send_detected",
+            "terminal_blocked"
+        }));
+        Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("protection_stopped"));
+    }
+
+    [Test]
+    public void TrayProtectionController_ReloadAtTracePublicationBoundaryCarriesOnlyOldGenerationTrace()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var replacementHook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        TrayProtectionController? tray = null;
+        using var reloadRequested = new ManualResetEventSlim(false);
+        Thread? reloadThread = null;
+        var boundaryEntered = false;
+        var reloaded = false;
+        var oldSubmitCalls = 0;
+        var replacementSubmitCalls = 0;
+        var replacementRuntime = NativeSubmitRuntime.CreateTest(
+            replacementHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                replacementSubmitCalls++;
+                return CreateSubmittedResult(profile.ProfileId);
+            },
+            profile);
+        tray = CreatePointerTray(
+            oldHook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.IdentifiedSend,
+                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)))),
+            profile,
+            () => oldSubmitCalls++,
+            protectedSendStageObserver: stage =>
+            {
+                if (stage == "reload_cancellation_requested")
+                {
+                    reloadRequested.Set();
+                }
+            },
+            beforeProtectedSendTracePublishForTesting: () =>
+            {
+                if (!boundaryEntered)
+                {
+                    boundaryEntered = true;
+                    reloadThread = new Thread(() => reloaded = tray!.ReloadNativeSubmit(replacementRuntime));
+                    reloadThread.Start();
+                    Assert.That(reloadRequested.Wait(TimeSpan.FromSeconds(1)), Is.True);
+                }
+            });
+
+        Assert.That(tray.Start(), Is.True);
+        oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        reloadThread!.Join();
+
+        Assert.That(reloaded, Is.True);
+        Assert.That(oldSubmitCalls, Is.Zero);
+        Assert.That(replacementSubmitCalls, Is.Zero);
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
+        {
+            "send_detected",
+            "terminal_blocked"
+        }));
+        Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("runtime_replaced"));
+        Assert.That(
+            tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.SnapshotGeneration).Distinct(),
+            Is.Not.EqualTo(new[] { tray.GetCurrentSnapshot().Generation }));
+    }
+
+    [Test]
     public void TrayProtectionController_RoutesKeyboardAndMouseSendThroughTheSameProtectedFlow()
     {
         var hook = new FakeNativeSubmitHookHost();

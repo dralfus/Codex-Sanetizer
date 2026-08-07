@@ -510,6 +510,13 @@ internal sealed class TrayProtectionController
 
     public void Stop()
     {
+        var operationToCancel = Volatile.Read(ref _activeProtectedSendOperation);
+        if (operationToCancel is not null)
+        {
+            operationToCancel.RequestCancellation();
+            ObserveProtectedSendStage("stop_cancellation_requested");
+        }
+
         lock (_reloadGate)
         {
             ProtectionSnapshot snapshot;
@@ -521,7 +528,10 @@ internal sealed class TrayProtectionController
                     lastStatus: "disabled",
                     runtimes: Array.Empty<NativeSubmitRuntime>(),
                     localProtectionStatus: snapshot.State.LocalProtectionStatus);
-                var activeOperation = Volatile.Read(ref _activeProtectedSendOperation);
+                // Keep the operation captured before the reload lock even if
+                // its callback completes while Stop is waiting to publish the
+                // disabled generation.
+                var activeOperation = Volatile.Read(ref _activeProtectedSendOperation) ?? operationToCancel;
                 if (ActiveAttemptInterruptedByRuntimeReload(snapshot.State))
                 {
                     disabledState = CarryInterruptedAttemptState(
@@ -619,7 +629,19 @@ internal sealed class TrayProtectionController
         Func<OsInteractionResult> applyOnlyRunner,
         IDisposable? residentRuntimeOwner = null)
     {
-        var candidate = TryBuildCandidateSnapshot(previous, runtimeSet, applyOnlyRunner);
+        var activeOperation = Volatile.Read(ref _activeProtectedSendOperation);
+        if (activeOperation is not null
+            && ReferenceEquals(activeOperation.RuntimeSet, previous.RuntimeSet))
+        {
+            activeOperation.RequestCancellation();
+            ObserveProtectedSendStage("reload_cancellation_requested");
+        }
+
+        var candidate = TryBuildCandidateSnapshot(
+            previous,
+            runtimeSet,
+            applyOnlyRunner,
+            activeOperation);
         if (candidate is null)
         {
             return false;
@@ -639,7 +661,7 @@ internal sealed class TrayProtectionController
             return false;
         }
 
-        if (!TryPublishRuntimeCandidate(previous, candidate))
+        if (!TryPublishRuntimeCandidate(previous, candidate, activeOperation))
         {
             StopAndDisposeRuntime(candidate.RuntimeSet);
             residentRuntimeOwner?.Dispose();
@@ -664,7 +686,10 @@ internal sealed class TrayProtectionController
         return true;
     }
 
-    private bool TryPublishRuntimeCandidate(ProtectionSnapshot previous, ProtectionSnapshot candidate)
+    private bool TryPublishRuntimeCandidate(
+        ProtectionSnapshot previous,
+        ProtectionSnapshot candidate,
+        ResidentProtectedSendOperation? interruptedOperation = null)
     {
         while (true)
         {
@@ -675,8 +700,8 @@ internal sealed class TrayProtectionController
             }
 
             var state = ReferenceEquals(current, previous)
-                ? candidate.State
-                : CarryRuntimeReloadSendState(candidate.State, current) with
+                ? CarryRuntimeReloadSendState(candidate.State, previous, interruptedOperation)
+                : CarryRuntimeReloadSendState(candidate.State, current, interruptedOperation) with
                 {
                     Enabled = current.State.Enabled,
                     Mode = current.State.Mode,
@@ -794,7 +819,8 @@ internal sealed class TrayProtectionController
     private ProtectionSnapshot? TryBuildCandidateSnapshot(
         ProtectionSnapshot previous,
         NativeSubmitRuntimeSet runtimeSet,
-        Func<OsInteractionResult> applyOnlyRunner)
+        Func<OsInteractionResult> applyOnlyRunner,
+        ResidentProtectedSendOperation? interruptedOperation = null)
     {
         try
         {
@@ -828,7 +854,7 @@ internal sealed class TrayProtectionController
                     : OsInteractionStatusIds.NotConfigured,
                 setupRequired: setupRequired,
                 localProtectionStatus: previous.State.LocalProtectionStatus);
-            state = CarryRuntimeReloadSendState(state, previous) with
+            state = CarryRuntimeReloadSendState(state, previous, interruptedOperation) with
             {
                 SetupVerificationStatus = previous.State.SetupVerificationStatus,
                 SetupVerificationAction = previous.State.SetupVerificationAction,
@@ -1596,6 +1622,7 @@ internal sealed class TrayProtectionController
             operation,
             attemptStatus,
             attemptAction,
+            allowCancelledOperation: false,
             tryPublish => operation.TryAppendTraceTransaction(
                 transition.StageToken,
                 transition.ResultCode.Value,
@@ -1613,6 +1640,7 @@ internal sealed class TrayProtectionController
             operation,
             "trace_unavailable",
             "retry_protection",
+            allowCancelledOperation: true,
             tryPublish => operation.TryEnsureTerminalBlockedTraceTransaction(tryPublish, out _));
     }
 
@@ -1621,6 +1649,7 @@ internal sealed class TrayProtectionController
         ResidentProtectedSendOperation operation,
         string? attemptStatus,
         string? attemptAction,
+        bool allowCancelledOperation,
         Func<Func<IReadOnlyList<ProtectedSendTraceEntry>, bool>, bool> commit)
     {
         ProtectionSnapshot? published = null;
@@ -1630,6 +1659,7 @@ internal sealed class TrayProtectionController
                 trace,
                 attemptStatus,
                 attemptAction,
+                allowCancelledOperation,
                 out published)))
         {
             return null;
@@ -1645,12 +1675,13 @@ internal sealed class TrayProtectionController
         IReadOnlyList<ProtectedSendTraceEntry> trace,
         string? attemptStatus,
         string? attemptAction,
+        bool allowCancelledOperation,
         out ProtectionSnapshot? published)
     {
         published = null;
         for (var attempt = 0; attempt < 2; attempt++)
         {
-            if (operation.IsCancelled)
+            if (operation.IsCancelled && !allowCancelledOperation)
             {
                 return false;
             }
@@ -1696,6 +1727,11 @@ internal sealed class TrayProtectionController
 
             var replacement = current with { State = state };
             _beforeProtectedSendTracePublishForTesting?.Invoke();
+            if (operation.IsCancelled && !allowCancelledOperation)
+            {
+                return false;
+            }
+
             if (TryReplaceSnapshotIfCurrent(current, replacement))
             {
                 published = replacement;
@@ -1821,8 +1857,10 @@ internal sealed class TrayProtectionController
 
     private TrayProtectionState CarryRuntimeReloadSendState(
         TrayProtectionState candidateState,
-        ProtectionSnapshot source)
+        ProtectionSnapshot source,
+        ResidentProtectedSendOperation? interruptedOperation = null)
     {
+        var activeOperation = interruptedOperation ?? Volatile.Read(ref _activeProtectedSendOperation);
         if (ActiveAttemptInterruptedByRuntimeReload(source.State))
         {
             return CarryInterruptedAttemptState(
@@ -1830,10 +1868,9 @@ internal sealed class TrayProtectionController
                 source.State,
                 source.Generation,
                 "runtime_replaced",
-                Volatile.Read(ref _activeProtectedSendOperation));
+                activeOperation);
         }
 
-        var activeOperation = Volatile.Read(ref _activeProtectedSendOperation);
         if (activeOperation is not null
             && ReferenceEquals(activeOperation.RuntimeSet, source.RuntimeSet))
         {

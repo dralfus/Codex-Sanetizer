@@ -1367,7 +1367,7 @@ raw prompt data is retained.
   an equivalent generation-safe handoff.
 - [x] Invalidation between append and publication cannot lose the terminal
   raw-free outcome.
-- [ ] Tests cover normal, Stop, reload, and same-runtime generation changes.
+- [x] Tests cover normal, Stop, reload, and same-runtime generation changes.
 
 **Implementation (2026-08-07):** Trace appends now commit their operation draft
 only through the same compare-and-swap that publishes the resident snapshot.
@@ -1376,7 +1376,11 @@ single raw-free terminal outcome. Deterministic transaction tests cover failed
 and successful publication, while the existing lifecycle suite covers normal,
 Stop, reload, and same-runtime snapshot changes.
 
-**Review follow-up (2026-08-07):** Add deterministic tests that force Stop
-and runtime reload specifically between trace-draft preparation and the
-publication CAS. Each must prove one raw-free terminal outcome and that no
-trace entry is published with the replacement generation.
+**Completed follow-up (2026-08-07):** Deterministic boundary tests now start
+real Stop and runtime reload between trace-draft preparation and the
+publication CAS. Lifecycle cancellation is visible before the callback may
+continue; a captured operation is carried into the successor snapshot even if
+the callback completes first. Normal publication rejects a cancelled
+operation, while the terminal handoff may publish one raw-free outcome. The
+tests prove the original Send is not submitted and no trace entry is stamped
+with the replacement generation.

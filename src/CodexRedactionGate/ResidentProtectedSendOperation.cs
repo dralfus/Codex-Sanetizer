@@ -154,8 +154,10 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
         {
             if (_disposed || Volatile.Read(ref _completed) != 0)
             {
-                trace = _trace;
-                return false;
+                // Reload/Stop can retain this operation after its callback has
+                // completed. Return a synthesized raw-free terminal trace so
+                // the successor snapshot can still publish the interruption.
+                return TryCreateTerminalBlockedTraceUnderLock(out trace);
             }
 
             if (!TryCreateTerminalBlockedTraceUnderLock(out var updated))
@@ -222,7 +224,7 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
 
     public void Cancel()
     {
-        Interlocked.Exchange(ref _cancelled, 1);
+        RequestCancellation();
         lock (_lifecycleGate)
         {
             if (_disposed)
@@ -247,6 +249,11 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
                 // Cancellation remains fail-closed even if a UI side-effect cannot be closed.
             }
         }
+    }
+
+    public void RequestCancellation()
+    {
+        Interlocked.Exchange(ref _cancelled, 1);
     }
 
     public bool TryComplete()
