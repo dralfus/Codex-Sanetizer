@@ -1385,4 +1385,6 @@ operation, while the terminal handoff may publish one raw-free outcome. The
 cancellation request and CAS share one publication gate, so a non-terminal
 trace cannot be published after cancellation. The tests prove the original
 Send is not submitted and every trace entry retains the source, never the
-replacement, generation.
+replacement, generation; a test-only successful-CAS observer also proves that
+no cancelled intermediate transition was published before the terminal
+outcome. A pre-handoff terminal publication is permitted and retained.

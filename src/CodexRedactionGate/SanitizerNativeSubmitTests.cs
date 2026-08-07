@@ -2980,6 +2980,7 @@ public class HandleButtonClickTests : SanitizerTests
         Thread? stopThread = null;
         var boundaryEntered = false;
         var submitCalls = 0;
+        var publishedStages = new List<string>();
         tray = CreatePointerTray(
             hook,
             new FixedSendControlDiscovery(new SendControlDiscoveryResult(
@@ -3006,6 +3007,7 @@ public class HandleButtonClickTests : SanitizerTests
             });
 
         Assert.That(tray.Start(), Is.True);
+        tray.SetProtectedSendTracePublishedObserverForTesting(entry => publishedStages.Add(entry.Stage));
         var sourceGeneration = tray.GetCurrentSnapshot().Generation;
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
         stopThread!.Join();
@@ -3018,6 +3020,7 @@ public class HandleButtonClickTests : SanitizerTests
             "terminal_blocked"
         }));
         Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
+        Assert.That(publishedStages, Is.Empty.Or.EquivalentTo(new[] { "terminal_blocked" }));
         Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("protection_stopped"));
     }
 
@@ -3034,6 +3037,7 @@ public class HandleButtonClickTests : SanitizerTests
         var reloaded = false;
         var oldSubmitCalls = 0;
         var replacementSubmitCalls = 0;
+        var publishedStages = new List<string>();
         var replacementRuntime = NativeSubmitRuntime.CreateTest(
             replacementHook,
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
@@ -3069,6 +3073,7 @@ public class HandleButtonClickTests : SanitizerTests
             });
 
         Assert.That(tray.Start(), Is.True);
+        tray.SetProtectedSendTracePublishedObserverForTesting(entry => publishedStages.Add(entry.Stage));
         var sourceGeneration = tray.GetCurrentSnapshot().Generation;
         oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
         reloadThread!.Join();
@@ -3083,6 +3088,7 @@ public class HandleButtonClickTests : SanitizerTests
         }));
         Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("runtime_replaced"));
         Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
+        Assert.That(publishedStages, Is.Empty.Or.EquivalentTo(new[] { "terminal_blocked" }));
         Assert.That(tray.GetCurrentSnapshot().Generation, Is.GreaterThan(sourceGeneration));
     }
 

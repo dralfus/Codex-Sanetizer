@@ -97,6 +97,7 @@ internal sealed class TrayProtectionController
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
     private readonly Action<string>? _protectedSendStageObserver;
     private readonly Action? _beforeProtectedSendTracePublishForTesting;
+    private Action<ProtectedSendTraceEntry>? _protectedSendTracePublishedForTesting;
     private IDisposable? _residentRuntimeOwner;
     private readonly ConcurrentDictionary<CapturedTargetProfileKey, string> _capturedTargetProfiles = new();
     private readonly object _reloadGate = new();
@@ -245,6 +246,12 @@ internal sealed class TrayProtectionController
     public event EventHandler? StateChanged;
 
     public TrayProtectionState State => ReadSnapshot().State;
+
+    // Explicit test seam: observes only transitions whose snapshot CAS succeeded.
+    internal void SetProtectedSendTracePublishedObserverForTesting(Action<ProtectedSendTraceEntry>? observer)
+    {
+        _protectedSendTracePublishedForTesting = observer;
+    }
 
     internal bool IsNativeSubmitHookReady => ReadSnapshot().HookReady;
 
@@ -1731,6 +1738,15 @@ internal sealed class TrayProtectionController
                     allowCancelledOperation,
                     () => TryReplaceSnapshotIfCurrent(current, replacement)))
             {
+                try
+                {
+                    _protectedSendTracePublishedForTesting?.Invoke(trace[^1]);
+                }
+                catch
+                {
+                    // A test observer must not change production publication semantics.
+                }
+
                 published = replacement;
                 return true;
             }
