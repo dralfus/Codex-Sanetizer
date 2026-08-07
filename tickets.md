@@ -1043,6 +1043,61 @@ reported as raw-free `stale_composer`; no text is written to that second window
 and no Send is injected. The existing resident operation guard continues to
 bind both checks to the original snapshot generation.
 
+## 316. Add a reference-only hook input source for local acceptance
+
+**What to build:** Add a compiled-in local reference-composer input source that
+can exercise the hook-owner callback and suppression path for release
+acceptance, while being physically ineligible to target Codex, ChatGPT, or any
+user-configured surface.
+
+**Blocked by:** 302. Record a correlated, raw-free protected-Send trace; 303.
+Route one keyboard protected Send through a resident operation; 304. Dispatch
+replacement overlays from one resident UI owner; 305. Revalidate the captured
+target before write and replay.
+
+**State owner:** The immutable resident protection snapshot owns the temporary
+reference-acceptance state and captured operation. A reference-composer host
+owns the non-persisted capability and its local target identity. Tray UI only
+renders published state and cannot enable the source.
+
+**Fail-closed state:** A missing/expired capability, any identity mismatch,
+attempt to select Codex/ChatGPT or a persisted/custom profile, missing trace
+stage, partial replay injection, or failed cleanup is
+`reference_source_unavailable` or another terminal raw-free outcome. It starts
+no Send operation and cannot produce `sent_safely`.
+
+**Allowed transitions:** Only an explicit release-smoke acceptance scope may
+create the compiled-in reference profile, bind it to one local process/root
+window/UI thread and invoke one captured gesture. The scope may run a safe,
+approve, cancel, or forced-failure case and then invalidates the capability.
+No tray, onboarding, profile persistence, policy import, or normal command
+path may activate, retarget, or retain the source.
+
+**Deterministic proof:** A local reference composer creates a fresh
+in-memory capability and exercises the hook-owner captured-gesture entry,
+production overlay lifecycle, target-owned replay boundary, and terminal
+trace twice in one process. It uses no cloud service, timing sleeps, raw prompt
+capture, or a direct controller/queue/replay shortcut.
+
+- [ ] The reference profile and source are compiled in and cannot be created
+  from persisted profiles, configuration, policy, tray UI, onboarding, or a
+  normal command; Codex/ChatGPT/custom profile identifiers are rejected.
+- [ ] Each source gesture validates the live capability, process, normalized
+  root window, UI thread and fresh nonce before it can reach suppression; scope
+  exit, timeout, or cleanup atomically invalidates it.
+- [ ] Native keyboard/pointer callbacks and the reference source enter the
+  same hook-owned captured-gesture seam before selected/unrelated
+  classification, suppression, snapshot capture and deferred scheduling.
+  Generic injected replay remains ignored by the native callbacks.
+- [ ] The source uses `WindowsConfirmationOverlay` through its foreground
+  validation and a target-owned keyboard/pointer replay boundary; direct
+  fixture sends are forbidden, and partial injection or modifier cleanup
+  failure produces `replay_indeterminate`.
+- [ ] Deterministic tests cover every rejection and forced terminal failure,
+  inspect the raw-free terminal trace, prove no cloud call, and execute two
+  consecutive acceptance runs with no leftover hooks, threads, windows,
+  capabilities, temporary storage, or pending work.
+
 ## 306. Prove the complete path with a local reference composer
 
 **What to build:** Add a local reference composer that runs the shipped Windows
@@ -1051,7 +1106,7 @@ text writer, and keyboard/mouse replay together. It provides repeatable local
 evidence that the complete protected path works without a ChatGPT cloud account
 or live cloud submission.
 
-**Blocked by:** 302. Record a correlated, raw-free protected-Send trace; 303. Route one keyboard protected Send through a resident operation; 304. Dispatch replacement overlays from one resident UI owner; 305. Revalidate the captured target before write and replay.
+**Blocked by:** 302. Record a correlated, raw-free protected-Send trace; 303. Route one keyboard protected Send through a resident operation; 304. Dispatch replacement overlays from one resident UI owner; 305. Revalidate the captured target before write and replay; 316. Add a reference-only hook input source for local acceptance.
 
 **State owner:** The real resident protection snapshot owns each reference
 composer attempt; the fixture only exposes safe observable outcomes and test
