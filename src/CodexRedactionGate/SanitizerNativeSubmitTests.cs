@@ -1512,6 +1512,112 @@ public partial class SanitizerTests
         Assert.That(sideEffectsCancelled, Is.True);
     }
 
+    [Test]
+    public void ResidentProtectedSendOperation_TransactionalTraceAppendDoesNotCommitWhenPublicationIsInvalidated()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var runtime = NativeSubmitRuntime.CreateTest(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("Test runner should not run."),
+            profile);
+        using var runtimeSet = new NativeSubmitRuntimeSet(hook, new[] { runtime });
+        var snapshot = new ProtectionSnapshot(
+            Generation: 3,
+            State: new TrayProtectionState(
+                Enabled: true,
+                Mode: "NativeSubmit",
+                Hotkey: "Ctrl+Shift+F9",
+                LastStatus: OsInteractionStatusIds.NativeSubmitInProgress,
+                LastDecision: null,
+                LastReplacementCount: null,
+                LastProfileId: profile.ProfileId,
+                LastApplied: false,
+                LastSubmitted: false),
+            ApplyOnlyRunner: () => throw new InvalidOperationException("Apply-only runner should not run."),
+            RuntimeSet: runtimeSet,
+            HookReady: true,
+            SendControlDiscovery: null,
+            ActiveSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)));
+        using var operation = new ResidentProtectedSendOperation(snapshot, runtimeSet, target: null);
+
+        var published = false;
+        Assert.That(operation.TryAppendTraceTransaction(
+            "send_detected",
+            "checking_prompt",
+            0,
+            _ => published = false,
+            out var trace), Is.False);
+
+        Assert.That(published, Is.False);
+        Assert.That(trace, Is.Empty);
+        Assert.That(operation.Trace, Is.Empty);
+
+        IReadOnlyList<ProtectedSendTraceEntry>? terminalPublication = null;
+        Assert.That(operation.TryEnsureTerminalBlockedTraceTransaction(
+            candidate =>
+            {
+                terminalPublication = candidate;
+                return true;
+            },
+            out var terminalTrace), Is.True);
+
+        Assert.That(terminalPublication, Is.EqualTo(terminalTrace));
+        Assert.That(terminalTrace.Select(entry => entry.Stage), Is.EqualTo(new[]
+        {
+            "send_detected",
+            "terminal_blocked"
+        }));
+    }
+
+    [Test]
+    public void ResidentProtectedSendOperation_TransactionalTraceAppendCommitsOnlyThePublishedTrace()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var runtime = NativeSubmitRuntime.CreateTest(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("Test runner should not run."),
+            profile);
+        using var runtimeSet = new NativeSubmitRuntimeSet(hook, new[] { runtime });
+        var snapshot = new ProtectionSnapshot(
+            Generation: 3,
+            State: new TrayProtectionState(
+                Enabled: true,
+                Mode: "NativeSubmit",
+                Hotkey: "Ctrl+Shift+F9",
+                LastStatus: OsInteractionStatusIds.NativeSubmitInProgress,
+                LastDecision: null,
+                LastReplacementCount: null,
+                LastProfileId: profile.ProfileId,
+                LastApplied: false,
+                LastSubmitted: false),
+            ApplyOnlyRunner: () => throw new InvalidOperationException("Apply-only runner should not run."),
+            RuntimeSet: runtimeSet,
+            HookReady: true,
+            SendControlDiscovery: null,
+            ActiveSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)));
+        using var operation = new ResidentProtectedSendOperation(snapshot, runtimeSet, target: null);
+
+        IReadOnlyList<ProtectedSendTraceEntry>? publishedTrace = null;
+        Assert.That(operation.TryAppendTraceTransaction(
+            "send_detected",
+            "checking_prompt",
+            0,
+            candidate =>
+            {
+                publishedTrace = candidate;
+                return true;
+            },
+            out var trace), Is.True);
+
+        Assert.That(publishedTrace, Is.EqualTo(trace));
+        Assert.That(operation.Trace, Is.EqualTo(trace));
+        Assert.That(trace.Select(entry => entry.Stage), Is.EqualTo(new[] { "send_detected" }));
+    }
+
     private static ConfirmationUiModel CreateOverlayModel(string prompt)
     {
         return new ConfirmationUiModel(
@@ -2761,6 +2867,109 @@ public partial class SanitizerTests
 public class HandleButtonClickTests : SanitizerTests
 {
     [Test]
+    public void TrayProtectionController_ReplaysTracePublicationAfterSameRuntimeCasInvalidation()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        TrayProtectionController? tray = null;
+        var publicationInvalidations = 0;
+        var submitCalls = 0;
+        tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.IdentifiedSend,
+                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)))),
+            profile,
+            () => submitCalls++,
+            beforeProtectedSendTracePublishForTesting: () =>
+            {
+                if (publicationInvalidations++ == 0)
+                {
+                    tray!.PublishSyntheticDiagnosticsForTesting(
+                        LocalProtectionRecovery.ReadyCode,
+                        "not_configured",
+                        OsInteractionStatusIds.NativeSubmitInProgress,
+                        profile.ProfileId,
+                        "Ctrl+Enter");
+                }
+            });
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(publicationInvalidations, Is.GreaterThanOrEqualTo(2));
+        Assert.That(submitCalls, Is.EqualTo(1));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Last().Stage, Is.EqualTo("sent_safely"));
+        Assert.That(
+            tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.AttemptId).Distinct(),
+            Is.EqualTo(new[] { tray.State.ProtectedSendAttemptId }));
+    }
+
+    [Test]
+    public void TrayProtectionController_StateChangedFailureDoesNotStrandProtectedSendOperation()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitCalls = 0;
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.IdentifiedSend,
+                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)))),
+            profile,
+            () => submitCalls++);
+        EventHandler throwingObserver = (_, _) => throw new InvalidOperationException("test observer failure");
+
+        Assert.That(tray.Start(), Is.True);
+        tray.StateChanged += throwingObserver;
+        Assert.Throws<InvalidOperationException>(() => hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true)));
+        tray.StateChanged -= throwingObserver;
+
+        Assert.That(tray.State.NativeSubmitEnabled, Is.False);
+        Assert.That(tray.TryPublishLocalProtectionReady(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(submitCalls, Is.EqualTo(1));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Last().Stage, Is.EqualTo("sent_safely"));
+    }
+
+    [Test]
+    public void TrayProtectionController_GenerationChangeCarriesActiveTraceToTerminalOutcome()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitCalls = 0;
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.IdentifiedSend,
+                TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)))),
+            profile,
+            () => submitCalls++);
+        var generationChanged = false;
+        tray.StateChanged += (_, _) =>
+        {
+            if (!generationChanged && tray.State.ProtectedSendAttemptStatus == "detected")
+            {
+                generationChanged = tray.TryPublishLocalProtectionReady();
+            }
+        };
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(generationChanged, Is.True);
+        Assert.That(submitCalls, Is.Zero);
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
+        {
+            "send_detected",
+            "terminal_blocked"
+        }));
+        Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("runtime_replaced"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.SnapshotGeneration).Distinct(),
+            Is.Not.EqualTo(new[] { tray.GetCurrentSnapshot().Generation }));
+    }
+
+    [Test]
     public void TrayProtectionController_RoutesKeyboardAndMouseSendThroughTheSameProtectedFlow()
     {
         var hook = new FakeNativeSubmitHookHost();
@@ -3802,7 +4011,8 @@ public class HandleButtonClickTests : SanitizerTests
         TextSurfaceDiscoveryResult? activeSurfaceResult = null,
         Func<IntPtr, string?>? selectedWindowProfileResolver = null,
         IFirstRunSetupController? firstRunSetupController = null,
-        Action<string>? protectedSendStageObserver = null)
+        Action<string>? protectedSendStageObserver = null,
+        Action? beforeProtectedSendTracePublishForTesting = null)
     {
         var runtime = NativeSubmitRuntime.CreateTest(
             hook,
@@ -3827,7 +4037,8 @@ public class HandleButtonClickTests : SanitizerTests
                 ?? TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(activeProfileId)),
             selectedWindowProfileResolver: selectedWindowProfileResolver ?? (_ => activeProfileId),
             protectedSendStageObserver: protectedSendStageObserver,
-            nativeSubmitRuntimes: new[] { runtime });
+            nativeSubmitRuntimes: new[] { runtime },
+            beforeProtectedSendTracePublishForTesting: beforeProtectedSendTracePublishForTesting);
     }
 
     private static TextSurfaceDescriptor CreateNativeSurfaceWithWindow(string profileId, string windowHandle)

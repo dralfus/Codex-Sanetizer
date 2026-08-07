@@ -1363,8 +1363,20 @@ each append and publication attempt. Tests prove no transition appears in a
 new generation, every interrupted operation has an explicit outcome, and no
 raw prompt data is retained.
 
-- [ ] Append and snapshot publication use one transactional resident seam or
+- [x] Append and snapshot publication use one transactional resident seam or
   an equivalent generation-safe handoff.
-- [ ] Invalidation between append and publication cannot lose the terminal
+- [x] Invalidation between append and publication cannot lose the terminal
   raw-free outcome.
 - [ ] Tests cover normal, Stop, reload, and same-runtime generation changes.
+
+**Implementation (2026-08-07):** Trace appends now commit their operation draft
+only through the same compare-and-swap that publishes the resident snapshot.
+Publication failure leaves the draft unchanged; the operation can then publish a
+single raw-free terminal outcome. Deterministic transaction tests cover failed
+and successful publication, while the existing lifecycle suite covers normal,
+Stop, reload, and same-runtime snapshot changes.
+
+**Review follow-up (2026-08-07):** Add deterministic tests that force Stop
+and runtime reload specifically between trace-draft preparation and the
+publication CAS. Each must prove one raw-free terminal outcome and that no
+trace entry is published with the replacement generation.

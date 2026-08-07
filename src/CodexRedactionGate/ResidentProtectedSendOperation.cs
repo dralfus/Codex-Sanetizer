@@ -100,12 +100,15 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
         Volatile.Write(ref _executionThreadId, Environment.CurrentManagedThreadId);
     }
 
-    public bool TryAppendTrace(
+    public bool TryAppendTraceTransaction(
         string stage,
         string resultCode,
         int durationMilliseconds,
+        Func<IReadOnlyList<ProtectedSendTraceEntry>, bool> tryPublish,
         out IReadOnlyList<ProtectedSendTraceEntry> trace)
     {
+        ArgumentNullException.ThrowIfNull(tryPublish);
+
         lock (_lifecycleGate)
         {
             if (_disposed
@@ -120,6 +123,20 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
                     resultCode,
                     durationMilliseconds,
                     out var updated))
+            {
+                trace = _trace;
+                return false;
+            }
+
+            try
+            {
+                if (!tryPublish(updated))
+                {
+                    trace = _trace;
+                    return false;
+                }
+            }
+            catch
             {
                 trace = _trace;
                 return false;
@@ -141,44 +158,53 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
                 return false;
             }
 
-            if (_trace.Count == 0)
+            if (!TryCreateTerminalBlockedTraceUnderLock(out var updated))
             {
-                if (!ProtectedSendTrace.TryAppend(
-                        _trace,
-                        AttemptId,
-                        Snapshot.Generation,
-                        TargetFingerprint,
-                        "send_detected",
-                        "checking_prompt",
-                        0,
-                        out var detected))
+                trace = _trace;
+                return false;
+            }
+
+            _trace = updated;
+            trace = _trace;
+            return true;
+        }
+    }
+
+    public bool TryEnsureTerminalBlockedTraceTransaction(
+        Func<IReadOnlyList<ProtectedSendTraceEntry>, bool> tryPublish,
+        out IReadOnlyList<ProtectedSendTraceEntry> trace)
+    {
+        ArgumentNullException.ThrowIfNull(tryPublish);
+
+        lock (_lifecycleGate)
+        {
+            if (_disposed || Volatile.Read(ref _completed) != 0)
+            {
+                trace = _trace;
+                return false;
+            }
+
+            if (!TryCreateTerminalBlockedTraceUnderLock(out var updated))
+            {
+                trace = _trace;
+                return false;
+            }
+
+            try
+            {
+                if (!tryPublish(updated))
                 {
                     trace = _trace;
                     return false;
                 }
-
-                _trace = detected;
             }
-
-            if (_trace[^1].Stage is not ("terminal_blocked" or "sent_safely"))
+            catch
             {
-                if (!ProtectedSendTrace.TryAppend(
-                        _trace,
-                        AttemptId,
-                        Snapshot.Generation,
-                        TargetFingerprint,
-                        "terminal_blocked",
-                        OsInteractionStatusIds.FailedClosed,
-                        0,
-                        out var terminal))
-                {
-                    trace = _trace;
-                    return false;
-                }
-
-                _trace = terminal;
+                trace = _trace;
+                return false;
             }
 
+            _trace = updated;
             trace = _trace;
             return true;
         }
@@ -261,6 +287,35 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
                 current.State.LocalProtectionStatus,
                 LocalProtectionRecovery.ReadyCode,
                 StringComparison.Ordinal);
+    }
+
+    private bool TryCreateTerminalBlockedTraceUnderLock(out IReadOnlyList<ProtectedSendTraceEntry> updated)
+    {
+        updated = _trace;
+        if (updated.Count == 0
+            && !ProtectedSendTrace.TryAppend(
+                updated,
+                AttemptId,
+                Snapshot.Generation,
+                TargetFingerprint,
+                "send_detected",
+                "checking_prompt",
+                0,
+                out updated))
+        {
+            return false;
+        }
+
+        return updated[^1].Stage is "terminal_blocked" or "sent_safely"
+            || ProtectedSendTrace.TryAppend(
+                updated,
+                AttemptId,
+                Snapshot.Generation,
+                TargetFingerprint,
+                "terminal_blocked",
+                OsInteractionStatusIds.FailedClosed,
+                0,
+                out updated);
     }
 
     private sealed class LifecycleLease : IDisposable
