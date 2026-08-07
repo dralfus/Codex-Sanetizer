@@ -2149,6 +2149,28 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void ProductConfirmAndSend_CapturedTargetChangeImmediatelyBeforeReplayBlocksSubmission()
+    {
+        var surface = new ProductFlowTextSurface("Connect to 192.168.10.25")
+        {
+            ReturnDifferentSurfaceOnDiscovery = 4
+        };
+        var target = new NativeSubmitTargetIdentity(7, "codex-desktop", "1");
+        var orchestrator = CreateProductFlowOrchestrator(
+            surface,
+            ConfirmationDecisionContract.Confirm,
+            new CapturedTargetSurfaceDiscovery(surface, target));
+
+        var result = orchestrator.RunOnce(OsInteractionRunOptions.ConfirmAndSend);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.StaleComposer));
+        Assert.That(result.Applied, Is.True);
+        Assert.That(result.Submitted, Is.False);
+        Assert.That(surface.WriteCount, Is.EqualTo(1));
+        Assert.That(surface.SubmitCount, Is.Zero);
+    }
+
+    [Test]
     public void Sanitize_NoSensitivePrompt_ReturnsAllowWithUnchangedText()
     {
         var input = "Normal prompt text";
@@ -4966,11 +4988,12 @@ public partial class SanitizerTests
 
     private static OsInteractionOrchestrator CreateProductFlowOrchestrator(
         ProductFlowTextSurface surface,
-        Func<ConfirmationUiModel, ConfirmationDecision> decisionFactory)
+        Func<ConfirmationUiModel, ConfirmationDecision> decisionFactory,
+        IActiveTextSurfaceDiscovery? discovery = null)
     {
         return new OsInteractionOrchestrator(
             new Sanitizer(new InMemoryHmacMappingVault(TestSecret())),
-            surface,
+            discovery ?? surface,
             surface,
             surface,
             surface,
@@ -5003,8 +5026,12 @@ public partial class SanitizerTests
                 CanCaptureText: true,
                 CanReplaceText: true,
                 CanSubmit: true,
-                Metadata: new SurfaceMetadata(SurfaceKind: "focused-composer"));
-            _staleSurface = _surface with { SurfaceId = "other-composer" };
+                Metadata: new SurfaceMetadata(SurfaceKind: "focused-composer", WindowHandle: "1"));
+            _staleSurface = _surface with
+            {
+                SurfaceId = "other-composer",
+                Metadata = new SurfaceMetadata(SurfaceKind: "focused-composer", WindowHandle: "2")
+            };
         }
 
         public string CurrentText { get; private set; }
@@ -5016,6 +5043,8 @@ public partial class SanitizerTests
         public bool FailDiscoveryAfterWrite { get; init; }
 
         public bool ReturnDifferentSurfaceAfterWrite { get; init; }
+
+        public int? ReturnDifferentSurfaceOnDiscovery { get; init; }
 
         public bool FailInitialCapture { get; init; }
 
@@ -5034,6 +5063,11 @@ public partial class SanitizerTests
         public TextSurfaceDiscoveryResult DiscoverActiveSurface()
         {
             DiscoveryCount++;
+            if (ReturnDifferentSurfaceOnDiscovery == DiscoveryCount)
+            {
+                return TextSurfaceDiscoveryResult.Success(_staleSurface);
+            }
+
             if (WriteCount > 0 && FailDiscoveryAfterWrite)
             {
                 return TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer);

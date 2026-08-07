@@ -1021,19 +1021,27 @@ writer, and a replay runner demonstrate success for the original window and
 block focus changes, write failure, replay failure, and snapshot replacement
 without live desktop focus, timers, or cloud access.
 
-- [ ] Approved text is written only after the original target contract still
+- [x] Approved text is written only after the original target contract still
   matches and is never written to a second window with the same profile.
-- [ ] Replay occurs only after a second successful target and generation check;
+- [x] Replay occurs only after a second successful target and generation check;
   injected replay input is not recaptured as a new attempt.
-- [ ] Target mismatch, text-write failure, replay failure, and stale generation
+- [x] Target mismatch, text-write failure, replay failure, and stale generation
   leave the original Send blocked and publish a raw-free terminal trace reason.
-- [ ] Tests cover keyboard and supported mouse-originated attempts through the
+- [x] Tests cover keyboard and supported mouse-originated attempts through the
   same compare-before-write-and-send boundary.
 
 **Review follow-up (2026-08-06):** The resident operation must expose the
 captured target contract to this boundary and revalidate profile, window, and
 generation immediately before write and again before replay. A profile-only
 match is insufficient for two same-profile windows.
+
+**Implementation (2026-08-07):** The resident target wrapper validates the
+captured profile/window on every rediscovery. After a successful write and
+verification, the orchestrator now performs one additional rediscovery directly
+before trace publication and replay. A same-profile, different-window result is
+reported as raw-free `stale_composer`; no text is written to that second window
+and no Send is injected. The existing resident operation guard continues to
+bind both checks to the original snapshot generation.
 
 ## 306. Prove the complete path with a local reference composer
 

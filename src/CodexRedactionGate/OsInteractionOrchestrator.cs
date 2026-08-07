@@ -379,9 +379,24 @@ public sealed class OsInteractionOrchestrator
                 ("verification_status", verificationCapture.Status)));
         }
 
+        var replayTarget = RediscoverSameSurface(verificationSurface);
+        if (replayTarget.Status is not null)
+        {
+            return Finish(replayTarget.Status, replayTarget.Surface, result, model, true, false, Merge(
+                diagnostics,
+                replace.Diagnostics,
+                verificationCapture.Diagnostics,
+                replayTarget.Diagnostics,
+                ("write_status", replace.Status),
+                ("verification_status", verificationCapture.Status),
+                ("pre_submit_status", replayTarget.Status)));
+        }
+
+        var replaySurface = replayTarget.Surface ?? verificationSurface;
+
         if (!TryTrace(traceStage, "send_injected", "submit_requested"))
         {
-            return Finish(OsInteractionStatusIds.FailedClosed, verificationSurface, result, model, true, false, Merge(
+            return Finish(OsInteractionStatusIds.FailedClosed, replaySurface, result, model, true, false, Merge(
                 diagnostics,
                 replace.Diagnostics,
                 verificationCapture.Diagnostics,
@@ -391,7 +406,7 @@ public sealed class OsInteractionOrchestrator
 
         if (!CanExecute(executionGuard))
         {
-            return ExecutionGuardFailed(verificationSurface, result, model, true, Merge(
+            return ExecutionGuardFailed(replaySurface, result, model, true, Merge(
                 diagnostics,
                 replace.Diagnostics,
                 verificationCapture.Diagnostics,
@@ -401,7 +416,7 @@ public sealed class OsInteractionOrchestrator
 
         if (!TryAcquireExecutionLease(executionGuard, executionLease, out var replayLease))
         {
-            return ExecutionGuardFailed(verificationSurface, result, model, true, Merge(
+            return ExecutionGuardFailed(replaySurface, result, model, true, Merge(
                 diagnostics,
                 replace.Diagnostics,
                 verificationCapture.Diagnostics,
@@ -412,7 +427,7 @@ public sealed class OsInteractionOrchestrator
         if (!CanExecute(executionGuard))
         {
             replayLease?.Dispose();
-            return ExecutionGuardFailed(verificationSurface, result, model, true, Merge(
+            return ExecutionGuardFailed(replaySurface, result, model, true, Merge(
                 diagnostics,
                 replace.Diagnostics,
                 verificationCapture.Diagnostics,
@@ -423,20 +438,20 @@ public sealed class OsInteractionOrchestrator
         SubmitActionResult submit;
         try
         {
-            submit = _submitAction.Submit(verificationSurface);
+            submit = _submitAction.Submit(replaySurface);
         }
         finally
         {
             replayLease?.Dispose();
         }
         return submit.Succeeded
-            ? Finish(OsInteractionStatusIds.Submitted, verificationSurface, result, model, true, true, Merge(
+            ? Finish(OsInteractionStatusIds.Submitted, replaySurface, result, model, true, true, Merge(
                 diagnostics,
                 replace.Diagnostics,
                 submit.Diagnostics,
                 ("write_status", replace.Status),
                 ("submit_status", submit.Status)))
-            : Finish(OsInteractionStatusIds.SubmitFailed, verificationSurface, result, model, true, false, Merge(
+            : Finish(OsInteractionStatusIds.SubmitFailed, replaySurface, result, model, true, false, Merge(
                 diagnostics,
                 replace.Diagnostics,
                 submit.Diagnostics,
@@ -520,8 +535,11 @@ public sealed class OsInteractionOrchestrator
         var rediscovery = _surfaceDiscovery.DiscoverActiveSurface();
         if (!rediscovery.Succeeded || rediscovery.Surface is null || !rediscovery.Surface.Supported)
         {
+            var status = rediscovery.Status == OsInteractionStatusIds.StaleComposer
+                ? OsInteractionStatusIds.StaleComposer
+                : OsInteractionStatusIds.FocusLost;
             return new RediscoveredSurface(
-                OsInteractionStatusIds.FocusLost,
+                status,
                 rediscovery.Surface,
                 Merge(rediscovery.Diagnostics, ("rediscovery_status", rediscovery.Status)));
         }
