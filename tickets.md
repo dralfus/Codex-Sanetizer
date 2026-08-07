@@ -1079,6 +1079,22 @@ locally without a cloud endpoint or timing sleeps.
 - [ ] The fixture can run repeatedly in release smoke with deterministic cleanup
   of hook, UI dispatcher, windows, and temporary storage.
 
+**Review outcome (2026-08-07):** Not closed. An implementation attempt was
+discarded after review because a direct test dispatcher bypassed the low-level
+hook callback, local replay recorded a send without exercising production
+replay, and a fixture dialog stood in for `WindowsConfirmationOverlay`. Such a
+fixture would create a false `sent_safely` proof. The closure must instead:
+
+- exercise the hook callback/suppression boundary through a reference-only,
+  explicitly marked input source that cannot be enabled for Codex or ChatGPT;
+- use the production overlay or a production-owned deterministic automation
+  seam that still runs its foreground validation;
+- use a real target-owned keyboard and pointer replay boundary, report partial
+  injection as an indeterminate fail-closed result, and release pressed
+  modifiers before returning;
+- validate the resident terminal trace for every scenario and prove cleanup by
+  running the fixture twice in one release-smoke process.
+
 ## 307. Pin a verified ChatGPT Desktop compatibility fingerprint
 
 **What to build:** Turn the currently verified ChatGPT Desktop surface into an
