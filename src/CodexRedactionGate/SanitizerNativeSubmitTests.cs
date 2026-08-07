@@ -2979,6 +2979,7 @@ public class HandleButtonClickTests : SanitizerTests
         using var stopRequested = new ManualResetEventSlim(false);
         Thread? stopThread = null;
         var boundaryEntered = false;
+        var cancellationObserved = false;
         var submitCalls = 0;
         var publishedStages = new List<string>();
         tray = CreatePointerTray(
@@ -3002,7 +3003,7 @@ public class HandleButtonClickTests : SanitizerTests
                     boundaryEntered = true;
                     stopThread = new Thread(() => tray!.Stop());
                     stopThread.Start();
-                    Assert.That(stopRequested.Wait(TimeSpan.FromSeconds(1)), Is.True);
+                    cancellationObserved = stopRequested.Wait(TimeSpan.FromSeconds(1));
                 }
             });
 
@@ -3012,6 +3013,7 @@ public class HandleButtonClickTests : SanitizerTests
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
         stopThread!.Join();
 
+        Assert.That(cancellationObserved, Is.True);
         Assert.That(submitCalls, Is.Zero);
         Assert.That(tray.State.Enabled, Is.False);
         Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
@@ -3034,6 +3036,7 @@ public class HandleButtonClickTests : SanitizerTests
         using var reloadRequested = new ManualResetEventSlim(false);
         Thread? reloadThread = null;
         var boundaryEntered = false;
+        var cancellationObserved = false;
         var reloaded = false;
         var oldSubmitCalls = 0;
         var replacementSubmitCalls = 0;
@@ -3068,7 +3071,7 @@ public class HandleButtonClickTests : SanitizerTests
                     boundaryEntered = true;
                     reloadThread = new Thread(() => reloaded = tray!.ReloadNativeSubmit(replacementRuntime));
                     reloadThread.Start();
-                    Assert.That(reloadRequested.Wait(TimeSpan.FromSeconds(1)), Is.True);
+                    cancellationObserved = reloadRequested.Wait(TimeSpan.FromSeconds(1));
                 }
             });
 
@@ -3078,6 +3081,7 @@ public class HandleButtonClickTests : SanitizerTests
         oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
         reloadThread!.Join();
 
+        Assert.That(cancellationObserved, Is.True);
         Assert.That(reloaded, Is.True);
         Assert.That(oldSubmitCalls, Is.Zero);
         Assert.That(replacementSubmitCalls, Is.Zero);
