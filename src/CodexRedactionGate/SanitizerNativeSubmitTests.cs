@@ -3732,6 +3732,39 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_PointerClassificationFailureBlocksOnlyCachedSelectedTarget()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.Unrelated,
+                TextSurfaceDiscoveryResult.Failure(
+                    OsInteractionStatusIds.NotComposer,
+                    new Dictionary<string, string>()))),
+            profile,
+            () => throw new AssertionException("A failed pointer classification must not submit."),
+            selectedWindowProfileResolver: window => window == new IntPtr(42)
+                ? "codex-desktop"
+                : "other-app");
+
+        Assert.That(tray.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("A", TargetWindow: new IntPtr(42), TargetProcessId: 7));
+
+        var selected = hook.TriggerPointerClassificationFailure(
+            new NativePointerGesture(0, 0, "left", new IntPtr(42), 7));
+        var unrelated = hook.TriggerPointerClassificationFailure(
+            new NativePointerGesture(0, 0, "left", new IntPtr(43), 7));
+
+        Assert.That(selected.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(selected.SuppressOriginalInput, Is.True);
+        Assert.That(selected.Submitted, Is.False);
+        Assert.That(unrelated.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+        Assert.That(unrelated.SuppressOriginalInput, Is.False);
+    }
+
+    [Test]
     public void TrayProtectionController_KeyboardClassificationFailureDoesNotResolveLiveTargetWithoutCache()
     {
         var hook = new FakeNativeSubmitHookHost();

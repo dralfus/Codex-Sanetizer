@@ -685,7 +685,7 @@ runtime changes.
 snapshot replacement prove that no old runner executes, no raw pointer send
 passes through, and unrelated input is not captured.
 
-- [ ] A pointer Send whose control discovery is slow or fails is fail-closed
+- [x] A pointer Send whose control discovery is slow or fails is fail-closed
   only for the selected desktop client; unrelated application clicks remain
   pass-through.
 - [x] Deferred keyboard and pointer results cannot call a runner after Stop or
@@ -703,6 +703,12 @@ window/process binding verdict without waiting for UI Automation in the
 low-level callback. The remaining pointer first-click/cache-miss proof is
 tracked in ticket 314; until it is complete, pointer protection is not claimed
 for an unknown target.
+
+**Completed follow-up (2026-08-07):** A deterministic pointer timeout/failure
+test proves that a cached selected window/process target is suppressed without
+submission, while a different application's click passes through. The test
+does not broaden the claim to an unknown first-click target; that remains
+explicitly blocked by ticket 314.
 
 ## 298. Publish a raw-free protected-Send attempt status
 
