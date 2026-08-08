@@ -494,6 +494,17 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
 public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAccess
 {
     private const int MaxTextPatternCaptureLength = 65536;
+    private readonly Func<TextSurfaceDiscoveryResult> _surfaceDiscovery;
+
+    public NativeVerifiedComposerTextAccess()
+        : this(() => WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface())
+    {
+    }
+
+    internal NativeVerifiedComposerTextAccess(Func<TextSurfaceDiscoveryResult> surfaceDiscovery)
+    {
+        _surfaceDiscovery = surfaceDiscovery ?? throw new ArgumentNullException(nameof(surfaceDiscovery));
+    }
 
     public TextCaptureResult CaptureText(TextSurfaceDescriptor surface)
     {
@@ -543,6 +554,10 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
         }
         catch (COMException)
+        {
+            return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
+        }
+        catch (System.ComponentModel.Win32Exception)
         {
             return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
         }
@@ -600,6 +615,10 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         {
             return new TextReplacementResult(false, OsInteractionStatusIds.WriteFailed, new Dictionary<string, string>());
         }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return new TextReplacementResult(false, OsInteractionStatusIds.WriteFailed, new Dictionary<string, string>());
+        }
     }
 
     public SubmitActionResult Submit(TextSurfaceDescriptor surface)
@@ -623,6 +642,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                         new Dictionary<string, string> { ["submit_binding"] = "unknown" });
                 }
 
+                element.SetFocus();
                 SendKeys.SendWait(sendKeysText);
                 Thread.Sleep(120);
                 return new SubmitActionResult(
@@ -643,11 +663,15 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         {
             return new SubmitActionResult(false, OsInteractionStatusIds.SubmitFailed, new Dictionary<string, string>());
         }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return new SubmitActionResult(false, OsInteractionStatusIds.SubmitFailed, new Dictionary<string, string>());
+        }
     }
 
-    private static AutomationElement? GetCurrentVerifiedElement(TextSurfaceDescriptor surface)
+    private AutomationElement? GetCurrentVerifiedElement(TextSurfaceDescriptor surface)
     {
-        var discovery = WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface();
+        var discovery = _surfaceDiscovery();
         if (!discovery.Succeeded || discovery.Surface is null)
         {
             return null;
@@ -747,10 +771,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             {
                 result = action();
             }
-            catch (Exception ex) when (
-                ex is ElementNotAvailableException
-                || ex is InvalidOperationException
-                || ex is COMException)
+            catch (Exception ex)
             {
                 exception = ex;
             }

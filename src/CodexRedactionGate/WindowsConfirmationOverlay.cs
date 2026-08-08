@@ -228,10 +228,19 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
 public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDisposable
 {
     private readonly ResidentOverlayDispatchQueue? _dispatcher;
+    private readonly Action<ConfirmationOverlayAcceptanceWindow>? _acceptanceAutomation;
     private ConfirmationDialog? _activeDialog;
 
     public WindowsConfirmationOverlay()
+        : this(null)
     {
+    }
+
+    // This is intentionally internal: the reference composer uses the real dialog
+    // and foreground path, then drives its visible decision deterministically.
+    internal WindowsConfirmationOverlay(Action<ConfirmationOverlayAcceptanceWindow>? acceptanceAutomation)
+    {
+        _acceptanceAutomation = acceptanceAutomation;
         if (OperatingSystem.IsWindows())
         {
             _dispatcher = new ResidentOverlayDispatchQueue(ShowConfirmation, CloseActiveDialog);
@@ -313,7 +322,7 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
             };
             Application.ThreadException += threadExceptionHandler;
 
-            using var ownedDialog = new ConfirmationDialog(model, traceStage);
+            using var ownedDialog = new ConfirmationDialog(model, traceStage, _acceptanceAutomation);
             dialog = ownedDialog;
             Volatile.Write(ref _activeDialog, dialog);
             if (dialog.CloseRequested)
@@ -370,11 +379,15 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
         private bool _foregroundTracePublished;
         private int _closeRequested;
 
+        private readonly Action<ConfirmationOverlayAcceptanceWindow>? _acceptanceAutomation;
+
         public ConfirmationDialog(
             ConfirmationUiModel model,
-            Func<string, string, bool> traceStage)
+            Func<string, string, bool> traceStage,
+            Action<ConfirmationOverlayAcceptanceWindow>? acceptanceAutomation)
         {
             _traceStage = traceStage;
+            _acceptanceAutomation = acceptanceAutomation;
             Text = "Codex Redaction Gate";
             StartPosition = FormStartPosition.CenterScreen;
             Width = 820;
@@ -493,6 +506,13 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
                     DialogResult = DialogResult.Cancel;
                     Close();
                 }
+            }
+
+            if (result.ForegroundActivated && _acceptanceAutomation is not null)
+            {
+                _acceptanceAutomation(new ConfirmationOverlayAcceptanceWindow(
+                    () => BeginInvoke(new Action(() => DialogResult = DialogResult.OK)),
+                    () => BeginInvoke(new Action(() => DialogResult = DialogResult.Cancel))));
             }
         }
 
@@ -630,6 +650,22 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
             return true;
         }
     }
+}
+
+internal sealed class ConfirmationOverlayAcceptanceWindow
+{
+    private readonly Action _approve;
+    private readonly Action _cancel;
+
+    public ConfirmationOverlayAcceptanceWindow(Action approve, Action cancel)
+    {
+        _approve = approve ?? throw new ArgumentNullException(nameof(approve));
+        _cancel = cancel ?? throw new ArgumentNullException(nameof(cancel));
+    }
+
+    public void Approve() => _approve();
+
+    public void Cancel() => _cancel();
 }
 
 public sealed record ConfirmationOverlayForegroundActivationResult(

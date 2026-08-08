@@ -1142,6 +1142,20 @@ locally without a cloud endpoint or timing sleeps.
 - [ ] The fixture can run repeatedly in release smoke with deterministic cleanup
   of hook, UI dispatcher, windows, and temporary storage.
 
+**Implementation review (2026-08-08):** A real local `ReferenceComposerAcceptanceRunner`
+now drives the compiled reference-only source through `WindowsNativeSubmitHookHost`,
+the resident protected-Send operation, production `WindowsConfirmationOverlay`, UI
+Automation read/write, and `SendKeys` replay into a local WinForms composer. Its
+Windows tests prove a safe Send, sensitive sanitized Send after foreground-confirmed
+overlay approval, cancellation, and a second clean run. The runner now closes the
+overlay, hook, and composer when an attempt times out.
+
+**Remaining closure work:** Keep this ticket open until the same reference-composer
+path proves foreground refusal, captured-target change, text-write failure, and
+replay failure with no send. It also needs an explicitly interactive release
+acceptance command: the existing headless `--product-smoke` deliberately remains
+non-UI and cannot be substituted for a foreground-dependent Windows proof.
+
 **Review outcome (2026-08-07):** Not closed. An implementation attempt was
 discarded after review because a direct test dispatcher bypassed the low-level
 hook callback, local replay recorded a send without exercising production

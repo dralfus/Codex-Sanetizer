@@ -5587,4 +5587,80 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(metadata.CloudSubmission, Is.EqualTo("true"));
         Assert.That(metadata.ComposerStatus, Is.Null);
     }
+
+    [Test]
+    public void ReferenceComposerAcceptance_SafePromptReplaysThroughResidentHookPath()
+    {
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
+            "A harmless local prompt",
+            ReferenceComposerDecision.Approve);
+
+        Assert.That(report.HookStarted, Is.True);
+        Assert.That(report.OriginalInputSuppressed, Is.True);
+        Assert.That(report.TerminalStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
+        Assert.That(report.Submitted, Is.True);
+        Assert.That(report.SentTexts, Is.EqualTo(new[] { "A harmless local prompt" }));
+        Assert.That(report.Trace.Select(entry => entry.Stage), Is.EqualTo(new[]
+        {
+            "send_detected",
+            "target_matched",
+            "composer_read",
+            "sanitized",
+            "send_injected",
+            "sent_safely"
+        }));
+    }
+
+    [Test]
+    public void ReferenceComposerAcceptance_SensitivePromptUsesProductionOverlayAndNeverSendsRawText()
+    {
+        const string sensitivePrompt = "Connect to 192.168.10.25";
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
+            sensitivePrompt,
+            ReferenceComposerDecision.Approve);
+
+        Assert.That(report.HookStarted, Is.True);
+        Assert.That(report.OriginalInputSuppressed, Is.True);
+        Assert.That(report.TerminalStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
+        Assert.That(report.Submitted, Is.True);
+        Assert.That(report.SentTexts, Has.Count.EqualTo(1));
+        Assert.That(report.SentTexts[0], Does.Not.Contain("192.168.10.25"));
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Contain("overlay_created"));
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Contain("overlay_foreground_confirmed"));
+        Assert.That(report.Trace[^1].Stage, Is.EqualTo("sent_safely"));
+    }
+
+    [Test]
+    public void ReferenceComposerAcceptance_CancelAndRepeatedRunLeaveNoSendOrLeakedCapability()
+    {
+        var sanitizer = new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret")));
+        var cancelled = ReferenceComposerAcceptanceRunner.Run(
+            sanitizer,
+            "Connect to 192.168.10.25",
+            ReferenceComposerDecision.Cancel);
+        var repeated = ReferenceComposerAcceptanceRunner.Run(
+            sanitizer,
+            "A harmless local prompt",
+            ReferenceComposerDecision.Approve);
+
+        Assert.That(cancelled.Submitted, Is.False);
+        Assert.That(cancelled.SentTexts, Is.Empty);
+        Assert.That(cancelled.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
+        Assert.That(repeated.Submitted, Is.True);
+        Assert.That(repeated.SentTexts, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public void ReferenceComposerAcceptance_ReleaseSmokeRunsAllAcceptanceCases()
+    {
+        var report = ReferenceComposerAcceptanceSmokeRunner.Run(
+            System.Text.Encoding.UTF8.GetBytes("reference-composer-release-smoke-secret"));
+
+        Assert.That(report.SafePromptPassed, Is.True);
+        Assert.That(report.SensitivePromptPassed, Is.True);
+        Assert.That(report.CancellationPassed, Is.True);
+        Assert.That(report.RepeatedCleanupPassed, Is.True);
+    }
 }
