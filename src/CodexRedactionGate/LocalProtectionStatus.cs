@@ -121,6 +121,17 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 LocalProtectionStatusAction.RepairProfileSettings);
         }
 
+        if (state.NativeSubmitStatus == OsInteractionStatusIds.SurfaceUnverified
+            || state.ReadinessStatus == OsInteractionStatusIds.SurfaceUnverified)
+        {
+            return new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "unsupported",
+                "The selected ChatGPT Desktop surface no longer matches its verified fingerprint. Send is blocked; verify the app again.",
+                LocalProtectionStatusAction.VerifyProfiles);
+        }
+
         if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
         {
             var attemptRow = CreateProtectedSendAttemptRow(state.ProtectedSendAttemptStatus);

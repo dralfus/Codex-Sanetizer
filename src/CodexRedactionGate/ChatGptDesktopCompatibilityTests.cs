@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using NUnit.Framework;
 
@@ -68,6 +69,36 @@ public sealed class ChatGptDesktopCompatibilityTests
         Assert.That(rendered, Does.Not.Contain("ChatGPT"));
         Assert.That(rendered, Does.Not.Contain("secret"));
         Assert.That(rendered, Does.Not.Contain("C:\\"));
+    }
+
+    [Test]
+    public void PinnedFingerprint_SurvivesAtomicProfilePersistence()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-fingerprint-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", VerifiedChatGptDiscovery());
+
+        try
+        {
+            var saved = SubmitBindingProfileStore.Save(layout, new[] { profile });
+            var loaded = SubmitBindingProfileStore.Load(layout);
+
+            Assert.That(saved.Succeeded, Is.True);
+            Assert.That(loaded.Succeeded, Is.True);
+            Assert.That(loaded.Profiles.Single().CompatibilityEvidence, Is.Not.Null);
+            Assert.That(
+                loaded.Profiles.Single().CompatibilityEvidence!.ToComparisonDiagnostics(),
+                Is.EqualTo(profile.CompatibilityEvidence!.ToComparisonDiagnostics()));
+            Assert.That(ChatGptDesktopCompatibility.RequirePinnedFingerprint(loaded.Profiles.Single()).IsProtected, Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     private static TextSurfaceDiscoveryResult VerifiedChatGptDiscovery()

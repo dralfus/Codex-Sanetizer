@@ -279,6 +279,22 @@ public sealed class LocalProtectionStatusTests
     }
 
     [Test]
+    public void StatusView_ExplainsFingerprintMismatchAsUnsupportedAndOffersVerification()
+    {
+        var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            NativeSubmitEnabled = false,
+            NativeSubmitStatus = OsInteractionStatusIds.SurfaceUnverified,
+            ReadinessStatus = OsInteractionStatusIds.SurfaceUnverified,
+            ComposerProtected = false
+        });
+
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("unsupported"));
+        Assert.That(view.Rows[1].Consequence, Does.Contain("verified fingerprint"));
+        Assert.That(view.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.VerifyProfiles));
+    }
+
+    [Test]
     public void StatusView_ShowsRawFreeFailureAfterProtectionRetryFails()
     {
         var failure = "DOMAIN_C195C3D8E8F3";
