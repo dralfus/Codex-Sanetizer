@@ -1133,13 +1133,13 @@ Every test outcome is backed by one terminal attempt trace.
 an STA message loop, uses real Windows mechanisms, and records safe sent text
 locally without a cloud endpoint or timing sleeps.
 
-- [ ] A safe prompt follows one complete trace to `sent_safely` and appears in
+- [x] A safe prompt follows one complete trace to `sent_safely` and appears in
   the fixture only after protected replay.
-- [ ] A sensitive prompt shows the real replacement overlay; approval sends
+- [x] A sensitive prompt shows the real replacement overlay; approval sends
   only locally verified sanitized text.
-- [ ] Cancellation, foreground refusal, target change, text-write failure, and
+- [x] Cancellation, foreground refusal, target change, text-write failure, and
   replay failure prove that neither raw nor sanitized text is sent.
-- [ ] The fixture can run repeatedly in release smoke with deterministic cleanup
+- [x] The fixture can run repeatedly in release smoke with deterministic cleanup
   of hook, UI dispatcher, windows, and temporary storage.
 
 **Implementation review (2026-08-08):** A real local `ReferenceComposerAcceptanceRunner`
@@ -1323,11 +1323,11 @@ scenario and a second clean run. Any unavailable or failed scenario ends at
 Send, cancel, foreground refusal, target change, write failure, and replay
 failure twice without cloud access, sleeps, or raw prompt artifacts.
 
-- [ ] The command produces one raw-free result per scenario and one overall
+- [x] The command produces one raw-free result per scenario and one overall
   pass/fail result for the running build.
-- [ ] A non-interactive invocation reports an explicit unavailable status and
+- [x] A non-interactive invocation reports an explicit unavailable status and
   exits non-zero without claiming protection.
-- [ ] The acceptance run proves cleanup by executing the full matrix twice in
+- [x] The acceptance run proves cleanup by executing the full matrix twice in
   one process.
 
 ## 322. Make the reference-composer acceptance runner deterministic without weakening production foreground checks

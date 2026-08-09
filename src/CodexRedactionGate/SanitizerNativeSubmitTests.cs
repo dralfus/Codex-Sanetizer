@@ -5770,6 +5770,45 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
     }
 
     [Test]
+    public void ReferenceComposerReleaseAcceptance_RunsFullMatrixTwice()
+    {
+        var report = ReferenceComposerReleaseAcceptanceRunner.Run(
+            System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret"),
+            interactiveDesktopProbe: () => true);
+
+        Assert.That(report.Passed, Is.True);
+        Assert.That(report.Status, Is.EqualTo("passed"));
+        Assert.That(report.InteractiveDesktopAvailable, Is.True);
+        Assert.That(report.CleanupPassed, Is.True);
+        Assert.That(report.Scenarios, Has.Count.EqualTo(18));
+        Assert.That(report.Scenarios.All(scenario => scenario.Passed && scenario.RawFree && scenario.CleanupPassed), Is.True);
+        Assert.That(report.Scenarios.Select(scenario => scenario.ScenarioId).Count(id => id.StartsWith("run1.", StringComparison.Ordinal)), Is.EqualTo(9));
+        Assert.That(report.Scenarios.Select(scenario => scenario.ScenarioId).Count(id => id.StartsWith("run2.", StringComparison.Ordinal)), Is.EqualTo(9));
+    }
+
+    [Test]
+    public void ReferenceComposerReleaseAcceptance_NonInteractiveIsExplicitAndFailClosed()
+    {
+        var originalOutput = Console.Out;
+        using var output = new StringWriter();
+        try
+        {
+            Console.SetOut(output);
+            var exitCode = Program.RunReferenceComposerReleaseAcceptance(() => false);
+
+            Assert.That(exitCode, Is.EqualTo(1));
+            Assert.That(output.ToString(), Does.Contain("status: interactive_desktop_unavailable"));
+            Assert.That(output.ToString(), Does.Contain("overall: failed_closed"));
+            Assert.That(output.ToString(), Does.Not.Contain("reference-composer-release-acceptance-secret"));
+            Assert.That(output.ToString(), Does.Not.Contain("protected"));
+        }
+        finally
+        {
+            Console.SetOut(originalOutput);
+        }
+    }
+
+    [Test]
     public void ReferenceComposerAcceptance_ReleaseSmokeRunsAllAcceptanceCases()
     {
         var report = ReferenceComposerAcceptanceSmokeRunner.Run(

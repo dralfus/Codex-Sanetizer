@@ -446,6 +446,11 @@ public static class Program
             return RunProductSmoke();
         }
 
+        if (args.Length == 1 && args[0] == "--reference-composer-release-acceptance")
+        {
+            return RunReferenceComposerReleaseAcceptance();
+        }
+
         if (args.Length == 1 && args[0] == "--native-profiles-status")
         {
             return RunNativeProfilesStatus(runtime.LayoutFactory);
@@ -1153,6 +1158,19 @@ public static class Program
                 Directory.Delete(tempDirectory, recursive: true);
             }
         }
+    }
+
+    internal static int RunReferenceComposerReleaseAcceptance(Func<bool>? interactiveDesktopProbe = null)
+    {
+        var report = ReferenceComposerReleaseAcceptanceRunner.Run(
+            System.Text.Encoding.UTF8.GetBytes("reference-composer-release-acceptance-secret"),
+            interactiveDesktopProbe);
+        foreach (var line in ReferenceComposerReleaseAcceptanceRunner.RenderRawFree(report))
+        {
+            Console.WriteLine(line);
+        }
+
+        return report.Passed ? 0 : 1;
     }
 
     private static int RunNativeProfilesStatus(Func<DefaultStorageLayout> layoutFactory)
@@ -1869,6 +1887,7 @@ public static class Program
         Console.WriteLine("  --os-demo-dry-run \"text\"");
         Console.WriteLine("  --os-demo-smoke");
         Console.WriteLine("  --product-smoke");
+        Console.WriteLine("  --reference-composer-release-acceptance");
         Console.WriteLine("  --native-profiles-status");
         Console.WriteLine("  --native-profile-verify profile-id submit-binding newline-binding");
         Console.WriteLine("  --native-profile-verify-delay profile-id submit-binding newline-binding seconds");
