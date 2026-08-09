@@ -1437,8 +1437,13 @@ build. `--chatgpt-live-contract-arm` arms one explicit live capture; the
 resident `sent_safely` trace records the live proof and consumes the arm.
 `--chatgpt-protected-claim-status` and tray/local status publish `protected`
 only when both records match. Missing, malformed, stale, or mismatched proof
-remains degraded and suppresses Send. Automated coverage includes pairing,
-build/fingerprint mismatch, raw-free persistence, resident suppression, and
+remains degraded and suppresses Send. The native controller consumes the claim
+from the resident snapshot rather than reading proof files during input
+handling; the standalone CLI remains diagnostic-only and cannot claim resident
+protection. The stored live proof includes the validated raw-free terminal
+trace, while the release matrix validates canonical stage order and cleanup.
+Automated coverage includes pairing, build/fingerprint mismatch, raw-free
+persistence, resident suppression, complete trace validation, cleanup, and
 one-use live arm consumption.
 
 ## 309. Trace protected pointer Send through the resident operation

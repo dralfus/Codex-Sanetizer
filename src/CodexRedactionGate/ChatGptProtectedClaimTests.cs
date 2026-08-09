@@ -29,7 +29,13 @@ public sealed class ChatGptProtectedClaimTests
         var fingerprint = profile.CompatibilityEvidence!.VerificationId;
         var proofs = new ChatGptAcceptanceProofBundle(
             new ChatGptReferenceAcceptanceProof("test-build", fingerprint, true, "passed"),
-            new ChatGptLiveContractProof("test-build", fingerprint, "Ctrl+Enter", "sent_safely", true));
+            new ChatGptLiveContractProof(
+                "test-build",
+                fingerprint,
+                "Ctrl+Enter",
+                "sent_safely",
+                true,
+                CreateSafeTrace(fingerprint)));
 
         var result = ChatGptProtectedClaimEvaluator.Evaluate(profile, "test-build", proofs);
 
@@ -45,7 +51,13 @@ public sealed class ChatGptProtectedClaimTests
         var profile = CreateProfile();
         var proofs = new ChatGptAcceptanceProofBundle(
             new ChatGptReferenceAcceptanceProof(proofBuild, proofFingerprint, true, "passed"),
-            new ChatGptLiveContractProof(proofBuild, proofFingerprint, "Ctrl+Enter", "sent_safely", true));
+            new ChatGptLiveContractProof(
+                proofBuild,
+                proofFingerprint,
+                "Ctrl+Enter",
+                "sent_safely",
+                true,
+                CreateSafeTrace(proofFingerprint)));
 
         var result = ChatGptProtectedClaimEvaluator.Evaluate(profile, "test-build", proofs);
 
@@ -115,7 +127,13 @@ public sealed class ChatGptProtectedClaimTests
         var fingerprint = profile.CompatibilityEvidence!.VerificationId;
         var bundle = new ChatGptAcceptanceProofBundle(
             new ChatGptReferenceAcceptanceProof("test-build", fingerprint, true, "passed"),
-            new ChatGptLiveContractProof("test-build", fingerprint, "Ctrl+Enter", "sent_safely", true));
+            new ChatGptLiveContractProof(
+                "test-build",
+                fingerprint,
+                "Ctrl+Enter",
+                "sent_safely",
+                true,
+                CreateSafeTrace(fingerprint)));
 
         try
         {
@@ -123,10 +141,14 @@ public sealed class ChatGptProtectedClaimTests
             var loaded = ChatGptAcceptanceProofStore.Load(layout);
 
             Assert.That(loaded.Succeeded, Is.True);
-            Assert.That(loaded.Proofs, Is.EqualTo(bundle));
+            Assert.That(loaded.Proofs.Reference, Is.EqualTo(bundle.Reference));
+            Assert.That(loaded.Proofs.LiveContract, Is.Not.Null);
+            Assert.That(
+                loaded.Proofs.LiveContract!.Trace.Select(entry => entry.Stage),
+                Is.EqualTo(bundle.LiveContract!.Trace.Select(entry => entry.Stage)));
             var persisted = File.ReadAllText(ChatGptAcceptanceProofStore.DefaultPath(layout));
-            Assert.That(persisted, Does.Not.Contain("prompt"));
             Assert.That(persisted, Does.Not.Contain("secret"));
+            Assert.That(persisted, Does.Not.Contain("192.168.10.25"));
         }
         finally
         {
@@ -182,6 +204,10 @@ public sealed class ChatGptProtectedClaimTests
         var trace = new[]
         {
             new ProtectedSendTraceEntry(1, 1, fingerprint, "send_detected", "checking_prompt", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "target_matched", "target_verified", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "composer_read", "capture_verified", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "sanitized", "sanitization_verified", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "send_injected", "submit_requested", 1),
             new ProtectedSendTraceEntry(1, 1, fingerprint, "sent_safely", "submitted", 1)
         };
 
@@ -255,5 +281,18 @@ public sealed class ChatGptProtectedClaimTests
                 ["element_framework_id"] = "Chrome",
                 ["focused_element_hash"] = "composer-hash"
             });
+    }
+
+    private static IReadOnlyList<ProtectedSendTraceEntry> CreateSafeTrace(string fingerprint)
+    {
+        return new[]
+        {
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "send_detected", "checking_prompt", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "target_matched", "target_verified", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "composer_read", "capture_verified", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "sanitized", "sanitization_verified", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "send_injected", "submit_requested", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "sent_safely", "submitted", 1)
+        };
     }
 }

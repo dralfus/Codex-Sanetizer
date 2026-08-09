@@ -18,7 +18,8 @@ public sealed record ChatGptLiveContractProof(
     string FingerprintId,
     string SubmitBinding,
     string TerminalStatus,
-    bool Passed);
+    bool Passed,
+    IReadOnlyList<ProtectedSendTraceEntry> Trace);
 
 public sealed record ChatGptAcceptanceProofBundle(
     ChatGptReferenceAcceptanceProof? Reference,
@@ -74,7 +75,7 @@ public static class ChatGptProtectedClaimEvaluator
         }
 
         var fingerprintId = profile.CompatibilityEvidence.VerificationId;
-        if (!IsHexFingerprint(fingerprintId))
+        if (!ProtectedSendTrace.IsOpaqueFingerprint(fingerprintId))
         {
             return new ChatGptProtectedClaimResult(
                 OsInteractionStatusIds.SurfaceUnverified,
@@ -130,11 +131,10 @@ public static class ChatGptProtectedClaimEvaluator
         if (!string.Equals(profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
             || !profile.IsProtected
             || profile.CompatibilityEvidence is null
-            || !IsHexFingerprint(profile.CompatibilityEvidence.VerificationId)
+            || !ProtectedSendTrace.IsOpaqueFingerprint(profile.CompatibilityEvidence.VerificationId)
             || profile.SubmitBinding is null
             || trace.Count == 0
-            || trace[^1].Stage != "sent_safely"
-            || trace.Any(entry => !IsRawFreeTraceEntry(entry)))
+            || !ProtectedSendTrace.IsCompleteSafeSendTrace(trace))
         {
             return false;
         }
@@ -144,7 +144,8 @@ public static class ChatGptProtectedClaimEvaluator
             profile.CompatibilityEvidence.VerificationId,
             profile.SubmitBinding.DisplayText,
             "sent_safely",
-            Passed: true);
+            Passed: true,
+            Trace: trace.ToArray());
         return true;
     }
 
@@ -179,7 +180,9 @@ public static class ChatGptProtectedClaimEvaluator
             return MissingStatus;
         }
 
-        if (!proof.Passed || proof.TerminalStatus != "sent_safely")
+        if (!proof.Passed
+            || proof.TerminalStatus != "sent_safely"
+            || !ProtectedSendTrace.IsCompleteSafeSendTrace(proof.Trace))
         {
             return "failed";
         }
@@ -191,24 +194,6 @@ public static class ChatGptProtectedClaimEvaluator
             : "mismatch";
     }
 
-    private static bool IsRawFreeTraceEntry(ProtectedSendTraceEntry entry)
-    {
-        return IsSafeToken(entry.Stage)
-            && IsSafeToken(entry.ResultCode)
-            && IsHexFingerprint(entry.TargetFingerprint);
-    }
-
-    private static bool IsSafeToken(string value)
-    {
-        return !string.IsNullOrWhiteSpace(value)
-            && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_');
-    }
-
-    private static bool IsHexFingerprint(string value)
-    {
-        return value.Length == 64
-            && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
-    }
 }
 
 public static class ChatGptAcceptanceProofStore
@@ -319,7 +304,7 @@ public static class ChatGptAcceptanceProofStore
         ArgumentNullException.ThrowIfNull(profile);
         if (!string.Equals(profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
             || profile.CompatibilityEvidence is null
-            || !IsHexFingerprint(profile.CompatibilityEvidence.VerificationId)
+            || !ProtectedSendTrace.IsOpaqueFingerprint(profile.CompatibilityEvidence.VerificationId)
             || string.IsNullOrWhiteSpace(profile.SubmitBinding?.DisplayText))
         {
             return false;
@@ -390,15 +375,45 @@ public static class ChatGptAcceptanceProofStore
 
     private static bool IsValid(ChatGptAcceptanceProofBundle proofs)
     {
-        return (proofs.Reference is null || IsValid(proofs.Reference.BuildVersion, proofs.Reference.FingerprintId, proofs.Reference.TerminalStatus))
-            && (proofs.LiveContract is null || IsValid(proofs.LiveContract.BuildVersion, proofs.LiveContract.FingerprintId, proofs.LiveContract.TerminalStatus));
+        return (proofs.Reference is null || IsValid(
+            proofs.Reference.BuildVersion,
+            proofs.Reference.FingerprintId,
+            proofs.Reference.TerminalStatus))
+            && (proofs.LiveContract is null || IsValid(
+                proofs.LiveContract.BuildVersion,
+                proofs.LiveContract.FingerprintId,
+                proofs.LiveContract.SubmitBinding,
+                proofs.LiveContract.TerminalStatus,
+                proofs.LiveContract.Trace));
     }
 
     private static bool IsValid(string buildVersion, string fingerprintId, string status)
     {
         return IsSafeBuildVersion(buildVersion)
-            && IsHexFingerprint(fingerprintId)
+            && ProtectedSendTrace.IsOpaqueFingerprint(fingerprintId)
             && IsSafeStatus(status);
+    }
+
+    private static bool IsValid(
+        string buildVersion,
+        string fingerprintId,
+        string submitBinding,
+        string status,
+        IReadOnlyList<ProtectedSendTraceEntry>? trace)
+    {
+        return IsValid(buildVersion, fingerprintId, status)
+            && IsSafeBinding(submitBinding)
+            && trace is not null
+            && ProtectedSendTrace.IsCompleteSafeSendTrace(trace);
+    }
+
+    private static bool IsSafeBinding(string value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+            && value.All(character => character is >= 'a' and <= 'z'
+                or >= 'A' and <= 'Z'
+                or >= '0' and <= '9'
+                or '+' or '-');
     }
 
     private static bool IsSafeBuildVersion(string value)
@@ -416,9 +431,4 @@ public static class ChatGptAcceptanceProofStore
             && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.');
     }
 
-    private static bool IsHexFingerprint(string value)
-    {
-        return value.Length == 64
-            && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
-    }
 }

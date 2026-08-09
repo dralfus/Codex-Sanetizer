@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -275,7 +276,7 @@ internal static class ProtectedSendTrace
             || snapshotGeneration < 0
             || current.Count > 32
             || durationMilliseconds < 0
-            || !IsHexFingerprint(targetFingerprint)
+            || !IsOpaqueFingerprint(targetFingerprint)
             || !transition.IsValid)
         {
             return false;
@@ -333,7 +334,7 @@ internal static class ProtectedSendTrace
         };
     }
 
-    private static bool IsHexFingerprint(string value)
+    internal static bool IsOpaqueFingerprint(string value)
     {
         if (value.Length != 64)
         {
@@ -350,6 +351,69 @@ internal static class ProtectedSendTrace
         }
 
         return true;
+    }
+
+    internal static bool IsValidTerminalTrace(IReadOnlyList<ProtectedSendTraceEntry> trace)
+    {
+        if (trace is null || trace.Count < 5)
+        {
+            return false;
+        }
+
+        IReadOnlyList<ProtectedSendTraceEntry> rebuilt = Array.Empty<ProtectedSendTraceEntry>();
+        foreach (var entry in trace)
+        {
+            if (!TryAppend(
+                    rebuilt,
+                    entry.AttemptId,
+                    entry.SnapshotGeneration,
+                    entry.TargetFingerprint,
+                    entry.Stage,
+                    entry.ResultCode,
+                    entry.DurationMilliseconds,
+                    out rebuilt))
+            {
+                return false;
+            }
+        }
+
+        return rebuilt[0].Stage == "send_detected"
+            && rebuilt[1].Stage == "target_matched"
+            && rebuilt[2].Stage == "composer_read"
+            && rebuilt[3].Stage == "sanitized"
+            && rebuilt[^1].Stage is "sent_safely" or "terminal_blocked";
+    }
+
+    internal static bool IsCompleteSafeSendTrace(IReadOnlyList<ProtectedSendTraceEntry> trace)
+    {
+        if (!IsValidTerminalTrace(trace) || trace[^1].Stage != "sent_safely")
+        {
+            return false;
+        }
+
+        var stages = trace.Select(entry => entry.Stage).ToArray();
+        return stages.SequenceEqual(new[]
+                {
+                    "send_detected",
+                    "target_matched",
+                    "composer_read",
+                    "sanitized",
+                    "send_injected",
+                    "sent_safely"
+                })
+            || stages.SequenceEqual(new[]
+                {
+                    "send_detected",
+                    "target_matched",
+                    "composer_read",
+                    "sanitized",
+                    "overlay_created",
+                    "overlay_foreground_confirmed",
+                    "approved",
+                    "text_written",
+                    "send_injected",
+                    "sent_safely"
+                });
     }
 
 }

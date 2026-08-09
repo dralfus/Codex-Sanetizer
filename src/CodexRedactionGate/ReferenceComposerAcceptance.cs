@@ -46,7 +46,8 @@ internal sealed record ReferenceComposerAcceptanceReport(
     bool Submitted,
     IReadOnlyList<string> SentTexts,
     IReadOnlyList<ProtectedSendTraceEntry> Trace,
-    IReadOnlyDictionary<string, string> ReplayDiagnostics);
+    IReadOnlyDictionary<string, string> ReplayDiagnostics,
+    bool CleanupPassed);
 
 internal sealed record ReferenceComposerAcceptanceSmokeReport(
     bool SafePromptPassed,
@@ -88,7 +89,8 @@ internal static class ReferenceComposerAcceptanceRunner
                 Submitted: false,
                 SentTexts: Array.Empty<string>(),
                 Trace: Array.Empty<ProtectedSendTraceEntry>(),
-                ReplayDiagnostics: new Dictionary<string, string>());
+                ReplayDiagnostics: new Dictionary<string, string>(),
+                CleanupPassed: false);
         }
 
         ReferenceComposerAcceptanceReport? report = null;
@@ -96,6 +98,7 @@ internal static class ReferenceComposerAcceptanceRunner
         Action? abort = null;
         string lastAcceptanceStatus = "not_started";
         string lastAcceptanceTraceStage = "none";
+        var cleanupPassed = false;
         using var completed = new ManualResetEventSlim();
         var thread = new Thread(() =>
         {
@@ -218,7 +221,8 @@ internal static class ReferenceComposerAcceptanceRunner
                         state.LastSubmitted,
                         composer.SentTexts.ToArray(),
                         trace.ToArray(),
-                        replay.Diagnostics);
+                        replay.Diagnostics,
+                        CleanupPassed: false);
                     completed.Set();
                     if (composer.IsHandleCreated && !composer.IsDisposed)
                     {
@@ -246,7 +250,12 @@ internal static class ReferenceComposerAcceptanceRunner
                 finally
                 {
                     controller.Stop();
+                    cleanupPassed = !controller.State.Enabled
+                        && !controller.IsNativeSubmitHookReady;
                 }
+                report = report is null
+                    ? null
+                    : report with { CleanupPassed = cleanupPassed };
                 report ??= new ReferenceComposerAcceptanceReport(
                     hookStarted,
                     dispatch.SuppressOriginalInput,
@@ -254,7 +263,8 @@ internal static class ReferenceComposerAcceptanceRunner
                     Submitted: false,
                     composer.SentTexts.ToArray(),
                     controller.State.ProtectedSendAttemptTrace?.ToArray() ?? Array.Empty<ProtectedSendTraceEntry>(),
-                    replay.Diagnostics);
+                    replay.Diagnostics,
+                    cleanupPassed);
             }
             catch (Exception exception)
             {

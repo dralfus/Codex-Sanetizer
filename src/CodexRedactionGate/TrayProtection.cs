@@ -154,6 +154,7 @@ internal sealed class TrayProtectionController
             HookReady: false,
             sendControlDiscovery,
             surfaceDiscovery);
+        nativeSubmitController?.SetResidentProtectedClaimProvider(ReadResidentChatGptClaim);
     }
 
     // Explicit test seam for controller tests that do not construct the Windows orchestrator.
@@ -870,10 +871,7 @@ internal sealed class TrayProtectionController
                 SetupVerificationAction = previous.State.SetupVerificationAction,
                 SetupVerificationProfileId = previous.State.SetupVerificationProfileId,
                 SetupVerificationBinding = previous.State.SetupVerificationBinding,
-                SetupVerificationAttemptId = previous.State.SetupVerificationAttemptId,
-                ProtectedClaimStatus = previous.State.ProtectedClaimStatus,
-                ReferenceAcceptanceStatus = previous.State.ReferenceAcceptanceStatus,
-                LiveContractStatus = previous.State.LiveContractStatus
+                SetupVerificationAttemptId = previous.State.SetupVerificationAttemptId
             };
 
             return new ProtectionSnapshot(
@@ -2229,6 +2227,16 @@ internal sealed class TrayProtectionController
         return (
             ProjectFilesProtected: projectFileStatus == ProjectFileProtectionStatusValues.Protected,
             ProjectFileStatus: projectFileStatus);
+    }
+
+    private ChatGptProtectedClaimResult ReadResidentChatGptClaim()
+    {
+        var state = ReadSnapshot().State;
+        return new ChatGptProtectedClaimResult(
+            state.ProtectedClaimStatus,
+            state.ReferenceAcceptanceStatus,
+            state.LiveContractStatus,
+            "resident_snapshot");
     }
 
     private bool EnterprisePolicyBlocksDisable()

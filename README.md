@@ -224,9 +224,12 @@ raw-free trace and consumes the arm. Finally check the claim:
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --chatgpt-protected-claim-status
 ```
 
-The expected result is `status: protected`, `reference_acceptance: passed`,
-and `live_contract: passed`. If the ChatGPT build, pinned UI fingerprint, or
-Send binding changes, repeat both proofs before sending sensitive data.
+This CLI is deliberately diagnostic-only because a separate process cannot
+authoritatively read the resident snapshot. It must show
+`status: resident_state_unavailable`, `protected: false`, and the persisted
+evidence rows. Confirm the final `protected` state in the resident tray menu or
+the local protection status window. If the ChatGPT build, pinned UI fingerprint,
+or Send binding changes, repeat both proofs before sending sensitive data.
 
 `--os-demo-hotkey`, `--os-demo-hotkey-apply`, and `--os-demo-hotkey-send` are legacy/demo diagnostics. They are not the normal product flow.
 

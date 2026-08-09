@@ -141,7 +141,8 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                 report => report.HookStarted
                     && report.OriginalInputSuppressed
                     && report.Submitted
-                    && report.Trace.LastOrDefault()?.Stage == "sent_safely"
+                    && report.CleanupPassed
+                    && ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace)
                     && report.SentTexts.Count == 1),
             RunScenario($"{runId}.sensitive_prompt", () => ReferenceComposerAcceptanceRunner.Run(
                 CreateSanitizer(hmacSecret),
@@ -150,6 +151,8 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                 report => report.HookStarted
                     && report.OriginalInputSuppressed
                     && report.Submitted
+                    && report.CleanupPassed
+                    && ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace)
                     && report.Trace.Any(entry => entry.Stage == "overlay_foreground_confirmed")
                     && report.SentTexts.Count == 1
                     && !report.SentTexts[0].Contains("192.168.10.25", StringComparison.Ordinal)),
@@ -160,8 +163,9 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                 report => report.HookStarted
                     && report.OriginalInputSuppressed
                     && !report.Submitted
+                    && report.CleanupPassed
                     && report.SentTexts.Count == 0
-                    && report.Trace.LastOrDefault()?.Stage == "terminal_blocked"),
+                    && IsCompleteCancellationTrace(report.Trace)),
             RunScenario($"{runId}.foreground_refusal", () => ReferenceComposerAcceptanceRunner.Run(
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
@@ -211,14 +215,13 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
         {
             var report = run();
             var scenarioPassed = passed(report);
-            var rawFree = report.Trace.All(entry =>
-                entry.ResultCode.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
+            var rawFree = ProtectedSendTrace.IsValidTerminalTrace(report.Trace)
                 && report.SentTexts.All(text => !text.Contains(SensitivePrompt, StringComparison.Ordinal));
             return new ReferenceComposerReleaseScenarioResult(
                 scenarioId,
                 scenarioPassed,
                 rawFree,
-                CleanupPassed: true,
+                CleanupPassed: report.CleanupPassed,
                 Status: scenarioPassed ? "passed" : "failed_closed");
         }
         catch
@@ -238,8 +241,31 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
             && report.OriginalInputSuppressed
             && !report.Submitted
             && report.SentTexts.Count == 0
+            && report.CleanupPassed
+            && ProtectedSendTrace.IsValidTerminalTrace(report.Trace)
             && report.Trace.LastOrDefault()?.Stage == "terminal_blocked"
             && report.Trace.All(entry => entry.Stage != "sent_safely");
+    }
+
+    private static bool IsCompleteCancellationTrace(IReadOnlyList<ProtectedSendTraceEntry> trace)
+    {
+        if (!ProtectedSendTrace.IsValidTerminalTrace(trace))
+        {
+            return false;
+        }
+
+        var stages = trace.Select(entry => entry.Stage).ToArray();
+        return stages.SequenceEqual(new[]
+        {
+            "send_detected",
+            "target_matched",
+            "composer_read",
+            "sanitized",
+            "overlay_created",
+            "overlay_foreground_confirmed",
+            "cancelled",
+            "terminal_blocked"
+        });
     }
 
     private static bool ReplayFailureScenario(ReferenceComposerAcceptanceReport report)

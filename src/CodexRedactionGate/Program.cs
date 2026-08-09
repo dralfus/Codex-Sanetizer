@@ -1214,12 +1214,13 @@ public static class Program
         }
 
         var claim = ChatGptProtectedClaimEvaluator.Evaluate(profile, layout);
-        Console.WriteLine($"status: {SafeStatus(claim.Status)}");
+        Console.WriteLine("status: resident_state_unavailable");
+        Console.WriteLine("protected: false");
         Console.WriteLine($"reference_acceptance: {SafeStatus(claim.ReferenceStatus)}");
         Console.WriteLine($"live_contract: {SafeStatus(claim.LiveContractStatus)}");
-        Console.WriteLine($"reason: {SafeStatus(claim.Reason)}");
+        Console.WriteLine("reason: resident_tray_state_required");
         Console.WriteLine($"build_version: {SafeStatus(BuildVersion.Current)}");
-        return claim.Protected ? 0 : 1;
+        return 1;
     }
 
     private static int RunChatGptLiveContractArm(Func<DefaultStorageLayout> layoutFactory)

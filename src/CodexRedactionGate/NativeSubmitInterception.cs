@@ -713,6 +713,7 @@ public sealed class NativeSubmitInterceptionController
     private readonly NativeSubmitEnterprisePolicy _policy;
     private readonly Func<DateTimeOffset> _clock;
     private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
+    private Func<ChatGptProtectedClaimResult>? _residentProtectedClaimProvider;
     private readonly IFirstRunSetupController? _firstRunSetupController;
     private readonly DefaultStorageLayout? _setupLayout;
 
@@ -768,6 +769,12 @@ public sealed class NativeSubmitInterceptionController
         _activeSurfaceDiscovery = activeSurfaceDiscovery;
         _firstRunSetupController = firstRunSetupController;
         _setupLayout = setupLayout;
+    }
+
+    internal void SetResidentProtectedClaimProvider(
+        Func<ChatGptProtectedClaimResult>? provider)
+    {
+        _residentProtectedClaimProvider = provider;
     }
 
     public NativeSubmitInterceptionResult HandleButtonClick(
@@ -1029,7 +1036,9 @@ public sealed class NativeSubmitInterceptionController
             return null;
         }
 
-        var claim = ChatGptProtectedClaimEvaluator.Evaluate(_profile, _setupLayout);
+        var claim = _residentProtectedClaimProvider is null
+            ? ChatGptProtectedClaimEvaluator.Evaluate(_profile, _setupLayout)
+            : _residentProtectedClaimProvider();
         diagnostics["protected_claim_status"] = claim.Status;
         diagnostics["reference_acceptance_status"] = claim.ReferenceStatus;
         diagnostics["live_contract_status"] = claim.LiveContractStatus;
