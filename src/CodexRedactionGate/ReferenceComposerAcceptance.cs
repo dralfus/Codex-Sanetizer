@@ -13,6 +13,12 @@ internal enum ReferenceComposerDecision
     Cancel
 }
 
+internal enum ReferenceComposerForegroundMode
+{
+    Verified,
+    Refused
+}
+
 internal sealed record ReferenceComposerAcceptanceReport(
     bool HookStarted,
     bool OriginalInputSuppressed,
@@ -43,7 +49,8 @@ internal static class ReferenceComposerAcceptanceRunner
     internal static ReferenceComposerAcceptanceReport Run(
         ISanitizer sanitizer,
         string prompt,
-        ReferenceComposerDecision decision)
+        ReferenceComposerDecision decision,
+        ReferenceComposerForegroundMode foregroundMode = ReferenceComposerForegroundMode.Verified)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(prompt);
@@ -86,7 +93,8 @@ internal static class ReferenceComposerAcceptanceRunner
                             window.Cancel();
                         }
                     },
-                    new WindowsConfirmationOverlay.FixedForegroundNativeMethods(foregroundActivated: true));
+                    new WindowsConfirmationOverlay.FixedForegroundNativeMethods(
+                        foregroundActivated: foregroundMode == ReferenceComposerForegroundMode.Verified));
 
                 var adapter = new WindowsVerifiedComposerSurfaceAdapter(
                     new ReferenceComposerTextAccess(composer, discovery.DiscoverActiveSurface));

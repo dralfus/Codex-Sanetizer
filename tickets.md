@@ -1198,8 +1198,8 @@ goes directly to the terminal blocked outcome.
 foreground validation seam without sleeps, then asserts suppression, no sent
 text, raw-free terminal trace, and cleanup.
 
-- [ ] Foreground refusal produces a raw-free terminal blocked trace and no Send.
-- [ ] The fixture releases its hook, overlay dispatcher, reference capability,
+- [x] Foreground refusal produces a raw-free terminal blocked trace and no Send.
+- [x] The fixture releases its hook, overlay dispatcher, reference capability,
   and windows after the refusal.
 
 ## 318. Prove target change blocks a reference-composer attempt
