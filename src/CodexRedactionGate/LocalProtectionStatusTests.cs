@@ -278,14 +278,17 @@ public sealed class LocalProtectionStatusTests
         Assert.That(degradedView.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.RetryPromptProtection));
     }
 
-    [Test]
-    public void StatusView_ExplainsFingerprintMismatchAsUnsupportedAndOffersVerification()
+    [TestCase(OsInteractionStatusIds.SurfaceUnverified, OsInteractionStatusIds.Protected)]
+    [TestCase(OsInteractionStatusIds.Protected, OsInteractionStatusIds.SurfaceUnverified)]
+    public void StatusView_ExplainsFingerprintMismatchAsUnsupportedAndOffersVerification(
+        string nativeSubmitStatus,
+        string readinessStatus)
     {
         var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
         {
             NativeSubmitEnabled = false,
-            NativeSubmitStatus = OsInteractionStatusIds.SurfaceUnverified,
-            ReadinessStatus = OsInteractionStatusIds.SurfaceUnverified,
+            NativeSubmitStatus = nativeSubmitStatus,
+            ReadinessStatus = readinessStatus,
             ComposerProtected = false
         });
 

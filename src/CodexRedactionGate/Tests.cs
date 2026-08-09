@@ -6248,7 +6248,7 @@ public class CliTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            Program.NativeProfileDiscoveryFactory = () => TextSurfaceDiscoveryResult.Success(CreateCliNativeSubmitSurface("chatgpt-desktop"));
+            Program.NativeProfileDiscoveryFactory = CreateCliChatGptDiscovery;
 
             var (exitCode, stdout, stderr) = RunCli(
                 layout,
@@ -6685,6 +6685,29 @@ public class CliTests
                 SurfaceKind: "test",
                 CloudSubmission: "false",
                 ComposerStatus: OsInteractionStatusIds.SupportedComposer));
+    }
+
+    private static TextSurfaceDiscoveryResult CreateCliChatGptDiscovery()
+    {
+        return TextSurfaceDiscoveryResult.Success(
+            CreateCliNativeSubmitSurface("chatgpt-desktop"),
+            new Dictionary<string, string>
+            {
+                ["application_identity_hash"] = "cli-application-hash",
+                ["application_version_hash"] = "cli-version-hash",
+                ["application_version_status"] = "available",
+                ["package_full_name_hash"] = "cli-package-hash",
+                ["executable_name_hash"] = "cli-executable-hash",
+                ["process_name_hash"] = "cli-process-hash",
+                ["window_identity_hash"] = "cli-window-hash",
+                ["window_class_hash"] = "cli-window-class-hash",
+                ["composer_class_hash"] = "cli-composer-class-hash",
+                ["element_control_type"] = "ControlType.Group",
+                ["element_framework_id"] = "Chrome",
+                ["focused_element_hash"] = "cli-composer-hash",
+                [SendControlEvidence.AutomationIdHashKey] = "cli-send-automation-hash",
+                [SendControlEvidence.NameHashKey] = "cli-send-name-hash"
+            });
     }
 
     private static SanitizeRequest CreateCliPromptRequest(string text)

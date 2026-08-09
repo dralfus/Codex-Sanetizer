@@ -8,6 +8,38 @@ using CodexRedactionGate;
 
 public partial class SanitizerTests
 {
+    internal static TextSurfaceDiscoveryResult CreateVerifiedChatGptDiscovery()
+    {
+        return TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"), new Dictionary<string, string>
+        {
+            ["application_identity_hash"] = "test-application-hash",
+            ["application_version_hash"] = "test-version-hash",
+            ["application_version_status"] = "available",
+            ["package_full_name_hash"] = "test-package-hash",
+            ["executable_name_hash"] = "test-executable-hash",
+            ["process_name_hash"] = "test-process-hash",
+            ["window_identity_hash"] = "test-window-hash",
+            ["window_class_hash"] = "test-window-class-hash",
+            ["composer_class_hash"] = "test-composer-class-hash",
+            ["element_control_type"] = "ControlType.Group",
+            ["element_framework_id"] = "Chrome",
+            ["focused_element_hash"] = "test-composer-hash",
+            [SendControlEvidence.AutomationIdHashKey] = "test-send-automation-hash",
+            [SendControlEvidence.NameHashKey] = "test-send-name-hash"
+        });
+    }
+
+    internal static SubmitBindingProfile CreateVerifiedChatGptProfile(
+        string submitBinding = "Ctrl+Enter",
+        string newlineBinding = "Enter")
+    {
+        return SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            submitBinding,
+            newlineBinding,
+            CreateVerifiedChatGptDiscovery());
+    }
+
     internal static TextSurfaceDescriptor CreateNativeSubmitSurface(string profileId)
     {
         return TestSurfaceFactory.CreateNativeSubmitSurface(profileId);
@@ -2399,7 +2431,7 @@ public partial class SanitizerTests
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
             var controller = new FirstRunSetupController(
-                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"))),
+                new StaticFirstRunProfileVerifier(CreateVerifiedChatGptDiscovery()),
                 (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by focused verification."));
 
             var result = controller.VerifyFocusedProfile("Ctrl+Enter", "Enter", layout);
@@ -2431,7 +2463,7 @@ public partial class SanitizerTests
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
             var controller = new FirstRunSetupController(
-                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"))),
+                new StaticFirstRunProfileVerifier(CreateVerifiedChatGptDiscovery()),
                 (_, setupLayout, setupController) =>
                 {
                     var focusedController = (IFocusedProfileSetupController)setupController;
@@ -2464,7 +2496,7 @@ public partial class SanitizerTests
             var progress = new List<PromptProtectionSetupProgress>();
             var layout = DefaultStorageLayout.Create(tempDirectory);
             var controller = new FirstRunSetupController(
-                new StaticFirstRunProfileVerifier(TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"))),
+                new StaticFirstRunProfileVerifier(CreateVerifiedChatGptDiscovery()),
                 (_, _, _) => throw new InvalidOperationException("Setup window should not be shown by focused verification."),
                 setupProgressPublisher: progress.Add);
 
@@ -3044,7 +3076,7 @@ public partial class SanitizerTests
         // Verify setup-required only suppresses the selected profile's verified submit binding
         var setup = FixedFirstRunSetupController.RequiredFor("codex-desktop", "chatgpt-desktop");
         var codexProfile = CreateProtectedProfile();
-        var chatgptProfile = CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" };
+        var chatgptProfile = CreateVerifiedChatGptProfile();
 
         var codexController = new NativeSubmitInterceptionController(
             codexProfile,
@@ -3055,7 +3087,7 @@ public partial class SanitizerTests
         var chatgptController = new NativeSubmitInterceptionController(
             chatgptProfile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")),
+            activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery,
             firstRunSetupController: setup);
 
         // Codex (matching profile) should be suppressed
@@ -4582,7 +4614,7 @@ public class HandleButtonClickTests : SanitizerTests
     {
         var hook = new FakeNativeSubmitHookHost();
         var codexProfile = CreateProtectedProfile() with { ProfileId = "codex-desktop" };
-        var chatGptProfile = CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" };
+        var chatGptProfile = CreateVerifiedChatGptProfile();
         var codexCalls = 0;
         var chatGptCalls = 0;
         var runtimes = new[]
@@ -4600,7 +4632,7 @@ public class HandleButtonClickTests : SanitizerTests
             NativeSubmitRuntime.CreateTest(
                 hook,
                 new NativeSubmitInterceptionController(chatGptProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-                    activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"))),
+                    activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery),
                 () =>
                 {
                     chatGptCalls++;
@@ -4615,7 +4647,7 @@ public class HandleButtonClickTests : SanitizerTests
             runtimes[0].Controller,
             runtimes[0].Profile,
             nativeSubmitRuntimes: runtimes,
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
+            activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery);
 
         controller.Start();
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
@@ -4635,7 +4667,7 @@ public class HandleButtonClickTests : SanitizerTests
             BindingSource = "not_verified",
             CapabilityStatus = OsInteractionStatusIds.BindingUnknown
         };
-        var chatGptProfile = CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" };
+        var chatGptProfile = CreateVerifiedChatGptProfile();
         var chatGptCalls = 0;
         var runtimes = new[]
         {
@@ -4646,7 +4678,10 @@ public class HandleButtonClickTests : SanitizerTests
                 codexProfile),
             NativeSubmitRuntime.CreateTest(
                 hook,
-                new NativeSubmitInterceptionController(chatGptProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                new NativeSubmitInterceptionController(
+                    chatGptProfile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                    activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery),
                 () =>
                 {
                     chatGptCalls++;
@@ -4661,7 +4696,7 @@ public class HandleButtonClickTests : SanitizerTests
             runtimes[0].Controller,
             runtimes[0].Profile,
             nativeSubmitRuntimes: runtimes,
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
+            activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery);
 
         Assert.That(controller.Start(), Is.True);
         hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
@@ -4769,6 +4804,84 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(controller.State, Is.EqualTo(before.State));
         Assert.That(oldHook.Started, Is.True);
         Assert.That(failedHook.Started, Is.False);
+    }
+
+    [Test]
+    public void ChatGptFingerprint_IsPublishedBeforeCandidateProfilePersistence()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var candidateHook = new FakeNativeSubmitHookHost();
+        var oldFingerprint = new SurfaceCompatibilityEvidence(
+            "old-app", "old-package", "old-version", "old-exe", "old-process", "old-window",
+            "Chrome", "Group", "old-composer", "old-verification", DateTimeOffset.UtcNow,
+            "Ctrl+Enter", "Enter", "old-send");
+        var candidateFingerprint = oldFingerprint with
+        {
+            PackageVersion = "candidate-version",
+            VerificationId = "candidate-verification"
+        };
+        var oldProfile = CreateProtectedProfile() with
+        {
+            ProfileId = "chatgpt-desktop",
+            CompatibilityEvidence = oldFingerprint
+        };
+        var candidateProfile = oldProfile with { CompatibilityEvidence = candidateFingerprint };
+        var controller = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            new NativeSubmitInterceptionController(oldProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(oldProfile.ProfileId),
+            oldProfile);
+        var candidateRuntime = NativeSubmitRuntime.CreateTest(
+            candidateHook,
+            new NativeSubmitInterceptionController(candidateProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(candidateProfile.ProfileId),
+            candidateProfile);
+
+        Assert.That(controller.Start(), Is.True);
+        Assert.That(controller.ReloadNativeSubmit(candidateRuntime), Is.True);
+        Assert.That(
+            controller.GetCurrentSnapshot().RuntimeSet!.Runtimes.Single().Profile.CompatibilityEvidence,
+            Is.EqualTo(candidateFingerprint));
+    }
+
+    [Test]
+    public void ChatGptFingerprint_FailedCandidateActivationPreservesPriorPublishedFingerprint()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var failedHook = new FakeNativeSubmitHookHost { StartResult = false };
+        var oldFingerprint = new SurfaceCompatibilityEvidence(
+            "old-app", "old-package", "old-version", "old-exe", "old-process", "old-window",
+            "Chrome", "Group", "old-composer", "old-verification", DateTimeOffset.UtcNow,
+            "Ctrl+Enter", "Enter", "old-send");
+        var candidateFingerprint = oldFingerprint with { VerificationId = "candidate-verification" };
+        var oldProfile = CreateProtectedProfile() with
+        {
+            ProfileId = "chatgpt-desktop",
+            CompatibilityEvidence = oldFingerprint
+        };
+        var candidateProfile = oldProfile with { CompatibilityEvidence = candidateFingerprint };
+        var controller = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            new NativeSubmitInterceptionController(oldProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(oldProfile.ProfileId),
+            oldProfile);
+        var failedRuntime = NativeSubmitRuntime.CreateTest(
+            failedHook,
+            new NativeSubmitInterceptionController(candidateProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(candidateProfile.ProfileId),
+            candidateProfile);
+
+        Assert.That(controller.Start(), Is.True);
+        var before = controller.GetCurrentSnapshot();
+        Assert.That(controller.ReloadNativeSubmit(failedRuntime), Is.False);
+        Assert.That(controller.GetCurrentSnapshot(), Is.SameAs(before));
+        Assert.That(
+            controller.GetCurrentSnapshot().RuntimeSet!.Runtimes.Single().Profile.CompatibilityEvidence,
+            Is.EqualTo(oldFingerprint));
     }
 
     [Test]
@@ -5196,20 +5309,12 @@ public class HandleButtonClickTests : SanitizerTests
     public void HandleButtonClick_UsesSubmitBindingCtrlEnterFromProfile()
     {
         // Test with Ctrl+Enter as Send / Enter as newline
-        var profile = new SubmitBindingProfile(
-            "chatgpt-desktop",
-            Enabled: true,
-            BindingSource: "user_verified",
-            SubmitBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
-            NewlineBinding: SubmitKeyBinding.Parse("Enter").Binding!,
-            CapabilityStatus: OsInteractionStatusIds.Protected,
-            CompatibilityEvidence: null,
-            Diagnostics: new Dictionary<string, string>());
+        var profile = CreateVerifiedChatGptProfile();
 
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")),
+            activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery,
             firstRunSetupController: null);
 
         var activeSurface = TestSurfaceFactory.CreateTestSurface("chatgpt-desktop");
@@ -5370,15 +5475,7 @@ public class NativeSendBindingSelectionTests : SanitizerTests
             var layout = DefaultStorageLayout.Create(tempDirectory);
 
             // Create profile with Ctrl+Enter as Send, Enter as newline
-            var profile = new SubmitBindingProfile(
-                "chatgpt-desktop",
-                Enabled: true,
-                BindingSource: "user_verified",
-                SubmitBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
-                NewlineBinding: SubmitKeyBinding.Parse("Enter").Binding!,
-                CapabilityStatus: OsInteractionStatusIds.Protected,
-                CompatibilityEvidence: null,
-                Diagnostics: new Dictionary<string, string>());
+            var profile = CreateVerifiedChatGptProfile();
 
             SubmitBindingProfileStore.Save(layout, new[] { profile });
 
@@ -5433,20 +5530,12 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
     public void NativeSubmitBindingScope_CtrlEnterAsSend_EnterAsNewline()
     {
         // With Ctrl+Enter configured as Send, ordinary Enter passes through as newline
-        var profile = new SubmitBindingProfile(
-            "chatgpt-desktop",
-            Enabled: true,
-            BindingSource: "user_verified",
-            SubmitBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
-            NewlineBinding: SubmitKeyBinding.Parse("Enter").Binding!,
-            CapabilityStatus: OsInteractionStatusIds.Protected,
-            CompatibilityEvidence: null,
-            Diagnostics: new Dictionary<string, string>());
+        var profile = CreateVerifiedChatGptProfile();
 
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")));
+            activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery);
 
         // Ordinary Enter should pass through as newline (matches NewlineBinding)
         var enter = controller.HandleGesture(new NativeKeyGesture("Enter"));

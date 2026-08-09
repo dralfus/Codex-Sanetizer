@@ -30,6 +30,50 @@ public sealed class ChatGptDesktopCompatibilityTests
     }
 
     [Test]
+    public void ActiveSendControlEvidence_IsRequiredToMatchPinnedFingerprint()
+    {
+        var discovery = VerifiedChatGptDiscovery();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", discovery);
+        var changedDiagnostics = new Dictionary<string, string>(discovery.Diagnostics, StringComparer.Ordinal)
+        {
+            [SendControlEvidence.AutomationIdHashKey] = "changed-send-control"
+        };
+        var changedDiscovery = discovery with { Diagnostics = changedDiagnostics };
+
+        var result = SurfaceCompatibilityEvaluator.Evaluate(
+            profile,
+            changedDiscovery.Surface!,
+            ChatGptDesktopCompatibility.ActiveEvidence(profile, changedDiscovery));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(result.Diagnostics["mismatch_reason"], Does.Contain("send_control"));
+    }
+
+    [Test]
+    public void IdentifiedSendControl_UsesLiveEvidenceForProtectedSubmit()
+    {
+        var discovery = VerifiedChatGptDiscovery();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", discovery);
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
+
+        var accepted = controller.HandleIdentifiedSendControl(discovery);
+        var changedDiagnostics = new Dictionary<string, string>(discovery.Diagnostics, StringComparer.Ordinal)
+        {
+            [SendControlEvidence.NameHashKey] = "changed-send-control"
+        };
+        var changed = controller.HandleIdentifiedSendControl(
+            discovery with { Diagnostics = changedDiagnostics });
+
+        Assert.That(accepted.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+        Assert.That(changed.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(changed.SuppressOriginalInput, Is.True);
+    }
+
+    [Test]
     public void VerifyUserBindings_LeavesChatGptUnsupportedWhenFingerprintEvidenceIsIncomplete()
     {
         var discovery = VerifiedChatGptDiscovery() with
@@ -64,15 +108,25 @@ public sealed class ChatGptDesktopCompatibilityTests
     {
         var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "chatgpt-desktop", "Ctrl+Enter", "Enter", VerifiedChatGptDiscovery());
+        profile = profile with
+        {
+            CompatibilityEvidence = profile.CompatibilityEvidence! with
+            {
+                PackageFamilyName = "ChatGPT secret C:\\private\\prompt.txt",
+                ComposerClassName = "Button Name: Send"
+            }
+        };
         var rendered = string.Join("\n", profile.ToRawFreeDiagnostics().Select(pair => $"{pair.Key}={pair.Value}"));
 
         Assert.That(rendered, Does.Not.Contain("ChatGPT"));
         Assert.That(rendered, Does.Not.Contain("secret"));
         Assert.That(rendered, Does.Not.Contain("C:\\"));
+        Assert.That(rendered, Does.Not.Contain("prompt.txt"));
+        Assert.That(rendered, Does.Not.Contain("Button Name"));
     }
 
     [Test]
-    public void PinnedFingerprint_SurvivesAtomicProfilePersistence()
+    public void PinnedFingerprint_PersistsAcrossProfileStoreRoundTrip()
     {
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-fingerprint-tests", Guid.NewGuid().ToString("N"));
         var layout = DefaultStorageLayout.Create(directory);
@@ -111,10 +165,17 @@ public sealed class ChatGptDesktopCompatibilityTests
             ["application_identity_hash"] = "application-hash",
             ["application_version_hash"] = "version-hash",
             ["application_version_status"] = "available",
+            ["package_full_name_hash"] = "package-hash",
+            ["executable_name_hash"] = "executable-hash",
+            ["process_name_hash"] = "process-hash",
             ["window_identity_hash"] = "window-hash",
+            ["window_class_hash"] = "window-class-hash",
+            ["composer_class_hash"] = "composer-class-hash",
             ["element_control_type"] = "ControlType.Group",
             ["element_framework_id"] = "Chrome",
-            ["focused_element_hash"] = "composer-hash"
+            ["focused_element_hash"] = "composer-hash",
+            [SendControlEvidence.AutomationIdHashKey] = "send-automation-hash",
+            [SendControlEvidence.NameHashKey] = "send-name-hash"
         });
     }
 }

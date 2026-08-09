@@ -196,41 +196,37 @@ public sealed record SurfaceCompatibilityEvidence(
 {
     public IReadOnlyDictionary<string, string> ToRawFreeDiagnostics()
     {
-        return new Dictionary<string, string>(StringComparer.Ordinal)
+        var diagnostics = new Dictionary<string, string>(ToComparisonDiagnostics(), StringComparer.Ordinal)
         {
-            ["package_family_name"] = PackageFamilyName,
-            ["package_version"] = PackageVersion,
-            ["executable_name"] = ExecutableName,
-            ["process_name"] = ProcessName,
-            ["window_class_name_length"] = WindowClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["framework_id"] = FrameworkId,
-            ["control_type"] = ControlType,
-            ["composer_class_name_length"] = ComposerClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["submit_binding"] = SubmitBinding,
-            ["newline_binding"] = NewlineBinding,
-            ["send_control_evidence_hash"] = SendControlEvidenceHash,
-            ["verification_id"] = VerificationId,
+            ["verification_id"] = Opaque(VerificationId),
             ["verified_at_utc"] = VerifiedAtUtc.ToString("O")
         };
+        return diagnostics;
     }
 
     public IReadOnlyDictionary<string, string> ToComparisonDiagnostics()
     {
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["package_family_name"] = PackageFamilyName,
-            ["package_full_name_pattern"] = PackageFullNamePattern,
-            ["package_version"] = PackageVersion,
-            ["executable_name"] = ExecutableName,
-            ["process_name"] = ProcessName,
-            ["window_class_name_length"] = WindowClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["framework_id"] = FrameworkId,
-            ["control_type"] = ControlType,
-            ["composer_class_name_length"] = ComposerClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["package_family_name"] = Opaque(PackageFamilyName),
+            ["package_full_name_pattern"] = Opaque(PackageFullNamePattern),
+            ["package_version"] = Opaque(PackageVersion),
+            ["executable_name"] = Opaque(ExecutableName),
+            ["process_name"] = Opaque(ProcessName),
+            ["window_class_name"] = Opaque(WindowClassName),
+            ["framework_id"] = Opaque(FrameworkId),
+            ["control_type"] = Opaque(ControlType),
+            ["composer_class_name"] = Opaque(ComposerClassName),
             ["submit_binding"] = SubmitBinding,
             ["newline_binding"] = NewlineBinding,
-            ["send_control_evidence_hash"] = SendControlEvidenceHash
+            ["send_control_evidence_hash"] = Opaque(SendControlEvidenceHash)
         };
+    }
+
+    private static string Opaque(string value)
+    {
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 }
 
@@ -541,7 +537,7 @@ public static class SubmitBindingOnboardingVerifier
         if (string.Equals(profileId, "chatgpt-desktop", StringComparison.Ordinal)
             && evidence is null)
         {
-            if (!ChatGptDesktopCompatibility.TryCreate(profile, discovery, out var compatibilityEvidence))
+            if (!ChatGptDesktopCompatibility.TryCreate(profile, discovery, discovery.Diagnostics, out var compatibilityEvidence))
             {
                 diagnostics["compatibility"] = "fingerprint_incomplete";
                 return Failed(profileId, OsInteractionStatusIds.SurfaceUnverified, diagnostics, null);
@@ -777,7 +773,8 @@ public sealed class NativeSubmitInterceptionController
     public NativeSubmitInterceptionResult HandleButtonClick(
         TextSurfaceDescriptor activeSurface,
         Func<OsInteractionResult>? submitFlow = null,
-        bool hookHealthy = true)
+        bool hookHealthy = true,
+        TextSurfaceDiscoveryResult? activeSurfaceDiscovery = null)
     {
         ArgumentNullException.ThrowIfNull(activeSurface);
 
@@ -851,7 +848,11 @@ public sealed class NativeSubmitInterceptionController
                 });
         }
 
-        return HandleGesture(_profile.SubmitBinding.ToNativeKeyGesture(), submitFlow, hookHealthy);
+        return HandleGesture(
+            _profile.SubmitBinding.ToNativeKeyGesture(),
+            submitFlow,
+            hookHealthy,
+            activeSurfaceDiscovery);
     }
 
     public NativeSubmitInterceptionResult HandleIdentifiedSendControl(
@@ -885,7 +886,7 @@ public sealed class NativeSubmitInterceptionController
                 });
         }
 
-        return HandleButtonClick(composerDiscovery.Surface, submitFlow, hookHealthy);
+        return HandleButtonClick(composerDiscovery.Surface, submitFlow, hookHealthy, composerDiscovery);
     }
 
     public NativeSubmitInterceptionResult HandleGesture(
@@ -1181,6 +1182,15 @@ public sealed class NativeSubmitInterceptionController
         {
             diagnostics["pass_through_reason"] = "active_surface_cannot_submit";
             return PassThrough(diagnostics);
+        }
+
+        // Setup and capability gates own unprotected profiles. Compatibility
+        // evidence is meaningful only after a resident protected profile exists;
+        // checking it earlier would mask setup_required/binding_unknown with a
+        // surface mismatch.
+        if (!_profile.IsProtected)
+        {
+            return null;
         }
 
         var compatibility = SurfaceCompatibilityEvaluator.Evaluate(
@@ -2395,7 +2405,21 @@ public static class NativeSubmitProductSmokeRunner
         var discovery2 = TextSurfaceDiscoveryResult.Success(surface2, new Dictionary<string, string>
         {
             ["surface_kind"] = "disposable_local_target",
-            ["cloud_submission"] = "false"
+            ["cloud_submission"] = "false",
+            ["application_identity_hash"] = "smoke-application-hash",
+            ["application_version_hash"] = "smoke-version-hash",
+            ["application_version_status"] = "available",
+            ["package_full_name_hash"] = "smoke-package-hash",
+            ["executable_name_hash"] = "smoke-executable-hash",
+            ["process_name_hash"] = "smoke-process-hash",
+            ["window_identity_hash"] = "smoke-window-hash",
+            ["window_class_hash"] = "smoke-window-class-hash",
+            ["composer_class_hash"] = "smoke-composer-class-hash",
+            ["element_control_type"] = "ControlType.Group",
+            ["element_framework_id"] = "Chrome",
+            ["focused_element_hash"] = "smoke-composer-hash",
+            [SendControlEvidence.AutomationIdHashKey] = "smoke-send-automation-hash",
+            [SendControlEvidence.NameHashKey] = "smoke-send-name-hash"
         });
         var profile2 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "chatgpt-desktop",

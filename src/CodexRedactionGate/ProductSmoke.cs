@@ -11,6 +11,29 @@ public static class SmokeSurfaceFactory
     {
         return TestSurfaceFactory.CreateSmokeNativeSubmitSurface(profileId);
     }
+
+    public static TextSurfaceDiscoveryResult CreateVerifiedChatGptDiscovery()
+    {
+        return TextSurfaceDiscoveryResult.Success(
+            CreateSmokeNativeSubmitSurface("chatgpt-desktop"),
+            new Dictionary<string, string>
+            {
+                ["application_identity_hash"] = "smoke-application-hash",
+                ["application_version_hash"] = "smoke-version-hash",
+                ["application_version_status"] = "available",
+                ["package_full_name_hash"] = "smoke-package-hash",
+                ["executable_name_hash"] = "smoke-executable-hash",
+                ["process_name_hash"] = "smoke-process-hash",
+                ["window_identity_hash"] = "smoke-window-hash",
+                ["window_class_hash"] = "smoke-window-class-hash",
+                ["composer_class_hash"] = "smoke-composer-class-hash",
+                ["element_control_type"] = "ControlType.Group",
+                ["element_framework_id"] = "Chrome",
+                ["focused_element_hash"] = "smoke-composer-hash",
+                [SendControlEvidence.AutomationIdHashKey] = "smoke-send-automation-hash",
+                [SendControlEvidence.NameHashKey] = "smoke-send-name-hash"
+            });
+    }
 }
 
 public sealed record ProductSmokeReport(
@@ -186,7 +209,7 @@ public static class ProductSmokeRunner
             "chatgpt-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("chatgpt-desktop")));
+            SmokeSurfaceFactory.CreateVerifiedChatGptDiscovery());
         var mismatchVerification = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "codex-desktop",
             "Enter",

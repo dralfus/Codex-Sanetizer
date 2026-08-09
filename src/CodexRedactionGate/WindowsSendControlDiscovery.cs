@@ -241,6 +241,14 @@ internal sealed class WindowsSendControlDiscovery : ISendControlDiscovery
                 });
         }
 
+        if (_persistedEvidence.TryGetValue(match.Profile.ProfileId, out var sendControlEvidence))
+        {
+            composer = composer with
+            {
+                Diagnostics = Merge(composer.Diagnostics, sendControlEvidence)
+            };
+        }
+
         return new SendControlDiscoveryResult(SendControlClassification.IdentifiedSend, composer);
     }
 
@@ -343,6 +351,19 @@ internal sealed class WindowsSendControlDiscovery : ISendControlDiscovery
         }
 
         return false;
+    }
+
+    private static IReadOnlyDictionary<string, string> Merge(
+        IReadOnlyDictionary<string, string> first,
+        IReadOnlyDictionary<string, string> second)
+    {
+        var merged = new Dictionary<string, string>(first, StringComparer.Ordinal);
+        foreach (var item in second)
+        {
+            merged[item.Key] = item.Value;
+        }
+
+        return merged;
     }
 
     private static IntPtr FindOwningWindow(AutomationElement element)

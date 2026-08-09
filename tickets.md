@@ -1383,13 +1383,13 @@ binding, and Send-control evidence exercise full match, one-field mismatch,
 missing evidence, and atomic fingerprint replacement without desktop focus,
 timers, or cloud access.
 
-- [ ] The setup and status flows display a raw-free supported or unsupported
+- [x] The setup and status flows display a raw-free supported or unsupported
   result for the exact ChatGPT Desktop fingerprint.
-- [ ] Each fingerprint field participates in verification; a changed field
+- [x] Each fingerprint field participates in verification; a changed field
   blocks protection rather than silently matching a broader surface.
-- [ ] A verified fingerprint is activated and persisted only after its resident
+- [x] A verified fingerprint is activated and persisted only after its resident
   runtime is active; failed updates preserve the prior protected runtime.
-- [ ] Tests prove no prompt text, sensitive values, paths, UI names, or exception
+- [x] Tests prove no prompt text, sensitive values, paths, UI names, or exception
   details are stored or shown with compatibility evidence.
 
 ## 308. Gate the ChatGPT Desktop protected claim on both acceptance proofs

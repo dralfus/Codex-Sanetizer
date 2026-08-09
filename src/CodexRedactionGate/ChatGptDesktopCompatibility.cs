@@ -15,6 +15,11 @@ internal static class ChatGptDesktopCompatibility
         "application_identity_hash",
         "application_version_hash",
         "application_version_status",
+        "package_full_name_hash",
+        "executable_name_hash",
+        "process_name_hash",
+        "window_class_hash",
+        "composer_class_hash",
         "window_identity_hash",
         "element_control_type",
         "element_framework_id",
@@ -39,6 +44,7 @@ internal static class ChatGptDesktopCompatibility
     public static bool TryCreate(
         SubmitBindingProfile profile,
         TextSurfaceDiscoveryResult discovery,
+        IReadOnlyDictionary<string, string>? activeSendEvidence,
         out SurfaceCompatibilityEvidence? evidence)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -58,19 +64,19 @@ internal static class ChatGptDesktopCompatibility
 
         evidence = new SurfaceCompatibilityEvidence(
             discovery.Diagnostics["application_identity_hash"],
+            discovery.Diagnostics["package_full_name_hash"],
             discovery.Diagnostics["application_version_hash"],
-            discovery.Diagnostics["application_version_hash"],
-            discovery.Diagnostics["application_identity_hash"],
-            discovery.Diagnostics["application_identity_hash"],
-            discovery.Diagnostics["window_identity_hash"],
+            discovery.Diagnostics["executable_name_hash"],
+            discovery.Diagnostics["process_name_hash"],
+            discovery.Diagnostics["window_class_hash"],
             discovery.Diagnostics["element_framework_id"],
             discovery.Diagnostics["element_control_type"],
-            discovery.Diagnostics["focused_element_hash"],
+            discovery.Diagnostics["composer_class_hash"],
             CreateVerificationId(discovery.Diagnostics),
             DateTimeOffset.UtcNow,
             profile.SubmitBinding.DisplayText,
             profile.NewlineBinding.DisplayText,
-            FingerprintSendControl(profile.Diagnostics));
+            FingerprintSendControl(activeSendEvidence ?? profile.Diagnostics));
         return true;
     }
 
@@ -78,7 +84,7 @@ internal static class ChatGptDesktopCompatibility
         SubmitBindingProfile profile,
         TextSurfaceDiscoveryResult discovery)
     {
-        return TryCreate(profile, discovery, out var evidence) && evidence is not null
+        return TryCreate(profile, discovery, discovery.Diagnostics, out var evidence) && evidence is not null
             ? evidence.ToComparisonDiagnostics()
             : null;
     }
