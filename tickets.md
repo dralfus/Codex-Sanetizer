@@ -1150,11 +1150,13 @@ Windows tests prove a safe Send, sensitive sanitized Send after foreground-confi
 overlay approval, cancellation, and a second clean run. The runner now closes the
 overlay, hook, and composer when an attempt times out.
 
-**Remaining closure work:** Keep this ticket open until the same reference-composer
-path proves foreground refusal, captured-target change, text-write failure, and
-replay failure with no send. It also needs an explicitly interactive release
-acceptance command: the existing headless `--product-smoke` deliberately remains
-non-UI and cannot be substituted for a foreground-dependent Windows proof.
+**Closure evidence (2026-08-09):** Tickets 317-321 now exercise the same
+reference-composer path for foreground refusal, captured-target change,
+UIA-write failure, replay failure, and the interactive release matrix. The
+dedicated `--reference-composer-release-acceptance` command runs all nine
+scenarios twice, renders only raw-free status lines, and fails closed when no
+interactive Windows desktop is available. The headless `--product-smoke`
+remains separate and is not used as a substitute.
 
 **Review outcome (2026-08-07):** Not closed. An implementation attempt was
 discarded after review because a direct test dispatcher bypassed the low-level
