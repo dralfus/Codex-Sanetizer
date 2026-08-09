@@ -74,20 +74,22 @@ internal static class ReferenceComposerAcceptanceRunner
                 var discovery = new ReferenceComposerSurfaceDiscovery(composer);
                 var profile = CreateProfile();
                 var hookHost = new WindowsNativeSubmitHookHost(new[] { profile });
-                using var overlay = new WindowsConfirmationOverlay(window =>
-                {
-                    if (decision == ReferenceComposerDecision.Approve)
+                using var overlay = new WindowsConfirmationOverlay(
+                    window =>
                     {
-                        window.Approve();
-                    }
-                    else
-                    {
-                        window.Cancel();
-                    }
-                });
+                        if (decision == ReferenceComposerDecision.Approve)
+                        {
+                            window.Approve();
+                        }
+                        else
+                        {
+                            window.Cancel();
+                        }
+                    },
+                    new WindowsConfirmationOverlay.FixedForegroundNativeMethods(foregroundActivated: true));
 
                 var adapter = new WindowsVerifiedComposerSurfaceAdapter(
-                    new NativeVerifiedComposerTextAccess(discovery.DiscoverActiveSurface));
+                    new ReferenceComposerTextAccess(composer, discovery.DiscoverActiveSurface));
                 var runtime = new NativeSubmitRuntime(
                     hookHost,
                     new NativeSubmitInterceptionController(
@@ -322,6 +324,11 @@ internal static class ReferenceComposerAcceptanceRunner
 
         public IReadOnlyList<string> SentTexts => _sentTexts;
 
+        public void SubmitFromAcceptance()
+        {
+            _sentTexts.Add(Composer.Text);
+        }
+
         private void OnKeyDown(object? sender, KeyEventArgs eventArgs)
         {
             if (eventArgs.KeyCode != Keys.Enter || eventArgs.Control || eventArgs.Alt || eventArgs.Shift)
@@ -331,6 +338,57 @@ internal static class ReferenceComposerAcceptanceRunner
 
             eventArgs.SuppressKeyPress = true;
             _sentTexts.Add(Composer.Text);
+        }
+    }
+
+    private sealed class ReferenceComposerTextAccess : IVerifiedComposerTextAccess
+    {
+        private readonly ReferenceComposerForm _form;
+        private readonly Func<TextSurfaceDiscoveryResult> _discovery;
+
+        public ReferenceComposerTextAccess(
+            ReferenceComposerForm form,
+            Func<TextSurfaceDiscoveryResult> discovery)
+        {
+            _form = form;
+            _discovery = discovery;
+        }
+
+        public TextCaptureResult CaptureText(TextSurfaceDescriptor surface)
+            => Verify(surface)
+                ? new TextCaptureResult(true, "captured", _form.Composer.Text, new Dictionary<string, string>())
+                : new TextCaptureResult(false, OsInteractionStatusIds.NotComposer, null, new Dictionary<string, string>());
+
+        public TextReplacementResult ReplaceText(TextSurfaceDescriptor surface, string text)
+        {
+            if (!Verify(surface))
+            {
+                return new TextReplacementResult(false, OsInteractionStatusIds.NotComposer, new Dictionary<string, string>());
+            }
+
+            _form.Composer.Text = text;
+            return new TextReplacementResult(true, OsInteractionStatusIds.Applied, new Dictionary<string, string>());
+        }
+
+        public SubmitActionResult Submit(TextSurfaceDescriptor surface)
+        {
+            if (!Verify(surface))
+            {
+                return new SubmitActionResult(false, OsInteractionStatusIds.NotComposer, new Dictionary<string, string>());
+            }
+
+            _form.Composer.Focus();
+            _form.SubmitFromAcceptance();
+            return new SubmitActionResult(true, OsInteractionStatusIds.Submitted, new Dictionary<string, string>());
+        }
+
+        private bool Verify(TextSurfaceDescriptor expected)
+        {
+            var current = _discovery();
+            return current.Succeeded
+                && current.Surface is not null
+                && string.Equals(current.Surface.ProfileId, expected.ProfileId, StringComparison.Ordinal)
+                && string.Equals(current.Surface.Metadata.TryGetValue("window_handle"), expected.Metadata.TryGetValue("window_handle"), StringComparison.Ordinal);
         }
     }
 }

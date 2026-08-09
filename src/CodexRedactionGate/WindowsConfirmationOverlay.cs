@@ -229,6 +229,7 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
 {
     private readonly ResidentOverlayDispatchQueue? _dispatcher;
     private readonly Action<ConfirmationOverlayAcceptanceWindow>? _acceptanceAutomation;
+    private readonly IConfirmationOverlayNativeMethods _foregroundNativeMethods;
     private ConfirmationDialog? _activeDialog;
 
     public WindowsConfirmationOverlay()
@@ -238,9 +239,12 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
 
     // This is intentionally internal: the reference composer uses the real dialog
     // and foreground path, then drives its visible decision deterministically.
-    internal WindowsConfirmationOverlay(Action<ConfirmationOverlayAcceptanceWindow>? acceptanceAutomation)
+    internal WindowsConfirmationOverlay(
+        Action<ConfirmationOverlayAcceptanceWindow>? acceptanceAutomation,
+        IConfirmationOverlayNativeMethods? foregroundNativeMethods = null)
     {
         _acceptanceAutomation = acceptanceAutomation;
+        _foregroundNativeMethods = foregroundNativeMethods ?? Win32ConfirmationOverlayNativeMethods.Instance;
         if (OperatingSystem.IsWindows())
         {
             _dispatcher = new ResidentOverlayDispatchQueue(ShowConfirmation, CloseActiveDialog);
@@ -263,7 +267,7 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
     public static ConfirmationOverlayForegroundActivationResult RunForegroundActivationSmoke(bool foregroundActivated)
     {
         var window = new SmokeForegroundWindow();
-        var native = new SmokeForegroundNativeMethods(foregroundActivated);
+        var native = new FixedForegroundNativeMethods(foregroundActivated);
         return ConfirmationOverlayForegroundActivation.Request(window, native);
     }
 
@@ -322,7 +326,7 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
             };
             Application.ThreadException += threadExceptionHandler;
 
-            using var ownedDialog = new ConfirmationDialog(model, traceStage, _acceptanceAutomation);
+            using var ownedDialog = new ConfirmationDialog(model, traceStage, _acceptanceAutomation, _foregroundNativeMethods);
             dialog = ownedDialog;
             Volatile.Write(ref _activeDialog, dialog);
             if (dialog.CloseRequested)
@@ -380,14 +384,17 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
         private int _closeRequested;
 
         private readonly Action<ConfirmationOverlayAcceptanceWindow>? _acceptanceAutomation;
+        private readonly IConfirmationOverlayNativeMethods _foregroundNativeMethods;
 
         public ConfirmationDialog(
             ConfirmationUiModel model,
             Func<string, string, bool> traceStage,
-            Action<ConfirmationOverlayAcceptanceWindow>? acceptanceAutomation)
+            Action<ConfirmationOverlayAcceptanceWindow>? acceptanceAutomation,
+            IConfirmationOverlayNativeMethods foregroundNativeMethods)
         {
             _traceStage = traceStage;
             _acceptanceAutomation = acceptanceAutomation;
+            _foregroundNativeMethods = foregroundNativeMethods;
             Text = "Codex Redaction Gate";
             StartPosition = FormStartPosition.CenterScreen;
             Width = 820;
@@ -495,8 +502,15 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
 
         private void BringDialogToFront()
         {
-            var result = ConfirmationOverlayForegroundActivation.Request(this, Win32ConfirmationOverlayNativeMethods.Instance);
-            if (result.ForegroundActivated && !_foregroundTracePublished)
+            var result = ConfirmationOverlayForegroundActivation.Request(this, _foregroundNativeMethods);
+            if (!result.ForegroundActivated)
+            {
+                DialogResult = DialogResult.Cancel;
+                Close();
+                return;
+            }
+
+            if (!_foregroundTracePublished)
             {
                 _foregroundTracePublished = _traceStage(
                     "overlay_foreground_confirmed",
@@ -508,7 +522,7 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
                 }
             }
 
-            if (result.ForegroundActivated && _acceptanceAutomation is not null)
+            if (_acceptanceAutomation is not null)
             {
                 _acceptanceAutomation(new ConfirmationOverlayAcceptanceWindow(
                     () => BeginInvoke(new Action(() => DialogResult = DialogResult.OK)),
@@ -586,11 +600,11 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
         }
     }
 
-    private sealed class SmokeForegroundNativeMethods : IConfirmationOverlayNativeMethods
+    internal sealed class FixedForegroundNativeMethods : IConfirmationOverlayNativeMethods
     {
         private readonly bool _foregroundActivated;
 
-        public SmokeForegroundNativeMethods(bool foregroundActivated)
+        public FixedForegroundNativeMethods(bool foregroundActivated)
         {
             _foregroundActivated = foregroundActivated;
         }

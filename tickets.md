@@ -1172,6 +1172,186 @@ fixture would create a false `sent_safely` proof. The closure must instead:
 - validate the resident terminal trace for every scenario and prove cleanup by
   running the fixture twice in one release-smoke process.
 
+## 317. Prove foreground refusal blocks the reference-composer Send
+
+**Related parent:** 306. Prove the complete path with a local reference composer.
+
+**What to build:** Let the local reference composer deterministically exercise
+the production overlay's foreground-refusal result. The original suppressed Send
+must stay blocked, the fixture must close cleanly, and its terminal trace must
+explain the blocked outcome without exposing prompt content.
+
+**Blocked by:** 304. Dispatch replacement overlays from one resident UI owner;
+316. Add a reference-only hook input source for local acceptance.
+
+**State owner:** The resident protected-Send operation owns the attempt and its
+trace; the production overlay dispatcher owns only foreground activation.
+
+**Fail-closed state:** Foreground activation is unavailable, denied, stale, or
+untraceable. The attempt reaches `terminal_blocked` and records no Send.
+
+**Allowed transitions:** `overlay_created` -> `overlay_foreground_confirmed` ->
+`approved` is allowed only after foreground success. Any other foreground result
+goes directly to the terminal blocked outcome.
+
+**Deterministic proof:** The reference composer drives the production-owned
+foreground validation seam without sleeps, then asserts suppression, no sent
+text, raw-free terminal trace, and cleanup.
+
+- [ ] Foreground refusal produces a raw-free terminal blocked trace and no Send.
+- [ ] The fixture releases its hook, overlay dispatcher, reference capability,
+  and windows after the refusal.
+
+## 318. Prove target change blocks a reference-composer attempt
+
+**Related parent:** 306. Prove the complete path with a local reference composer.
+
+**What to build:** During a local protected Send, make the verified composer
+identity change after capture and before a side effect. The attempt must not
+write to or replay into the replacement target.
+
+**Blocked by:** 305. Revalidate the captured target before write and replay;
+316. Add a reference-only hook input source for local acceptance.
+
+**State owner:** The resident protected-Send operation owns the captured target
+and snapshot generation; the reference fixture supplies only the local target
+transition.
+
+**Fail-closed state:** The current target differs from the captured target or
+cannot be revalidated. The operation records `terminal_blocked` and no local
+composer receives a Send.
+
+**Allowed transitions:** A target may remain valid through write and replay, or
+become stale and stop the attempt. It may never be rediscovered and redirected
+to another composer.
+
+**Deterministic proof:** The reference fixture changes its actual local target
+identity at the prescribed boundary and asserts no write/replay, a raw-free
+stale-target terminal trace, and deterministic cleanup.
+
+- [ ] A target change before write produces no mutation and no Send.
+- [ ] A target change before replay preserves the original target and produces
+  no Send in either local window.
+
+## 319. Prove UI Automation write failure blocks the reference-composer Send
+
+**Related parent:** 306. Prove the complete path with a local reference composer.
+
+**What to build:** Let the local reference composer make its real UI Automation
+write path unavailable after approval. The sanitized text must not be treated as
+sent and the original suppressed Send must remain blocked.
+
+**Blocked by:** 304. Dispatch replacement overlays from one resident UI owner;
+305. Revalidate the captured target before write and replay; 316. Add a
+reference-only hook input source for local acceptance.
+
+**State owner:** The resident protected-Send operation owns the transition from
+approval to write and its terminal trace. The reference composer owns only its
+local UI state.
+
+**Fail-closed state:** UI Automation cannot write or cannot verify the written
+text. The attempt terminates blocked and records no Send.
+
+**Allowed transitions:** `approved` -> `text_written` is allowed only after a
+verified local write. Write failure goes directly to the terminal blocked state.
+
+**Deterministic proof:** The fixture changes a real local control into a
+non-writable state at the write boundary and asserts no sent text and a raw-free
+terminal trace without timers or cloud access.
+
+- [ ] A write failure after approval sends neither raw nor sanitized text.
+- [ ] The trace does not contain `text_written`, `send_injected`, or
+  `sent_safely` after the failed write.
+
+## 320. Prove replay failure and partial injection fail closed
+
+**Related parent:** 306. Prove the complete path with a local reference composer.
+
+**What to build:** Use the production keyboard and pointer replay boundary to
+detect an unavailable or partial local Send injection. The fixture must release
+any pressed modifiers, record an indeterminate raw-free outcome, and never
+claim that the prompt was sent.
+
+**Blocked by:** 305. Revalidate the captured target before write and replay;
+316. Add a reference-only hook input source for local acceptance.
+
+**State owner:** The resident protected-Send operation owns replay and terminal
+trace publication. The replay boundary owns the all-or-nothing injection result
+and modifier cleanup.
+
+**Fail-closed state:** Replay cannot begin, inserts only part of the configured
+gesture, loses the target, or cannot prove completion. The attempt is blocked
+with a raw-free `replay_indeterminate` outcome.
+
+**Allowed transitions:** Only a fully verified replay may reach `send_injected`
+and `sent_safely`; any incomplete replay becomes terminal blocked.
+
+**Deterministic proof:** The local reference composer forces each replay result
+through the production replay boundary and verifies no local sent-text record,
+released modifiers, raw-free terminal trace, and cleanup.
+
+- [ ] Keyboard and pointer replay failures produce no Send and no success trace.
+- [ ] Partial injection reports `replay_indeterminate` and releases all
+  modifiers before the fixture returns.
+
+## 321. Run the interactive reference-composer release acceptance
+
+**Related parent:** 306. Prove the complete path with a local reference composer.
+
+**What to build:** Provide one explicitly interactive Windows release-acceptance
+command that runs the complete local matrix and returns a raw-free report. It
+must state when no interactive desktop foreground is available instead of
+silently substituting the headless product smoke.
+
+**Blocked by:** 317. Prove foreground refusal blocks the reference-composer
+Send; 318. Prove target change blocks a reference-composer attempt; 319. Prove
+UI Automation write failure blocks the reference-composer Send; 320. Prove
+replay failure and partial injection fail closed.
+
+**State owner:** The resident protection snapshot owns every acceptance attempt;
+the release command only starts the fixture and renders its raw-free result.
+
+**Fail-closed state:** The process lacks an interactive desktop, any required
+scenario lacks a terminal trace, or cleanup is incomplete. The command returns
+failure and the build cannot publish a protected-path acceptance result.
+
+**Allowed transitions:** `not_run` -> `running` -> `passed` requires every
+scenario and a second clean run. Any unavailable or failed scenario ends at
+`failed_closed`.
+
+**Deterministic proof:** One interactive local run covers safe Send, sanitized
+Send, cancel, foreground refusal, target change, write failure, and replay
+failure twice without cloud access, sleeps, or raw prompt artifacts.
+
+- [ ] The command produces one raw-free result per scenario and one overall
+  pass/fail result for the running build.
+- [ ] A non-interactive invocation reports an explicit unavailable status and
+  exits non-zero without claiming protection.
+- [ ] The acceptance run proves cleanup by executing the full matrix twice in
+  one process.
+
+## 322. Make the reference-composer acceptance runner deterministic without weakening production foreground checks
+
+**Related parents:** 306. Prove the complete path with a local reference composer; 317-321. Reference-composer failure and release scenarios.
+
+**What to build:** Deepen the reference-composer acceptance module around one explicit scenario interface. It owns local compositor lifecycle, its controlled foreground adapter, replay-ready focus restoration, and terminal-result collection. Production `WindowsConfirmationOverlay` keeps its Win32 foreground adapter and fails closed when foreground activation cannot be verified. The acceptance adapter can never be selected for Codex or ChatGPT.
+
+**Blocked by:** 316. Add a reference-only hook input source for local acceptance.
+
+**Blocks:** 317. Prove foreground refusal; 318. Prove target change; 319. Prove UI Automation write failure; 320. Prove replay failure and partial injection; 321. Interactive release acceptance.
+
+**State owner:** The acceptance module owns fixture state and adapters only. The resident protected-send operation remains owner of protection state and terminal trace.
+
+**Fail-closed state:** Unavailable fixture focus, foreground proof, target, UIA write, replay result, or terminal trace yields raw-free `terminal_blocked`; it never converts the outcome to success or lets the original Send through.
+
+**Allowed transitions:** `created -> hook_started -> scenario_running -> terminal_result -> disposed`. A scenario moves the local target only at declared pre-write or pre-replay seams. No timer, focus race, or callback creates an implicit transition.
+
+**Deterministic proof:** Run safe, sensitive, and cancel scenarios twice in one process without cloud access. Each must prove original-key suppression, correct production terminal trace, and cleanup. A failed foreground scenario must produce no Send. The fixture is green before its fault scenarios become release evidence.
+
+- [x] A normal local scenario is repeatable without depending on the current desktop foreground owner.
+- [x] Production uses the Win32 foreground adapter; only the local reference-composer receives a fixed acceptance adapter.
+- [x] Cleanup leaves no live hook, overlay dispatcher, reference capability, or hidden local window.
+
 ## 307. Pin a verified ChatGPT Desktop compatibility fingerprint
 
 **What to build:** Turn the currently verified ChatGPT Desktop surface into an
