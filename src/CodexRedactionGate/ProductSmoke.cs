@@ -70,6 +70,8 @@ public sealed record ProductSmokeReport(
     bool NativeSubmitDuplicateGuardPassed,
     bool NativeSubmitOverlayForegroundRequestPassed,
     bool NativeSubmitOverlayForegroundRefusalStatusPassed,
+    bool ReferenceComposerAcceptancePassed,
+    bool ReferenceComposerRawFreePassed,
     bool NativeProfileVerificationEntrypointsPassed,
     bool SetupEnforcementRegressionPassed,
     bool RawFreeArtifactsPassed,
@@ -200,6 +202,12 @@ public static class ProductSmokeRunner
             && Directory.Exists(layout.VaultDirectory);
 
         var nativeSubmit = NativeSubmitProductSmokeRunner.Run(hmacSecret);
+        var referenceComposerAcceptance = ReferenceComposerReleaseAcceptanceRunner.Run(
+            hmacSecret,
+            interactiveDesktopProbe: () => true);
+        var referenceComposerAcceptancePassed = referenceComposerAcceptance.Passed;
+        var referenceComposerRawFreePassed = referenceComposerAcceptance.Scenarios.Count == 18
+            && referenceComposerAcceptance.Scenarios.All(scenario => scenario.RawFree);
         var codexVerification = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "codex-desktop",
             "Enter",
@@ -267,6 +275,8 @@ public static class ProductSmokeRunner
                 NativeSubmitDuplicateGuardPassed: nativeSubmit.DuplicateSendGuardPassed,
                 NativeSubmitOverlayForegroundRequestPassed: nativeSubmit.OverlayForegroundRequestPassed,
                 NativeSubmitOverlayForegroundRefusalStatusPassed: nativeSubmit.OverlayForegroundRefusalStatusPassed,
+                ReferenceComposerAcceptancePassed: referenceComposerAcceptancePassed,
+                ReferenceComposerRawFreePassed: referenceComposerRawFreePassed,
                 NativeProfileVerificationEntrypointsPassed: nativeProfileVerificationEntrypointsPassed,
                 SetupEnforcementRegressionPassed: nativeSubmit.SetupEnforcementRegressionPassed,
                 RawFreeArtifactsPassed: false,
@@ -308,6 +318,8 @@ public static class ProductSmokeRunner
             && nativeSubmit.DuplicateSendGuardPassed
             && nativeSubmit.OverlayForegroundRequestPassed
             && nativeSubmit.OverlayForegroundRefusalStatusPassed
+            && referenceComposerAcceptancePassed
+            && referenceComposerRawFreePassed
             && nativeSubmit.SetupEnforcementRegressionPassed
             && nativeProfileVerificationEntrypointsPassed
             && rawFreePassed;
@@ -346,6 +358,8 @@ public static class ProductSmokeRunner
             NativeSubmitDuplicateGuardPassed: nativeSubmit.DuplicateSendGuardPassed,
             NativeSubmitOverlayForegroundRequestPassed: nativeSubmit.OverlayForegroundRequestPassed,
             NativeSubmitOverlayForegroundRefusalStatusPassed: nativeSubmit.OverlayForegroundRefusalStatusPassed,
+            ReferenceComposerAcceptancePassed: referenceComposerAcceptancePassed,
+            ReferenceComposerRawFreePassed: referenceComposerRawFreePassed,
             NativeProfileVerificationEntrypointsPassed: nativeProfileVerificationEntrypointsPassed,
             SetupEnforcementRegressionPassed: nativeSubmit.SetupEnforcementRegressionPassed,
             RawFreeArtifactsPassed: rawFreePassed,
@@ -415,6 +429,8 @@ public static class ProductSmokeRunner
             $"native_submit_duplicate_guard: {report.NativeSubmitDuplicateGuardPassed.ToString().ToLowerInvariant()}",
             $"native_submit_overlay_foreground_request: {report.NativeSubmitOverlayForegroundRequestPassed.ToString().ToLowerInvariant()}",
             $"native_submit_overlay_foreground_refusal_status: {report.NativeSubmitOverlayForegroundRefusalStatusPassed.ToString().ToLowerInvariant()}",
+            $"reference_composer_acceptance: {report.ReferenceComposerAcceptancePassed.ToString().ToLowerInvariant()}",
+            $"reference_composer_raw_free: {report.ReferenceComposerRawFreePassed.ToString().ToLowerInvariant()}",
             $"native_profile_verification_entrypoints: {report.NativeProfileVerificationEntrypointsPassed.ToString().ToLowerInvariant()}",
             $"setup_enforcement_regression: {report.SetupEnforcementRegressionPassed.ToString().ToLowerInvariant()}",
             $"raw_free_artifacts: {report.RawFreeArtifactsPassed.ToString().ToLowerInvariant()}",

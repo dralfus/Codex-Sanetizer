@@ -192,6 +192,42 @@ newline_binding=Ctrl+Enter
 
 If the status is `not_configured`, `binding_unknown`, `surface_unverified`, or `degraded_hotkey_only`, do not treat the AI app as protected yet.
 
+### ChatGPT Desktop Release Gate
+
+For ChatGPT Desktop, a verified binding is not the final release claim. The
+resident app reports `protected` only after the current build and pinned
+fingerprint have both passed the local reference-composer acceptance and one
+live, raw-free ChatGPT Desktop contract run. Missing or stale proof keeps Send
+blocked.
+
+Run the local release fixture after the ChatGPT profile is configured:
+
+```powershell
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --reference-composer-release-acceptance
+```
+
+The command must print `overall: passed` and
+`reference_proof_recorded: true`. It stores only safe terminal evidence; it
+does not store prompt text.
+
+Then arm the one-use live contract capture:
+
+```powershell
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --chatgpt-live-contract-arm
+```
+
+With ChatGPT Desktop focused, send one non-sensitive test prompt using the
+verified keyboard Send binding. The resident path records the completed
+raw-free trace and consumes the arm. Finally check the claim:
+
+```powershell
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --chatgpt-protected-claim-status
+```
+
+The expected result is `status: protected`, `reference_acceptance: passed`,
+and `live_contract: passed`. If the ChatGPT build, pinned UI fingerprint, or
+Send binding changes, repeat both proofs before sending sensitive data.
+
 `--os-demo-hotkey`, `--os-demo-hotkey-apply`, and `--os-demo-hotkey-send` are legacy/demo diagnostics. They are not the normal product flow.
 
 ## Install

@@ -1419,14 +1419,27 @@ fingerprint matching, expiration on change, raw-free public rendering, and
 rejection of a missing live-contract result. The live run itself is a documented
 repeatable operator acceptance procedure, not an automated cloud assertion.
 
-- [ ] Release smoke runs the reference composer acceptance fixture and fails
+- [x] Release smoke runs the reference composer acceptance fixture and fails
   when any required trace stage or terminal result is absent.
-- [ ] The live ChatGPT Desktop contract procedure records one raw-free keyboard
+- [x] The live ChatGPT Desktop contract procedure records one raw-free keyboard
   Send trace and exact fingerprint/build pairing without recording prompt text.
-- [ ] The tray and local status call the pinned ChatGPT path protected only when
+- [x] The tray and local status call the pinned ChatGPT path protected only when
   both evidence records match the running build and fingerprint.
-- [ ] Changed app version, binding, UI Automation shape, missing live evidence,
+- [x] Changed app version, binding, UI Automation shape, missing live evidence,
   or missing reference evidence visibly downgrades the profile and blocks Send.
+
+**Implementation (2026-08-09):** Added the paired reference/live proof
+evaluator and raw-free proof store. `--product-smoke` now runs the complete
+18-scenario reference-composer release matrix and fails unless every terminal
+trace is present and raw-free. `--reference-composer-release-acceptance`
+records the passing reference proof for the current ChatGPT fingerprint and
+build. `--chatgpt-live-contract-arm` arms one explicit live capture; the
+resident `sent_safely` trace records the live proof and consumes the arm.
+`--chatgpt-protected-claim-status` and tray/local status publish `protected`
+only when both records match. Missing, malformed, stale, or mismatched proof
+remains degraded and suppresses Send. Automated coverage includes pairing,
+build/fingerprint mismatch, raw-free persistence, resident suppression, and
+one-use live arm consumption.
 
 ## 309. Trace protected pointer Send through the resident operation
 
@@ -1677,3 +1690,63 @@ Send is not submitted and every trace entry retains the source, never the
 replacement, generation; a test-only successful-CAS observer also proves that
 no cancelled intermediate transition was published before the terminal
 outcome. A pre-handoff terminal publication is permitted and retained.
+
+## 323. Make ChatGPT compatibility fingerprints explicitly opaque
+
+**What to build:** Replace the ambiguous raw-looking fields of
+`SurfaceCompatibilityEvidence` with names or a small value type that state they
+contain opaque fingerprints. Hash at one defined producer boundary and avoid
+rehashing a value merely to expose it in raw-free diagnostics.
+
+**Related to:** 307. Pin a verified ChatGPT Desktop compatibility fingerprint.
+
+**State owner:** The compatibility-evidence module owns the representation and
+raw-free rendering of an opaque fingerprint. Producers supply source evidence;
+consumers compare the opaque representation only.
+
+**Fail-closed state:** An invalid, missing, or unrecognised opaque fingerprint
+does not compare equal and puts the selected ChatGPT profile in
+`unsupported_surface`.
+
+**Allowed transitions:** Source evidence is converted once into an opaque
+fingerprint during verification. Persistence and runtime comparison preserve
+that value without another representation change.
+
+**Deterministic proof:** Tests verify a full match, one-field mismatch,
+round-trip persistence, and raw-free diagnostics without desktop focus, timers,
+or cloud access.
+
+- [ ] Field names or types state that their contents are opaque fingerprints.
+- [ ] Each source value is fingerprinted at exactly one boundary.
+- [ ] Raw-free rendering and runtime comparison use the same stored fingerprint
+  representation.
+
+## 324. Centralize the verified ChatGPT discovery fixture schema
+
+**What to build:** Provide one test/support builder for a complete verified
+ChatGPT Desktop discovery result, with explicit safe overrides for mismatch
+cases. Product smoke and all tests use it instead of repeating the fingerprint
+diagnostics dictionary.
+
+**Related to:** 307. Pin a verified ChatGPT Desktop compatibility fingerprint;
+323. Make ChatGPT compatibility fingerprints explicitly opaque.
+
+**State owner:** The fixture builder owns the canonical synthetic evidence
+schema. Individual tests own only their named overrides.
+
+**Fail-closed state:** A builder result missing a required fingerprint field is
+an explicit test fixture failure; production code remains fail-closed for the
+same missing field.
+
+**Allowed transitions:** A new required field is added once to the canonical
+fixture and individual tests may override it to prove rejection.
+
+**Deterministic proof:** A schema-completeness test ensures that the canonical
+fixture can create a protected profile, while each one-field override produces
+`unsupported_surface` without desktop focus, timers, or cloud access.
+
+- [ ] Product smoke and tests no longer repeat a complete ChatGPT fingerprint
+  diagnostics dictionary.
+- [ ] The builder exposes only intentional, named overrides for negative cases.
+- [ ] Adding a required evidence field breaks one canonical fixture test rather
+  than silently desynchronising multiple copies.

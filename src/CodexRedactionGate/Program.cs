@@ -448,7 +448,17 @@ public static class Program
 
         if (args.Length == 1 && args[0] == "--reference-composer-release-acceptance")
         {
-            return RunReferenceComposerReleaseAcceptance();
+            return RunReferenceComposerReleaseAcceptance(layoutFactory: runtime.LayoutFactory);
+        }
+
+        if (args.Length == 1 && args[0] == "--chatgpt-protected-claim-status")
+        {
+            return RunChatGptProtectedClaimStatus(runtime.LayoutFactory);
+        }
+
+        if (args.Length == 1 && args[0] == "--chatgpt-live-contract-arm")
+        {
+            return RunChatGptLiveContractArm(runtime.LayoutFactory);
         }
 
         if (args.Length == 1 && args[0] == "--native-profiles-status")
@@ -1160,7 +1170,9 @@ public static class Program
         }
     }
 
-    internal static int RunReferenceComposerReleaseAcceptance(Func<bool>? interactiveDesktopProbe = null)
+    internal static int RunReferenceComposerReleaseAcceptance(
+        Func<bool>? interactiveDesktopProbe = null,
+        Func<DefaultStorageLayout>? layoutFactory = null)
     {
         var report = ReferenceComposerReleaseAcceptanceRunner.Run(
             System.Text.Encoding.UTF8.GetBytes("reference-composer-release-acceptance-secret"),
@@ -1170,7 +1182,64 @@ public static class Program
             Console.WriteLine(line);
         }
 
-        return report.Passed ? 0 : 1;
+        if (!report.Passed)
+        {
+            return 1;
+        }
+
+        var layout = (layoutFactory ?? DefaultStorageLayout.CreateDefault)();
+        var profile = SubmitBindingProfileStore.Load(layout).Profiles
+            .FirstOrDefault(item => string.Equals(item.ProfileId, "chatgpt-desktop", StringComparison.Ordinal));
+        var recorded = profile is not null
+            && ChatGptAcceptanceProofStore.RecordReference(
+                layout,
+                profile,
+                BuildVersion.Current,
+                passed: true,
+                terminalStatus: "passed");
+        Console.WriteLine($"reference_proof_recorded: {recorded.ToString().ToLowerInvariant()}");
+        return recorded ? 0 : 1;
+    }
+
+    private static int RunChatGptProtectedClaimStatus(Func<DefaultStorageLayout> layoutFactory)
+    {
+        var layout = layoutFactory();
+        var profile = SubmitBindingProfileStore.Load(layout).Profiles
+            .FirstOrDefault(item => string.Equals(item.ProfileId, "chatgpt-desktop", StringComparison.Ordinal));
+        if (profile is null)
+        {
+            Console.WriteLine("status: profile_missing");
+            Console.WriteLine("protected: false");
+            return 1;
+        }
+
+        var claim = ChatGptProtectedClaimEvaluator.Evaluate(profile, layout);
+        Console.WriteLine($"status: {SafeStatus(claim.Status)}");
+        Console.WriteLine($"reference_acceptance: {SafeStatus(claim.ReferenceStatus)}");
+        Console.WriteLine($"live_contract: {SafeStatus(claim.LiveContractStatus)}");
+        Console.WriteLine($"reason: {SafeStatus(claim.Reason)}");
+        Console.WriteLine($"build_version: {SafeStatus(BuildVersion.Current)}");
+        return claim.Protected ? 0 : 1;
+    }
+
+    private static int RunChatGptLiveContractArm(Func<DefaultStorageLayout> layoutFactory)
+    {
+        var layout = layoutFactory();
+        var profile = SubmitBindingProfileStore.Load(layout).Profiles
+            .FirstOrDefault(item => string.Equals(item.ProfileId, "chatgpt-desktop", StringComparison.Ordinal));
+        var armed = profile is not null
+            && ChatGptAcceptanceProofStore.ArmLiveContract(layout, profile);
+        Console.WriteLine($"status: {(armed ? "live_contract_armed" : "live_contract_arm_failed")}");
+        Console.WriteLine("cloud_submission: false");
+        Console.WriteLine("next_action: send_one_non_sensitive_prompt_in_chatgpt_desktop");
+        return armed ? 0 : 1;
+    }
+
+    private static string SafeStatus(string value)
+    {
+        return value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.' or '-')
+            ? value
+            : "unavailable";
     }
 
     private static int RunNativeProfilesStatus(Func<DefaultStorageLayout> layoutFactory)

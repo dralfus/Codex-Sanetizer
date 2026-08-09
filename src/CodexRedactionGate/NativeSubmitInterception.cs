@@ -963,6 +963,12 @@ public sealed class NativeSubmitInterceptionController
             return PassThrough(diagnostics);
         }
 
+        var protectedClaimGate = SuppressIfChatGptProtectedClaimIsUnproven(diagnostics);
+        if (protectedClaimGate is not null)
+        {
+            return protectedClaimGate;
+        }
+
         var enforcement = EvaluateEnterpriseEnforcement(hookHealthy);
         if (enforcement is not null)
         {
@@ -1011,6 +1017,44 @@ public sealed class NativeSubmitInterceptionController
                 Submitted: false,
                 Diagnostics: diagnostics),
             submitFlow);
+    }
+
+    private NativeSubmitInterceptionResult? SuppressIfChatGptProtectedClaimIsUnproven(
+        Dictionary<string, string> diagnostics)
+    {
+        if (_setupLayout is null
+            || !string.Equals(_profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
+            || !_profile.IsProtected)
+        {
+            return null;
+        }
+
+        var claim = ChatGptProtectedClaimEvaluator.Evaluate(_profile, _setupLayout);
+        diagnostics["protected_claim_status"] = claim.Status;
+        diagnostics["reference_acceptance_status"] = claim.ReferenceStatus;
+        diagnostics["live_contract_status"] = claim.LiveContractStatus;
+        diagnostics["protected_claim_reason"] = claim.Reason;
+        if (claim.Protected)
+        {
+            return null;
+        }
+
+        if (ChatGptAcceptanceProofStore.IsLiveContractArmed(
+                _setupLayout,
+                _profile,
+                BuildVersion.Current))
+        {
+            diagnostics["live_contract_capture"] = "armed";
+            return null;
+        }
+
+        diagnostics["fail_closed_reason"] = "chatgpt_protected_claim_unproven";
+        return new NativeSubmitInterceptionResult(
+            claim.Status,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: diagnostics);
     }
 
     public NativeSubmitInterceptionResult CompleteGuardedSubmit(

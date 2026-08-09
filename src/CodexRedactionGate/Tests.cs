@@ -4343,6 +4343,10 @@ public partial class SanitizerTests
             Assert.That(rendered, Does.Contain("native_submit_duplicate_guard: true"));
             Assert.That(rendered, Does.Contain("native_submit_overlay_foreground_request: true"));
             Assert.That(rendered, Does.Contain("native_submit_overlay_foreground_refusal_status: true"));
+            Assert.That(report.ReferenceComposerAcceptancePassed, Is.True);
+            Assert.That(report.ReferenceComposerRawFreePassed, Is.True);
+            Assert.That(rendered, Does.Contain("reference_composer_acceptance: true"));
+            Assert.That(rendered, Does.Contain("reference_composer_raw_free: true"));
             Assert.That(rendered, Does.Contain("native_profile_verification_entrypoints: true"));
             Assert.That(rendered, Does.Not.Contain("192.168.10.25"));
             Assert.That(rendered, Does.Not.Contain("Product Smoke Customer"));

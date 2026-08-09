@@ -1069,6 +1069,13 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 return "Protected Send: profile settings unavailable; repair profile settings before sending";
         }
 
+        if (string.Equals(state.ConfiguredProfileId, "chatgpt-desktop", StringComparison.Ordinal)
+            && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.Protected, StringComparison.Ordinal)
+            && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.NotConfigured, StringComparison.Ordinal))
+        {
+            return $"ChatGPT Desktop protected claim is unproven: reference={state.ReferenceAcceptanceStatus}, live={state.LiveContractStatus}; Send is blocked";
+        }
+
         if (state.ComposerProtected)
         {
             return $"Prompt protection: {ProfileDisplayName(state)} protected, Send {state.ProtectedSendBinding}";

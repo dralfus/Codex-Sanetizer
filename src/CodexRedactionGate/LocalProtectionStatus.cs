@@ -132,6 +132,17 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 LocalProtectionStatusAction.VerifyProfiles);
         }
 
+        if (string.Equals(state.ConfiguredProfileId, "chatgpt-desktop", StringComparison.Ordinal)
+            && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.Protected, StringComparison.Ordinal))
+        {
+            return new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "degraded",
+                $"ChatGPT Desktop is not released as protected until reference acceptance ({state.ReferenceAcceptanceStatus}) and live contract ({state.LiveContractStatus}) match this build. Send is blocked.",
+                LocalProtectionStatusAction.RetryPromptProtection);
+        }
+
         if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
         {
             var attemptRow = CreateProtectedSendAttemptRow(state.ProtectedSendAttemptStatus);

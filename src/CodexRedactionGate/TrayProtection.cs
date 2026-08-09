@@ -69,7 +69,10 @@ public sealed record TrayProtectionState(
     string SetupVerificationAction = "none",
     string? SetupVerificationProfileId = null,
     string SetupVerificationBinding = "not_configured",
-    long SetupVerificationAttemptId = 0);
+    long SetupVerificationAttemptId = 0,
+    string ProtectedClaimStatus = OsInteractionStatusIds.NotConfigured,
+    string ReferenceAcceptanceStatus = "not_applicable",
+    string LiveContractStatus = "not_applicable");
 
 public sealed record ProtectionDisableResult(
     bool Succeeded,
@@ -867,7 +870,10 @@ internal sealed class TrayProtectionController
                 SetupVerificationAction = previous.State.SetupVerificationAction,
                 SetupVerificationProfileId = previous.State.SetupVerificationProfileId,
                 SetupVerificationBinding = previous.State.SetupVerificationBinding,
-                SetupVerificationAttemptId = previous.State.SetupVerificationAttemptId
+                SetupVerificationAttemptId = previous.State.SetupVerificationAttemptId,
+                ProtectedClaimStatus = previous.State.ProtectedClaimStatus,
+                ReferenceAcceptanceStatus = previous.State.ReferenceAcceptanceStatus,
+                LiveContractStatus = previous.State.LiveContractStatus
             };
 
             return new ProtectionSnapshot(
@@ -957,7 +963,10 @@ internal sealed class TrayProtectionController
             SetupVerificationAction: snapshot.State.SetupVerificationAction,
             SetupVerificationProfileId: snapshot.State.SetupVerificationProfileId,
             SetupVerificationBinding: snapshot.State.SetupVerificationBinding,
-            SetupVerificationAttemptId: snapshot.State.SetupVerificationAttemptId);
+            SetupVerificationAttemptId: snapshot.State.SetupVerificationAttemptId,
+            ProtectedClaimStatus: snapshot.State.ProtectedClaimStatus,
+            ReferenceAcceptanceStatus: snapshot.State.ReferenceAcceptanceStatus,
+            LiveContractStatus: snapshot.State.LiveContractStatus);
         PublishSnapshotIfCurrent(snapshot, snapshot with { State = state });
     }
 
@@ -1543,7 +1552,10 @@ internal sealed class TrayProtectionController
                 SetupVerificationAction: current.State.SetupVerificationAction,
                 SetupVerificationProfileId: current.State.SetupVerificationProfileId,
                 SetupVerificationBinding: current.State.SetupVerificationBinding,
-                SetupVerificationAttemptId: current.State.SetupVerificationAttemptId);
+                SetupVerificationAttemptId: current.State.SetupVerificationAttemptId,
+                ProtectedClaimStatus: current.State.ProtectedClaimStatus,
+                ReferenceAcceptanceStatus: current.State.ReferenceAcceptanceStatus,
+                LiveContractStatus: current.State.LiveContractStatus);
             if (PublishSnapshotIfCurrent(current, current with { State = state }))
             {
                 return;
@@ -1748,6 +1760,28 @@ internal sealed class TrayProtectionController
                 }
 
                 published = replacement;
+                if (trace[^1].Stage == "sent_safely")
+                {
+                    var liveProfileId = operation.Target?.ProfileId
+                        ?? replacement.State.LastProfileId
+                        ?? replacement.State.ConfiguredProfileId;
+                    var liveProfile = replacement.RuntimeSet?.Runtimes.FirstOrDefault(runtime =>
+                        string.Equals(runtime.Profile.ProfileId, liveProfileId, StringComparison.Ordinal))?.Profile;
+                    if (liveProfile is not null
+                        && ChatGptAcceptanceProofStore.IsLiveContractArmed(
+                            _storageLayout,
+                            liveProfile,
+                            BuildVersion.Current)
+                        && ChatGptAcceptanceProofStore.RecordLiveContract(
+                            _storageLayout,
+                            liveProfile,
+                            BuildVersion.Current,
+                            trace))
+                    {
+                        PublishChatGptProtectedClaim(liveProfile.ProfileId);
+                    }
+                }
+
                 return true;
             }
 
@@ -1758,6 +1792,42 @@ internal sealed class TrayProtectionController
         }
 
         return false;
+    }
+
+    private void PublishChatGptProtectedClaim(string profileId)
+    {
+        while (true)
+        {
+            var current = ReadSnapshot();
+            var profile = current.RuntimeSet?.Runtimes
+                .FirstOrDefault(runtime => string.Equals(runtime.Profile.ProfileId, profileId, StringComparison.Ordinal))
+                ?.Profile;
+            if (profile is null)
+            {
+                return;
+            }
+
+            var claim = ChatGptProtectedClaimEvaluator.Evaluate(profile, _storageLayout);
+            if (!claim.Protected)
+            {
+                return;
+            }
+
+            var state = current.State with
+            {
+                NativeSubmitEnabled = current.State.Enabled,
+                NativeSubmitStatus = OsInteractionStatusIds.Protected,
+                ReadinessStatus = OsInteractionStatusIds.Protected,
+                ComposerProtected = true,
+                ProtectedClaimStatus = claim.Status,
+                ReferenceAcceptanceStatus = claim.ReferenceStatus,
+                LiveContractStatus = claim.LiveContractStatus
+            };
+            if (PublishSnapshotIfCurrent(current, current with { State = state }))
+            {
+                return;
+            }
+        }
     }
 
     private ProtectionSnapshot? PublishTraceUnavailable(ProtectionSnapshot source, string? profileId)
@@ -2105,6 +2175,21 @@ internal sealed class TrayProtectionController
         var effectiveNativeSubmitStatus = localProtectionReady
             ? nativeSubmitStatus
             : localProtectionStatus;
+        var chatGptRuntime = runtimes.FirstOrDefault(runtime =>
+            string.Equals(runtime.Profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal));
+        var protectedClaim = chatGptRuntime is null
+            ? new ChatGptProtectedClaimResult(
+                OsInteractionStatusIds.Protected,
+                "not_applicable",
+                "not_applicable",
+                "not_applicable")
+            : ChatGptProtectedClaimEvaluator.Evaluate(chatGptRuntime.Profile, _storageLayout);
+        if (effectiveNativeSubmitStatus == OsInteractionStatusIds.Protected
+            && chatGptRuntime is not null
+            && !protectedClaim.Protected)
+        {
+            effectiveNativeSubmitStatus = protectedClaim.Status;
+        }
         var (projectFilesProtected, projectFileStatus) = ReadProjectFileProtectionStatus();
         return new TrayProtectionState(
             Enabled: enabled,
@@ -2118,7 +2203,7 @@ internal sealed class TrayProtectionController
             LastSubmitted: false,
             NativeSubmitEnabled: nativeSubmitEnabled
                 && localProtectionReady
-                && effectiveNativeSubmitStatus != OsInteractionStatusIds.ProfilesUnavailable,
+                && effectiveNativeSubmitStatus == OsInteractionStatusIds.Protected,
             NativeSubmitStatus: effectiveNativeSubmitStatus,
             ProtectedSendBinding: ProtectedSendBindingText(runtimes, effectiveNativeSubmitStatus),
             NewlineBinding: NewlineBindingText(runtimes),
@@ -2132,7 +2217,10 @@ internal sealed class TrayProtectionController
             ResidentProcess: enabled,
             SetupRequired: setupRequired,
             LocalProtectionStatus: localProtectionStatus,
-            ConfiguredProfileId: runtimes.FirstOrDefault()?.Profile.ProfileId);
+            ConfiguredProfileId: runtimes.FirstOrDefault()?.Profile.ProfileId,
+            ProtectedClaimStatus: protectedClaim.Status,
+            ReferenceAcceptanceStatus: protectedClaim.ReferenceStatus,
+            LiveContractStatus: protectedClaim.LiveContractStatus);
     }
 
     private (bool ProjectFilesProtected, string ProjectFileStatus) ReadProjectFileProtectionStatus()
@@ -2484,6 +2572,18 @@ internal sealed class TrayProtectionController
             if (status == OsInteractionStatusIds.NativeSubmitSetupRequired)
             {
                 setupRequired = true;
+            }
+
+            if (status == OsInteractionStatusIds.Protected
+                && string.Equals(runtime.Profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal))
+            {
+                var claim = ChatGptProtectedClaimEvaluator.Evaluate(runtime.Profile, _storageLayout);
+                if (!claim.Protected)
+                {
+                    return new SetupReadiness(
+                        SetupRequired: false,
+                        Status: claim.Status);
+                }
             }
         }
 
@@ -2846,7 +2946,7 @@ internal static class TrayStatusFormatter
         var replacements = state.LastReplacementCount is null
             ? "n/a"
             : state.LastReplacementCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return $"status={enabled} mode={DisplayMode(state.Mode)} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} programmatic_uia_invoke={DisplayStatus(state.ProgrammaticUiaInvokeStatus)} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={DisplayProjectFileStatus(state.ProjectFileStatus)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} newline_binding={DisplayBinding(state.NewlineBinding)} manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} protected_send_attempt={DisplayProtectedSendAttempt(state.ProtectedSendAttemptStatus)} attempt_action={DisplayProtectedSendAttemptAction(state.ProtectedSendAttemptAction)} protected_send_interruption={DisplayProtectedSendInterruption(state.LastProtectedSendInterruption)} native_submit={DisplayStatus(state.NativeSubmitStatus)} readiness={DisplayStatus(state.ReadinessStatus)} last={DisplayStatus(state.LastStatus)} replacements={replacements}";
+        return $"status={enabled} mode={DisplayMode(state.Mode)} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} protected_claim={DisplayProofStatus(state.ProtectedClaimStatus)} reference_acceptance={DisplayProofStatus(state.ReferenceAcceptanceStatus)} live_contract={DisplayProofStatus(state.LiveContractStatus)} programmatic_uia_invoke={DisplayStatus(state.ProgrammaticUiaInvokeStatus)} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={DisplayProjectFileStatus(state.ProjectFileStatus)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} newline_binding={DisplayBinding(state.NewlineBinding)} manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} protected_send_attempt={DisplayProtectedSendAttempt(state.ProtectedSendAttemptStatus)} attempt_action={DisplayProtectedSendAttemptAction(state.ProtectedSendAttemptAction)} protected_send_interruption={DisplayProtectedSendInterruption(state.LastProtectedSendInterruption)} native_submit={DisplayStatus(state.NativeSubmitStatus)} readiness={DisplayStatus(state.ReadinessStatus)} last={DisplayStatus(state.LastStatus)} replacements={replacements}";
     }
 
     public static string FormatNotifyIconText(TrayProtectionState state, string? buildVersion = null)
@@ -2922,7 +3022,7 @@ internal static class TrayStatusFormatter
     {
         return value switch
         {
-            "enabled" or "disabled" or "enabled_native_submit_manual_hotkey_unavailable"
+            "enabled" or "disabled" or "enabled_native_submit_manual_hotkey_unavailable" or "degraded"
                 or "native_submit_runtime_reloaded" => value,
             OsInteractionStatusIds.SupportedSurface or OsInteractionStatusIds.UnsupportedSurface
                 or OsInteractionStatusIds.UnsupportedPlatform or OsInteractionStatusIds.AmbiguousSurface
@@ -2951,6 +3051,13 @@ internal static class TrayStatusFormatter
                 or LocalProtectionRecovery.UnavailableCode => value,
             _ => "unavailable"
         };
+    }
+
+    private static string DisplayProofStatus(string value)
+    {
+        return value is "protected" or "degraded" or "missing" or "passed" or "failed" or "mismatch" or "not_applicable"
+            ? value
+            : "unavailable";
     }
 
     private static string DisplayProtectedSendInterruption(ProtectedSendInterruption? interruption)
