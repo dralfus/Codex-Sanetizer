@@ -5649,6 +5649,25 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
     }
 
+    [TestCase(1)]
+    [TestCase(2)]
+    public void ReferenceComposerAcceptance_TargetChangeBlocksBeforeSideEffect(int mode)
+    {
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
+            "Connect to 192.168.10.25",
+            ReferenceComposerDecision.Approve,
+            ReferenceComposerForegroundMode.Verified,
+            (ReferenceComposerTargetChangeMode)mode);
+
+        Assert.That(report.HookStarted, Is.True);
+        Assert.That(report.OriginalInputSuppressed, Is.True);
+        Assert.That(report.Submitted, Is.False);
+        Assert.That(report.SentTexts, Is.Empty);
+        Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
+    }
+
     [Test]
     public void ReferenceComposerAcceptance_CancelAndRepeatedRunLeaveNoSendOrLeakedCapability()
     {

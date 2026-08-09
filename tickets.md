@@ -1229,8 +1229,8 @@ to another composer.
 identity at the prescribed boundary and asserts no write/replay, a raw-free
 stale-target terminal trace, and deterministic cleanup.
 
-- [ ] A target change before write produces no mutation and no Send.
-- [ ] A target change before replay preserves the original target and produces
+- [x] A target change before write produces no mutation and no Send.
+- [x] A target change before replay preserves the original target and produces
   no Send in either local window.
 
 ## 319. Prove UI Automation write failure blocks the reference-composer Send

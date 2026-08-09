@@ -19,6 +19,13 @@ internal enum ReferenceComposerForegroundMode
     Refused
 }
 
+internal enum ReferenceComposerTargetChangeMode
+{
+    None,
+    BeforeWrite,
+    BeforeReplay
+}
+
 internal sealed record ReferenceComposerAcceptanceReport(
     bool HookStarted,
     bool OriginalInputSuppressed,
@@ -50,7 +57,8 @@ internal static class ReferenceComposerAcceptanceRunner
         ISanitizer sanitizer,
         string prompt,
         ReferenceComposerDecision decision,
-        ReferenceComposerForegroundMode foregroundMode = ReferenceComposerForegroundMode.Verified)
+        ReferenceComposerForegroundMode foregroundMode = ReferenceComposerForegroundMode.Verified,
+        ReferenceComposerTargetChangeMode targetChangeMode = ReferenceComposerTargetChangeMode.None)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(prompt);
@@ -78,7 +86,9 @@ internal static class ReferenceComposerAcceptanceRunner
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 using var composer = new ReferenceComposerForm(prompt);
-                var discovery = new ReferenceComposerSurfaceDiscovery(composer);
+                using var replacementComposer = new ReferenceComposerForm(string.Empty);
+                var targets = new ReferenceComposerTargetController(composer, replacementComposer, targetChangeMode);
+                var discovery = new ReferenceComposerSurfaceDiscovery(targets.GetActiveForm);
                 var profile = CreateProfile();
                 var hookHost = new WindowsNativeSubmitHookHost(new[] { profile });
                 using var overlay = new WindowsConfirmationOverlay(
@@ -86,6 +96,7 @@ internal static class ReferenceComposerAcceptanceRunner
                     {
                         if (decision == ReferenceComposerDecision.Approve)
                         {
+                            targets.ChangeAfterApproval();
                             window.Approve();
                         }
                         else
@@ -114,9 +125,19 @@ internal static class ReferenceComposerAcceptanceRunner
                             adapter,
                             new VerifiedSubmitBindingAction(adapter, profile),
                             overlay);
+                        Func<string, string, bool> acceptanceTrace = (stage, resultCode) =>
+                        {
+                            var traced = traceStage(stage, resultCode);
+                            if (traced && stage == "text_written")
+                            {
+                                targets.ChangeBeforeReplay();
+                            }
+
+                            return traced;
+                        };
                         return orchestrator.RunOnce(
                             OsInteractionRunOptions.ConfirmAndSend,
-                            traceStage,
+                            acceptanceTrace,
                             executionGuard,
                             executionLease);
                     });
@@ -173,6 +194,10 @@ internal static class ReferenceComposerAcceptanceRunner
 
                 composer.Shown += (_, _) =>
                 {
+                    replacementComposer.CreateControl();
+                    replacementComposer.Composer.CreateControl();
+                    _ = replacementComposer.Handle;
+                    _ = replacementComposer.Composer.Handle;
                     using var source = hookHost.OpenReferenceOnlyInputSourceForAcceptance(composer.Handle);
                     dispatch = source.DispatchKeyboard(new NativeKeyGesture(
                         "Enter",
@@ -240,23 +265,24 @@ internal static class ReferenceComposerAcceptanceRunner
 
     private sealed class ReferenceComposerSurfaceDiscovery : IActiveTextSurfaceDiscovery
     {
-        private readonly ReferenceComposerForm _form;
+        private readonly Func<ReferenceComposerForm> _formProvider;
 
-        public ReferenceComposerSurfaceDiscovery(ReferenceComposerForm form)
+        public ReferenceComposerSurfaceDiscovery(Func<ReferenceComposerForm> formProvider)
         {
-            _form = form;
+            _formProvider = formProvider;
         }
 
         public TextSurfaceDiscoveryResult DiscoverActiveSurface()
         {
-            if (_form.IsDisposed || !_form.IsHandleCreated || !_form.Composer.IsHandleCreated)
+            var form = _formProvider();
+            if (form.IsDisposed || !form.IsHandleCreated || !form.Composer.IsHandleCreated)
             {
                 return TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer);
             }
 
             try
             {
-                var element = AutomationElement.FromHandle(_form.Composer.Handle);
+                var element = AutomationElement.FromHandle(form.Composer.Handle);
                 if (element is null || element.Current.ProcessId != Environment.ProcessId)
                 {
                     return TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer);
@@ -273,7 +299,7 @@ internal static class ReferenceComposerAcceptanceRunner
                     SurfaceKind: "reference_only_acceptance",
                     CloudSubmission: "false",
                     ComposerStatus: OsInteractionStatusIds.SupportedComposer,
-                    WindowHandle: _form.Handle.ToInt64().ToString("X", System.Globalization.CultureInfo.InvariantCulture),
+                    WindowHandle: form.Handle.ToInt64().ToString("X", System.Globalization.CultureInfo.InvariantCulture),
                     ElementAutomationId: automationId,
                     ArbitraryMetadata: new Dictionary<string, string>
                     {
@@ -398,6 +424,43 @@ internal static class ReferenceComposerAcceptanceRunner
                 && string.Equals(current.Surface.ProfileId, expected.ProfileId, StringComparison.Ordinal)
                 && string.Equals(current.Surface.Metadata.TryGetValue("window_handle"), expected.Metadata.TryGetValue("window_handle"), StringComparison.Ordinal);
         }
+    }
+
+    private sealed class ReferenceComposerTargetController
+    {
+        private readonly ReferenceComposerForm _replacement;
+        private readonly ReferenceComposerTargetChangeMode _mode;
+        private ReferenceComposerForm _active;
+
+        public ReferenceComposerTargetController(
+            ReferenceComposerForm original,
+            ReferenceComposerForm replacement,
+            ReferenceComposerTargetChangeMode mode)
+        {
+            _replacement = replacement;
+            _mode = mode;
+            _active = original;
+        }
+
+        public ReferenceComposerForm GetActiveForm() => Volatile.Read(ref _active);
+
+        public void ChangeAfterApproval()
+        {
+            if (_mode == ReferenceComposerTargetChangeMode.BeforeWrite)
+            {
+                ChangeTarget();
+            }
+        }
+
+        public void ChangeBeforeReplay()
+        {
+            if (_mode == ReferenceComposerTargetChangeMode.BeforeReplay)
+            {
+                ChangeTarget();
+            }
+        }
+
+        private void ChangeTarget() => Volatile.Write(ref _active, _replacement);
     }
 }
 
