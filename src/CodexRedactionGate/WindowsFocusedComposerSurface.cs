@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -191,10 +192,15 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
 
     private static IReadOnlyDictionary<string, string> Diagnostics(FocusedElementSnapshot snapshot)
     {
+        var applicationVersion = ApplicationVersion(snapshot.WindowHandle);
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["window_title_length"] = snapshot.WindowTitle.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["process_name_length"] = snapshot.ProcessName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["application_identity_hash"] = Hash(snapshot.ProcessName),
+            ["application_version_hash"] = Hash(applicationVersion),
+            ["application_version_status"] = ApplicationVersionStatus(applicationVersion),
+            ["window_identity_hash"] = Hash(snapshot.WindowClassName),
             ["window_class_name_length"] = snapshot.WindowClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["element_control_type"] = snapshot.ElementControlType,
             ["element_class_name_length"] = snapshot.ElementClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -211,6 +217,31 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
             ["can_use_keyboard_text_input"] = snapshot.CanUseKeyboardTextInput.ToString().ToLowerInvariant(),
             ["focused_element_hash"] = snapshot.ElementRuntimeIdHash
         };
+    }
+
+    private static string ApplicationVersion(IntPtr window)
+    {
+        try
+        {
+            NativeFocusedElementSnapshotProvider.NativeMethods.GetWindowThreadProcessId(window, out var processId);
+            return Process.GetProcessById((int)processId).MainModule?.FileVersionInfo.ProductVersion ?? "unknown";
+        }
+        catch (Exception)
+        {
+            return "unknown";
+        }
+    }
+
+    private static string ApplicationVersionStatus(string applicationVersion)
+    {
+        return string.Equals(applicationVersion, "unknown", StringComparison.Ordinal)
+            ? "unavailable"
+            : "available";
+    }
+
+    private static string Hash(string value)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 
     private static IReadOnlyDictionary<string, string> Merge(
@@ -472,7 +503,7 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
         }
     }
 
-    private static class NativeMethods
+    internal static class NativeMethods
     {
         [DllImport("user32.dll")]
         public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);

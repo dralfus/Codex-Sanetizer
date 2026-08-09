@@ -351,7 +351,10 @@ public static class WindowsTrayApp
             };
         }
 
-        return profiles.Where(profile => profile.Enabled).ToArray();
+        return profiles
+            .Select(ChatGptDesktopCompatibility.RequirePinnedFingerprint)
+            .Where(profile => profile.Enabled || profile.ProfileId is "codex-desktop" or "chatgpt-desktop")
+            .ToArray();
     }
 }
 

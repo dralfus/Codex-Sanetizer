@@ -189,7 +189,10 @@ public sealed record SurfaceCompatibilityEvidence(
     string ControlType,
     string ComposerClassName,
     string VerificationId,
-    DateTimeOffset VerifiedAtUtc)
+    DateTimeOffset VerifiedAtUtc,
+    string SubmitBinding = "unknown",
+    string NewlineBinding = "unknown",
+    string SendControlEvidenceHash = "unknown")
 {
     public IReadOnlyDictionary<string, string> ToRawFreeDiagnostics()
     {
@@ -203,8 +206,30 @@ public sealed record SurfaceCompatibilityEvidence(
             ["framework_id"] = FrameworkId,
             ["control_type"] = ControlType,
             ["composer_class_name_length"] = ComposerClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["submit_binding"] = SubmitBinding,
+            ["newline_binding"] = NewlineBinding,
+            ["send_control_evidence_hash"] = SendControlEvidenceHash,
             ["verification_id"] = VerificationId,
             ["verified_at_utc"] = VerifiedAtUtc.ToString("O")
+        };
+    }
+
+    public IReadOnlyDictionary<string, string> ToComparisonDiagnostics()
+    {
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["package_family_name"] = PackageFamilyName,
+            ["package_full_name_pattern"] = PackageFullNamePattern,
+            ["package_version"] = PackageVersion,
+            ["executable_name"] = ExecutableName,
+            ["process_name"] = ProcessName,
+            ["window_class_name_length"] = WindowClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["framework_id"] = FrameworkId,
+            ["control_type"] = ControlType,
+            ["composer_class_name_length"] = ComposerClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["submit_binding"] = SubmitBinding,
+            ["newline_binding"] = NewlineBinding,
+            ["send_control_evidence_hash"] = SendControlEvidenceHash
         };
     }
 }
@@ -503,7 +528,7 @@ public static class SubmitBindingOnboardingVerifier
         if (surfaceMetadata.ComposerStatus is not null)
             diagnostics["composer_status"] = surfaceMetadata.ComposerStatus;
 
-        return new SubmitBindingProfile(
+        var profile = new SubmitBindingProfile(
             profileId,
             Enabled: true,
             BindingSource: "user_verified",
@@ -512,6 +537,20 @@ public static class SubmitBindingOnboardingVerifier
             CapabilityStatus: OsInteractionStatusIds.Protected,
             CompatibilityEvidence: evidence,
             Diagnostics: diagnostics);
+
+        if (string.Equals(profileId, "chatgpt-desktop", StringComparison.Ordinal)
+            && evidence is null)
+        {
+            if (!ChatGptDesktopCompatibility.TryCreate(profile, discovery, out var compatibilityEvidence))
+            {
+                diagnostics["compatibility"] = "fingerprint_incomplete";
+                return Failed(profileId, OsInteractionStatusIds.SurfaceUnverified, diagnostics, null);
+            }
+
+            profile = profile with { CompatibilityEvidence = compatibilityEvidence };
+        }
+
+        return profile;
     }
 
     /// <summary>
@@ -590,9 +629,16 @@ public static class SurfaceCompatibilityEvaluator
             return new SurfaceCompatibilityResult(profile.CapabilityStatus, diagnostics);
         }
 
+        if (string.Equals(profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
+            && (profile.CompatibilityEvidence is null || activeEvidence is null))
+        {
+            diagnostics["mismatch_reason"] = "compatibility_evidence_missing";
+            return new SurfaceCompatibilityResult(OsInteractionStatusIds.SurfaceUnverified, diagnostics);
+        }
+
         if (profile.CompatibilityEvidence is not null && activeEvidence is not null)
         {
-            foreach (var expected in profile.CompatibilityEvidence.ToRawFreeDiagnostics())
+            foreach (var expected in profile.CompatibilityEvidence.ToComparisonDiagnostics())
             {
                 if (!activeEvidence.TryGetValue(expected.Key, out var actual)
                     || !string.Equals(expected.Value, actual, StringComparison.Ordinal))
@@ -1135,6 +1181,21 @@ public sealed class NativeSubmitInterceptionController
         {
             diagnostics["pass_through_reason"] = "active_surface_cannot_submit";
             return PassThrough(diagnostics);
+        }
+
+        var compatibility = SurfaceCompatibilityEvaluator.Evaluate(
+            _profile,
+            discovery.Surface,
+            ChatGptDesktopCompatibility.ActiveEvidence(_profile, discovery));
+        if (compatibility.Status != OsInteractionStatusIds.Protected)
+        {
+            diagnostics["fail_closed_reason"] = compatibility.Diagnostics["mismatch_reason"];
+            return new NativeSubmitInterceptionResult(
+                compatibility.Status,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: diagnostics);
         }
 
         diagnostics["active_surface_gate"] = "selected_profile";
