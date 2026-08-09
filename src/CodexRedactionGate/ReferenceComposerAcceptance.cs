@@ -26,6 +26,12 @@ internal enum ReferenceComposerTargetChangeMode
     BeforeReplay
 }
 
+internal enum ReferenceComposerWriteMode
+{
+    Available,
+    Unavailable
+}
+
 internal sealed record ReferenceComposerAcceptanceReport(
     bool HookStarted,
     bool OriginalInputSuppressed,
@@ -58,7 +64,8 @@ internal static class ReferenceComposerAcceptanceRunner
         string prompt,
         ReferenceComposerDecision decision,
         ReferenceComposerForegroundMode foregroundMode = ReferenceComposerForegroundMode.Verified,
-        ReferenceComposerTargetChangeMode targetChangeMode = ReferenceComposerTargetChangeMode.None)
+        ReferenceComposerTargetChangeMode targetChangeMode = ReferenceComposerTargetChangeMode.None,
+        ReferenceComposerWriteMode writeMode = ReferenceComposerWriteMode.Available)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(prompt);
@@ -96,6 +103,11 @@ internal static class ReferenceComposerAcceptanceRunner
                     {
                         if (decision == ReferenceComposerDecision.Approve)
                         {
+                            if (writeMode == ReferenceComposerWriteMode.Unavailable)
+                            {
+                                composer.BeginInvoke(new Action(() => composer.Composer.ReadOnly = true));
+                            }
+
                             targets.ChangeAfterApproval();
                             window.Approve();
                         }
@@ -107,8 +119,10 @@ internal static class ReferenceComposerAcceptanceRunner
                     new WindowsConfirmationOverlay.FixedForegroundNativeMethods(
                         foregroundActivated: foregroundMode == ReferenceComposerForegroundMode.Verified));
 
-                var adapter = new WindowsVerifiedComposerSurfaceAdapter(
-                    new ReferenceComposerTextAccess(composer, discovery.DiscoverActiveSurface));
+                var textAccess = writeMode == ReferenceComposerWriteMode.Unavailable
+                    ? (IVerifiedComposerTextAccess)new NativeVerifiedComposerTextAccess(discovery.DiscoverActiveSurface)
+                    : new ReferenceComposerTextAccess(composer, discovery.DiscoverActiveSurface);
+                var adapter = new WindowsVerifiedComposerSurfaceAdapter(textAccess);
                 var runtime = new NativeSubmitRuntime(
                     hookHost,
                     new NativeSubmitInterceptionController(

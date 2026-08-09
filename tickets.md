@@ -1259,8 +1259,8 @@ verified local write. Write failure goes directly to the terminal blocked state.
 non-writable state at the write boundary and asserts no sent text and a raw-free
 terminal trace without timers or cloud access.
 
-- [ ] A write failure after approval sends neither raw nor sanitized text.
-- [ ] The trace does not contain `text_written`, `send_injected`, or
+- [x] A write failure after approval sends neither raw nor sanitized text.
+- [x] The trace does not contain `text_written`, `send_injected`, or
   `sent_safely` after the failed write.
 
 ## 320. Prove replay failure and partial injection fail closed

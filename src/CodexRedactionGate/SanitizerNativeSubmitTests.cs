@@ -5669,6 +5669,26 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
     }
 
     [Test]
+    public void ReferenceComposerAcceptance_UiAutomationWriteFailureBlocksAfterApproval()
+    {
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
+            "Connect to 192.168.10.25",
+            ReferenceComposerDecision.Approve,
+            ReferenceComposerForegroundMode.Verified,
+            ReferenceComposerTargetChangeMode.None,
+            ReferenceComposerWriteMode.Unavailable);
+
+        Assert.That(report.HookStarted, Is.True);
+        Assert.That(report.OriginalInputSuppressed, Is.True);
+        Assert.That(report.Submitted, Is.False);
+        Assert.That(report.SentTexts, Is.Empty);
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("text_written"));
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
+        Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
+    }
+
+    [Test]
     public void ReferenceComposerAcceptance_CancelAndRepeatedRunLeaveNoSendOrLeakedCapability()
     {
         var sanitizer = new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret")));
