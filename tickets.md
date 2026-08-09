@@ -1439,9 +1439,12 @@ resident `sent_safely` trace records the live proof and consumes the arm.
 only when both records match. Missing, malformed, stale, or mismatched proof
 remains degraded and suppresses Send. The native controller consumes the claim
 from the resident snapshot rather than reading proof files during input
-handling; the standalone CLI remains diagnostic-only and cannot claim resident
-protection. The stored live proof includes the validated raw-free terminal
-trace, while the release matrix validates canonical stage order and cleanup.
+handling; every active/reloaded runtime is wired to that snapshot and candidate
+profiles cannot use a stale snapshot claim. The standalone CLI remains
+diagnostic-only and cannot claim resident protection. Live arm consumption is
+single-use and synchronized, with deletion failure remaining fail-closed. The
+stored live proof includes the validated raw-free terminal trace, while the
+release matrix validates canonical stage order, keyboard and mouse hook cleanup.
 Automated coverage includes pairing, build/fingerprint mismatch, raw-free
 persistence, resident suppression, complete trace validation, cleanup, and
 one-use live arm consumption.

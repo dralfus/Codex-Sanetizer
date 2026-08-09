@@ -173,6 +173,12 @@ public partial class SanitizerTests
         Assert.That(transition.Stage, Is.EqualTo(ProtectedSendTraceStage.SendDetected));
         Assert.That(transition.StageToken, Is.EqualTo("send_detected"));
         Assert.That(transition.ResultCode.Value, Is.EqualTo("checking_prompt"));
+        Assert.That(
+            ProtectedSendTraceTransition.TryCreate(
+                "terminal_blocked",
+                OsInteractionStatusIds.Submitted,
+                out _),
+            Is.False);
     }
 
     [Test]

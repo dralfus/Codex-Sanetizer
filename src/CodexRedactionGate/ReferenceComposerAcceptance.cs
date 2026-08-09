@@ -96,9 +96,9 @@ internal static class ReferenceComposerAcceptanceRunner
         ReferenceComposerAcceptanceReport? report = null;
         Exception? failure = null;
         Action? abort = null;
+        Func<bool>? cleanupProbe = null;
         string lastAcceptanceStatus = "not_started";
         string lastAcceptanceTraceStage = "none";
-        var cleanupPassed = false;
         using var completed = new ManualResetEventSlim();
         var thread = new Thread(() =>
         {
@@ -198,6 +198,13 @@ internal static class ReferenceComposerAcceptanceRunner
                         composer.BeginInvoke(new Action(composer.Close));
                     }
                 };
+                cleanupProbe = () => !controller.State.Enabled
+                    && !controller.IsNativeSubmitHookReady
+                    && composer.IsDisposed
+                    && replacementComposer.IsDisposed
+                    && overlay.IsShutdownCompleted
+                    && !hookHost.IsKeyboardHookRegistered
+                    && !hookHost.IsMouseHookRegistered;
 
                 var hookStarted = controller.Start();
                 var dispatch = ReferenceOnlyInputDispatchResult.Unavailable;
@@ -250,12 +257,7 @@ internal static class ReferenceComposerAcceptanceRunner
                 finally
                 {
                     controller.Stop();
-                    cleanupPassed = !controller.State.Enabled
-                        && !controller.IsNativeSubmitHookReady;
                 }
-                report = report is null
-                    ? null
-                    : report with { CleanupPassed = cleanupPassed };
                 report ??= new ReferenceComposerAcceptanceReport(
                     hookStarted,
                     dispatch.SuppressOriginalInput,
@@ -264,7 +266,7 @@ internal static class ReferenceComposerAcceptanceRunner
                     composer.SentTexts.ToArray(),
                     controller.State.ProtectedSendAttemptTrace?.ToArray() ?? Array.Empty<ProtectedSendTraceEntry>(),
                     replay.Diagnostics,
-                    cleanupPassed);
+                    CleanupPassed: false);
             }
             catch (Exception exception)
             {
@@ -289,6 +291,10 @@ internal static class ReferenceComposerAcceptanceRunner
         }
 
         thread.Join(TimeSpan.FromSeconds(5));
+        var cleanupPassed = cleanupProbe?.Invoke() == true;
+        report = report is null
+            ? null
+            : report with { CleanupPassed = cleanupPassed };
         if (failure is not null)
         {
             throw new InvalidOperationException("Reference composer acceptance failed.", failure);

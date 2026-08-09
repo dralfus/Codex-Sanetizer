@@ -84,6 +84,22 @@ public static class ChatGptProtectedClaimEvaluator
                 "fingerprint_invalid");
         }
 
+        if (!string.Equals(
+                profile.CompatibilityEvidence.SubmitBinding,
+                profile.SubmitBinding!.DisplayText,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                profile.CompatibilityEvidence.NewlineBinding,
+                profile.NewlineBinding!.DisplayText,
+                StringComparison.Ordinal))
+        {
+            return new ChatGptProtectedClaimResult(
+                OsInteractionStatusIds.SurfaceUnverified,
+                "mismatch",
+                "mismatch",
+                "binding_fingerprint_mismatch");
+        }
+
         var referenceStatus = ReferenceStatus(proofs.Reference, buildVersion, fingerprintId);
         if (referenceStatus != "passed")
         {
@@ -200,6 +216,7 @@ public static class ChatGptAcceptanceProofStore
 {
     private const string FileName = "chatgpt-acceptance-proofs.json";
     private const string LiveContractArmFileName = "chatgpt-live-contract-armed.txt";
+    private static readonly object LiveContractArmGate = new();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.General)
     {
         WriteIndented = true,
@@ -224,7 +241,7 @@ public static class ChatGptAcceptanceProofStore
         try
         {
             var proofs = JsonSerializer.Deserialize<ChatGptAcceptanceProofBundle>(File.ReadAllText(path), JsonOptions);
-            return proofs is null
+            return proofs is null || !IsValid(proofs)
                 ? new ChatGptAcceptanceProofStoreResult(false, "proofs_invalid", ChatGptAcceptanceProofBundle.Empty)
                 : new ChatGptAcceptanceProofStoreResult(true, "proofs_loaded", proofs);
         }
@@ -314,6 +331,7 @@ public static class ChatGptAcceptanceProofStore
             Environment.NewLine,
             $"build_version={BuildVersion.Current}",
             $"fingerprint_id={profile.CompatibilityEvidence.VerificationId}",
+            $"submit_binding={profile.SubmitBinding!.DisplayText}",
             "armed=true",
             string.Empty);
         AtomicFileWriter.WriteAllBytes(
@@ -335,6 +353,75 @@ public static class ChatGptAcceptanceProofStore
             return false;
         }
 
+        lock (LiveContractArmGate)
+        {
+            return IsLiveContractArmedCore(layout, profile, buildVersion);
+        }
+    }
+
+    public static bool TryConsumeLiveContractArm(
+        DefaultStorageLayout layout,
+        SubmitBindingProfile profile,
+        string buildVersion)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(buildVersion);
+
+        lock (LiveContractArmGate)
+        {
+            if (!IsLiveContractArmedCore(layout, profile, buildVersion))
+            {
+                return false;
+            }
+
+            try
+            {
+                File.Delete(Path.Combine(layout.SettingsDirectory, LiveContractArmFileName));
+                return true;
+            }
+            catch (Exception exception) when (exception is IOException
+                or UnauthorizedAccessException
+                or ArgumentException)
+            {
+                return false;
+            }
+        }
+    }
+
+    public static void ClearLiveContractArm(DefaultStorageLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        lock (LiveContractArmGate)
+        {
+            var path = Path.Combine(layout.SettingsDirectory, LiveContractArmFileName);
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception exception) when (exception is IOException
+                or UnauthorizedAccessException
+                or ArgumentException)
+            {
+                // A failed cleanup must never turn into a live-send bypass.
+            }
+        }
+    }
+
+    private static bool IsLiveContractArmedCore(
+        DefaultStorageLayout layout,
+        SubmitBindingProfile profile,
+        string buildVersion)
+    {
+        if (profile.CompatibilityEvidence is null
+            || !ProtectedSendTrace.IsOpaqueFingerprint(profile.CompatibilityEvidence.VerificationId))
+        {
+            return false;
+        }
+
         var path = Path.Combine(layout.SettingsDirectory, LiveContractArmFileName);
         if (!File.Exists(path))
         {
@@ -352,7 +439,9 @@ public static class ChatGptAcceptanceProofStore
                 && values.TryGetValue("build_version", out var storedBuild)
                 && storedBuild == buildVersion
                 && values.TryGetValue("fingerprint_id", out var storedFingerprint)
-                && storedFingerprint == profile.CompatibilityEvidence.VerificationId;
+                && storedFingerprint == profile.CompatibilityEvidence.VerificationId
+                && values.TryGetValue("submit_binding", out var storedBinding)
+                && storedBinding == profile.SubmitBinding?.DisplayText;
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
@@ -360,16 +449,6 @@ public static class ChatGptAcceptanceProofStore
             or InvalidOperationException)
         {
             return false;
-        }
-    }
-
-    public static void ClearLiveContractArm(DefaultStorageLayout layout)
-    {
-        ArgumentNullException.ThrowIfNull(layout);
-        var path = Path.Combine(layout.SettingsDirectory, LiveContractArmFileName);
-        if (File.Exists(path))
-        {
-            File.Delete(path);
         }
     }
 
@@ -387,7 +466,7 @@ public static class ChatGptAcceptanceProofStore
                 proofs.LiveContract.Trace));
     }
 
-    private static bool IsValid(string buildVersion, string fingerprintId, string status)
+    private static bool IsValid(string? buildVersion, string? fingerprintId, string? status)
     {
         return IsSafeBuildVersion(buildVersion)
             && ProtectedSendTrace.IsOpaqueFingerprint(fingerprintId)
@@ -395,10 +474,10 @@ public static class ChatGptAcceptanceProofStore
     }
 
     private static bool IsValid(
-        string buildVersion,
-        string fingerprintId,
-        string submitBinding,
-        string status,
+        string? buildVersion,
+        string? fingerprintId,
+        string? submitBinding,
+        string? status,
         IReadOnlyList<ProtectedSendTraceEntry>? trace)
     {
         return IsValid(buildVersion, fingerprintId, status)
@@ -407,7 +486,7 @@ public static class ChatGptAcceptanceProofStore
             && ProtectedSendTrace.IsCompleteSafeSendTrace(trace);
     }
 
-    private static bool IsSafeBinding(string value)
+    private static bool IsSafeBinding(string? value)
     {
         return !string.IsNullOrWhiteSpace(value)
             && value.All(character => character is >= 'a' and <= 'z'
@@ -416,7 +495,7 @@ public static class ChatGptAcceptanceProofStore
                 or '+' or '-');
     }
 
-    private static bool IsSafeBuildVersion(string value)
+    private static bool IsSafeBuildVersion(string? value)
     {
         return !string.IsNullOrWhiteSpace(value)
             && value.All(character => character is >= 'a' and <= 'z'
@@ -425,7 +504,7 @@ public static class ChatGptAcceptanceProofStore
                 or '_' or '.' or '-' or '+');
     }
 
-    private static bool IsSafeStatus(string value)
+    private static bool IsSafeStatus(string? value)
     {
         return !string.IsNullOrWhiteSpace(value)
             && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.');

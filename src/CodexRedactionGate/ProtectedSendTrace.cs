@@ -212,9 +212,23 @@ internal readonly record struct ProtectedSendTraceTransition(
             ProtectedSendTraceStage.TextWritten => resultCode == "write_verified",
             ProtectedSendTraceStage.SendInjected => resultCode == "submit_requested",
             ProtectedSendTraceStage.SentSafely => resultCode == OsInteractionStatusIds.Submitted,
-            ProtectedSendTraceStage.TerminalBlocked => ProtectedSendTraceResultCode.IsKnown(resultCode),
+            ProtectedSendTraceStage.TerminalBlocked => IsBlockedResultCode(resultCode),
             _ => false
         };
+    }
+
+    private static bool IsBlockedResultCode(string resultCode)
+    {
+        return ProtectedSendTraceResultCode.IsKnown(resultCode)
+            && resultCode is not (
+                OsInteractionStatusIds.Applied
+                or OsInteractionStatusIds.Protected
+                or OsInteractionStatusIds.Submitted
+                or OsInteractionStatusIds.NativeSubmitGuarded
+                or OsInteractionStatusIds.NativeSubmitInProgress
+                or OsInteractionStatusIds.NativeSubmitPassThrough
+                or OsInteractionStatusIds.DryRunAllow
+                or OsInteractionStatusIds.DryRunConfirm);
     }
 
     private static bool TryParseStage(string value, out ProtectedSendTraceStage stage)
@@ -334,9 +348,9 @@ internal static class ProtectedSendTrace
         };
     }
 
-    internal static bool IsOpaqueFingerprint(string value)
+    internal static bool IsOpaqueFingerprint(string? value)
     {
-        if (value.Length != 64)
+        if (value is null || value.Length != 64)
         {
             return false;
         }
@@ -355,7 +369,7 @@ internal static class ProtectedSendTrace
 
     internal static bool IsValidTerminalTrace(IReadOnlyList<ProtectedSendTraceEntry> trace)
     {
-        if (trace is null || trace.Count < 5)
+        if (trace is null || trace.Count < 5 || trace.Any(entry => entry is null))
         {
             return false;
         }

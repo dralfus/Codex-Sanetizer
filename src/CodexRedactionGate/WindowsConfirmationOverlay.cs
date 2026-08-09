@@ -59,6 +59,7 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
     private readonly Thread _thread;
     private PendingRequest? _activeRequest;
     private int _disposed;
+    private int _shutdownCompleted;
     private int _cancelled;
     private int _uiThreadId;
 
@@ -85,6 +86,10 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
     }
 
     public int UiThreadId => Volatile.Read(ref _uiThreadId);
+
+    public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+    public bool IsShutdownCompleted => Volatile.Read(ref _shutdownCompleted) != 0;
 
     public ConfirmationDecision Request(
         ConfirmationUiModel model,
@@ -127,19 +132,22 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        if (Volatile.Read(ref _shutdownCompleted) != 0)
         {
             return;
         }
 
-        lock (_gate)
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            _pending.CompleteAdding();
+            lock (_gate)
+            {
+                _pending.CompleteAdding();
+            }
+            CancelPending();
         }
-        CancelPending();
-        var joined = Environment.CurrentManagedThreadId == UiThreadId
-            || _thread.Join(TimeSpan.FromSeconds(5));
-        if (!joined)
+
+        if (Environment.CurrentManagedThreadId == UiThreadId
+            || !_thread.Join(TimeSpan.FromSeconds(5)))
         {
             return;
         }
@@ -150,6 +158,7 @@ internal sealed class ResidentOverlayDispatchQueue : IDisposable
         }
 
         _pending.Dispose();
+        Volatile.Write(ref _shutdownCompleted, 1);
     }
 
     public void CancelPending()
@@ -263,6 +272,10 @@ public sealed class WindowsConfirmationOverlay : ITracedConfirmationOverlay, IDi
         "bring_window_to_top",
         "flash_window"
     };
+
+    internal bool IsDisposed => _dispatcher is null || _dispatcher.IsDisposed;
+
+    internal bool IsShutdownCompleted => _dispatcher is null || _dispatcher.IsShutdownCompleted;
 
     public static ConfirmationOverlayForegroundActivationResult RunForegroundActivationSmoke(bool foregroundActivated)
     {

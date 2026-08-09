@@ -154,7 +154,13 @@ internal sealed class TrayProtectionController
             HookReady: false,
             sendControlDiscovery,
             surfaceDiscovery);
-        nativeSubmitController?.SetResidentProtectedClaimProvider(ReadResidentChatGptClaim);
+        if (nativeSubmitController is not null && resolvedProfile is not null)
+        {
+            nativeSubmitController.SetResidentProtectedClaimProvider(
+                () => ReadResidentChatGptClaim(resolvedProfile));
+        }
+
+        WireResidentProtectedClaimProviders(runtimes);
     }
 
     // Explicit test seam for controller tests that do not construct the Windows orchestrator.
@@ -852,6 +858,7 @@ internal sealed class TrayProtectionController
                 runtimeSet.HookHost,
                 runtimes,
                 runtimeSet.ResourceOwner);
+            WireResidentProtectedClaimProviders(candidateRuntimeSet.Runtimes);
             var setupReadiness = ReadSelectedProfileSetupReadiness(candidateRuntimeSet);
             var setupRequired = setupReadiness.SetupRequired;
             var state = CreateState(
@@ -970,6 +977,7 @@ internal sealed class TrayProtectionController
 
     private bool StartNativeSubmitHook(NativeSubmitRuntimeSet runtimeSet)
     {
+        WireResidentProtectedClaimProviders(runtimeSet.Runtimes);
         if (runtimeSet.Runtimes.Any(runtime => !HasRequiredResidentTraceRunner(runtime)))
         {
             return false;
@@ -1763,13 +1771,12 @@ internal sealed class TrayProtectionController
                     var liveProfileId = operation.Target?.ProfileId
                         ?? replacement.State.LastProfileId
                         ?? replacement.State.ConfiguredProfileId;
-                    var liveProfile = replacement.RuntimeSet?.Runtimes.FirstOrDefault(runtime =>
-                        string.Equals(runtime.Profile.ProfileId, liveProfileId, StringComparison.Ordinal))?.Profile;
-                    if (liveProfile is not null
-                        && ChatGptAcceptanceProofStore.IsLiveContractArmed(
-                            _storageLayout,
-                            liveProfile,
-                            BuildVersion.Current)
+                    var liveRuntime = replacement.RuntimeSet?.Runtimes.FirstOrDefault(runtime =>
+                        string.Equals(runtime.Profile.ProfileId, liveProfileId, StringComparison.Ordinal));
+                    var liveProfile = liveRuntime?.Profile;
+                    if (liveRuntime is not null
+                        && liveProfile is not null
+                        && liveRuntime.Controller.ConsumeLiveContractCapture()
                         && ChatGptAcceptanceProofStore.RecordLiveContract(
                             _storageLayout,
                             liveProfile,
@@ -1778,6 +1785,15 @@ internal sealed class TrayProtectionController
                     {
                         PublishChatGptProtectedClaim(liveProfile.ProfileId);
                     }
+                }
+                else if (trace[^1].Stage == "terminal_blocked")
+                {
+                    var blockedProfileId = operation.Target?.ProfileId
+                        ?? replacement.State.LastProfileId
+                        ?? replacement.State.ConfiguredProfileId;
+                    replacement.RuntimeSet?.Runtimes.FirstOrDefault(runtime =>
+                        string.Equals(runtime.Profile.ProfileId, blockedProfileId, StringComparison.Ordinal))
+                        ?.Controller.ClearLiveContractCapture();
                 }
 
                 return true;
@@ -2229,9 +2245,46 @@ internal sealed class TrayProtectionController
             ProjectFileStatus: projectFileStatus);
     }
 
-    private ChatGptProtectedClaimResult ReadResidentChatGptClaim()
+    private void WireResidentProtectedClaimProviders(IReadOnlyList<NativeSubmitRuntime> runtimes)
     {
-        var state = ReadSnapshot().State;
+        foreach (var runtime in runtimes)
+        {
+            runtime.Controller.SetResidentProtectedClaimProvider(
+                () => ReadResidentChatGptClaim(runtime.Profile));
+        }
+    }
+
+    private ChatGptProtectedClaimResult ReadResidentChatGptClaim(SubmitBindingProfile profile)
+    {
+        var snapshot = ReadSnapshot();
+        var currentProfile = snapshot.RuntimeSet?.Runtimes
+            .FirstOrDefault(runtime => string.Equals(
+                runtime.Profile.ProfileId,
+                profile.ProfileId,
+                StringComparison.Ordinal))
+            ?.Profile;
+        if (currentProfile is null
+            || !string.Equals(
+                currentProfile.CompatibilityEvidence?.VerificationId,
+                profile.CompatibilityEvidence?.VerificationId,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                currentProfile.SubmitBinding?.DisplayText,
+                profile.SubmitBinding?.DisplayText,
+                StringComparison.Ordinal)
+            || !string.Equals(
+                currentProfile.NewlineBinding?.DisplayText,
+                profile.NewlineBinding?.DisplayText,
+                StringComparison.Ordinal))
+        {
+            return new ChatGptProtectedClaimResult(
+                ChatGptProtectedClaimEvaluator.DegradedStatus,
+                "mismatch",
+                "mismatch",
+                "resident_profile_mismatch");
+        }
+
+        var state = snapshot.State;
         return new ChatGptProtectedClaimResult(
             state.ProtectedClaimStatus,
             state.ReferenceAcceptanceStatus,

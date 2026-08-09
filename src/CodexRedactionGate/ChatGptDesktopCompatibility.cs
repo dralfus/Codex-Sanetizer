@@ -72,7 +72,7 @@ internal static class ChatGptDesktopCompatibility
             discovery.Diagnostics["element_framework_id"],
             discovery.Diagnostics["element_control_type"],
             discovery.Diagnostics["composer_class_hash"],
-            CreateVerificationId(discovery.Diagnostics),
+            CreateVerificationId(discovery.Diagnostics, profile, activeSendEvidence ?? profile.Diagnostics),
             DateTimeOffset.UtcNow,
             profile.SubmitBinding.DisplayText,
             profile.NewlineBinding.DisplayText,
@@ -98,9 +98,15 @@ internal static class ChatGptDesktopCompatibility
         return Hash($"{automationId}|{name}");
     }
 
-    private static string CreateVerificationId(IReadOnlyDictionary<string, string> diagnostics)
+    private static string CreateVerificationId(
+        IReadOnlyDictionary<string, string> diagnostics,
+        SubmitBindingProfile profile,
+        IReadOnlyDictionary<string, string> sendControlEvidence)
     {
-        return Hash(string.Join("|", RequiredEvidenceKeys.Select(key => diagnostics[key])));
+        var evidence = string.Join("|", RequiredEvidenceKeys.Select(key => diagnostics[key]));
+        var binding = $"submit={profile.SubmitBinding!.DisplayText}|newline={profile.NewlineBinding!.DisplayText}";
+        var sendControl = $"send_control={FingerprintSendControl(sendControlEvidence)}";
+        return Hash($"{evidence}|{binding}|{sendControl}");
     }
 
     private static string Hash(string value)

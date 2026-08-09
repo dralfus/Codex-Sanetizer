@@ -714,6 +714,7 @@ public sealed class NativeSubmitInterceptionController
     private readonly Func<DateTimeOffset> _clock;
     private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
     private Func<ChatGptProtectedClaimResult>? _residentProtectedClaimProvider;
+    private int _liveContractCapturePending;
     private readonly IFirstRunSetupController? _firstRunSetupController;
     private readonly DefaultStorageLayout? _setupLayout;
 
@@ -775,6 +776,16 @@ public sealed class NativeSubmitInterceptionController
         Func<ChatGptProtectedClaimResult>? provider)
     {
         _residentProtectedClaimProvider = provider;
+    }
+
+    internal bool ConsumeLiveContractCapture()
+    {
+        return Interlocked.Exchange(ref _liveContractCapturePending, 0) != 0;
+    }
+
+    internal void ClearLiveContractCapture()
+    {
+        Interlocked.Exchange(ref _liveContractCapturePending, 0);
     }
 
     public NativeSubmitInterceptionResult HandleButtonClick(
@@ -1037,7 +1048,11 @@ public sealed class NativeSubmitInterceptionController
         }
 
         var claim = _residentProtectedClaimProvider is null
-            ? ChatGptProtectedClaimEvaluator.Evaluate(_profile, _setupLayout)
+            ? new ChatGptProtectedClaimResult(
+                ChatGptProtectedClaimEvaluator.DegradedStatus,
+                "unavailable",
+                "unavailable",
+                "resident_snapshot_unavailable")
             : _residentProtectedClaimProvider();
         diagnostics["protected_claim_status"] = claim.Status;
         diagnostics["reference_acceptance_status"] = claim.ReferenceStatus;
@@ -1048,12 +1063,14 @@ public sealed class NativeSubmitInterceptionController
             return null;
         }
 
-        if (ChatGptAcceptanceProofStore.IsLiveContractArmed(
+        if (_residentProtectedClaimProvider is not null
+            && ChatGptAcceptanceProofStore.TryConsumeLiveContractArm(
                 _setupLayout,
                 _profile,
                 BuildVersion.Current))
         {
-            diagnostics["live_contract_capture"] = "armed";
+            Interlocked.Exchange(ref _liveContractCapturePending, 1);
+            diagnostics["live_contract_capture"] = "armed_consumed";
             return null;
         }
 
@@ -1563,6 +1580,8 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
     internal bool IsKeyboardHookRegistered => _hook != IntPtr.Zero;
 
+    internal bool IsMouseHookRegistered => _mouseHook != IntPtr.Zero;
+
     public bool Start(
         Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
         Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
@@ -1614,14 +1633,18 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
 
         if (_hook != IntPtr.Zero)
         {
-            NativeMethods.UnhookWindowsHookEx(_hook);
-            _hook = IntPtr.Zero;
+            if (NativeMethods.UnhookWindowsHookEx(_hook))
+            {
+                _hook = IntPtr.Zero;
+            }
         }
 
         if (_mouseHook != IntPtr.Zero)
         {
-            NativeMethods.UnhookWindowsHookEx(_mouseHook);
-            _mouseHook = IntPtr.Zero;
+            if (NativeMethods.UnhookWindowsHookEx(_mouseHook))
+            {
+                _mouseHook = IntPtr.Zero;
+            }
         }
 
         _classify = null;

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using NUnit.Framework;
 
 namespace CodexRedactionGate;
@@ -94,6 +95,34 @@ public sealed class ChatGptProtectedClaimTests
             if (Directory.Exists(layout.RootDirectory))
             {
                 Directory.Delete(layout.RootDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void MalformedProofStoreIsRejectedBeforeClaimEvaluation()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-malformed-claim-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        layout.EnsureDirectories();
+
+        try
+        {
+            File.WriteAllText(
+                ChatGptAcceptanceProofStore.DefaultPath(layout),
+                "{\"live_contract\":{\"trace\":[null]}}\n");
+
+            var loaded = ChatGptAcceptanceProofStore.Load(layout);
+
+            Assert.That(loaded.Succeeded, Is.False);
+            Assert.That(loaded.Code, Is.EqualTo("proofs_invalid"));
+            Assert.That(loaded.Proofs, Is.EqualTo(ChatGptAcceptanceProofBundle.Empty));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
             }
         }
     }
@@ -227,6 +256,38 @@ public sealed class ChatGptProtectedClaimTests
             var loaded = ChatGptAcceptanceProofStore.Load(layout);
             Assert.That(loaded.Proofs.LiveContract, Is.Not.Null);
             Assert.That(loaded.Proofs.LiveContract!.TerminalStatus, Is.EqualTo("sent_safely"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void LiveContractArmCanBeConsumedOnlyOnceConcurrently()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-live-arm-concurrency-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = CreateProfile();
+
+        try
+        {
+            Assert.That(ChatGptAcceptanceProofStore.ArmLiveContract(layout, profile), Is.True);
+            var attempts = Enumerable.Range(0, 16)
+                .Select(_ => Task.Run(() => ChatGptAcceptanceProofStore.TryConsumeLiveContractArm(
+                    layout,
+                    profile,
+                    BuildVersion.Current)))
+                .ToArray();
+            Task.WaitAll(attempts);
+
+            Assert.That(attempts.Count(attempt => attempt.Result), Is.EqualTo(1));
+            Assert.That(
+                ChatGptAcceptanceProofStore.IsLiveContractArmed(layout, profile, BuildVersion.Current),
+                Is.False);
         }
         finally
         {
