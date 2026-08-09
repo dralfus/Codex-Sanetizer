@@ -43,6 +43,7 @@ public static class OsInteractionStatusIds
     public const string ProfilesUnavailable = "profiles_unavailable";
     public const string ProgrammaticUiaInvokeUnsupported = "programmatic_uia_invoke_unsupported";
     public const string ReferenceSourceUnavailable = "reference_source_unavailable";
+    public const string ReplayIndeterminate = "replay_indeterminate";
 }
 
 /// <summary>

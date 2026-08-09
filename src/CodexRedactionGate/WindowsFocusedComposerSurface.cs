@@ -491,19 +491,149 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
     }
 }
 
+[Flags]
+internal enum VerifiedKeyboardModifiers
+{
+    None = 0,
+    Control = 1,
+    Shift = 2,
+    Alt = 4
+}
+
+internal sealed record VerifiedComposerReplayResult(
+    bool Succeeded,
+    string Status,
+    IReadOnlyDictionary<string, string> Diagnostics);
+
+internal interface IVerifiedComposerReplay
+{
+    VerifiedComposerReplayResult Replay(AutomationElement? element, string sendKeysText);
+}
+
+internal sealed class NativeVerifiedComposerReplay : IVerifiedComposerReplay
+{
+    public VerifiedComposerReplayResult Replay(AutomationElement? element, string sendKeysText)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sendKeysText);
+
+        var modifiers = DetectModifiers(sendKeysText);
+        try
+        {
+            element.SetFocus();
+            SendKeys.SendWait(sendKeysText);
+            Thread.Sleep(120);
+            return new VerifiedComposerReplayResult(
+                true,
+                OsInteractionStatusIds.Submitted,
+                new Dictionary<string, string>
+                {
+                    ["replay_outcome"] = "completed",
+                    ["modifiers_released"] = "true"
+                });
+        }
+        catch (InvalidOperationException)
+        {
+            return FailedResult();
+        }
+        catch (COMException)
+        {
+            return FailedResult();
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return FailedResult();
+        }
+        finally
+        {
+            ReleaseModifiers(modifiers);
+        }
+    }
+
+    private static VerifiedComposerReplayResult FailedResult()
+    {
+        return new VerifiedComposerReplayResult(
+            false,
+            OsInteractionStatusIds.ReplayIndeterminate,
+            new Dictionary<string, string>
+            {
+                ["replay_outcome"] = "unavailable",
+                ["modifiers_released"] = "true"
+            });
+    }
+
+    private static VerifiedKeyboardModifiers DetectModifiers(string sendKeysText)
+    {
+        var modifiers = VerifiedKeyboardModifiers.None;
+        if (sendKeysText.Contains('^', StringComparison.Ordinal))
+        {
+            modifiers |= VerifiedKeyboardModifiers.Control;
+        }
+
+        if (sendKeysText.Contains('+', StringComparison.Ordinal))
+        {
+            modifiers |= VerifiedKeyboardModifiers.Shift;
+        }
+
+        if (sendKeysText.Contains('%', StringComparison.Ordinal))
+        {
+            modifiers |= VerifiedKeyboardModifiers.Alt;
+        }
+
+        return modifiers;
+    }
+
+    private static void ReleaseModifiers(VerifiedKeyboardModifiers modifiers)
+    {
+        if ((modifiers & VerifiedKeyboardModifiers.Control) != 0)
+        {
+            NativeMethods.ReleaseKey(0x11);
+        }
+
+        if ((modifiers & VerifiedKeyboardModifiers.Shift) != 0)
+        {
+            NativeMethods.ReleaseKey(0x10);
+        }
+
+        if ((modifiers & VerifiedKeyboardModifiers.Alt) != 0)
+        {
+            NativeMethods.ReleaseKey(0x12);
+        }
+    }
+
+    private static class NativeMethods
+    {
+        private const uint KeyUp = 0x0002;
+
+        [DllImport("user32.dll")]
+        private static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
+
+        public static void ReleaseKey(byte virtualKey)
+        {
+            keybd_event(virtualKey, 0, KeyUp, UIntPtr.Zero);
+        }
+    }
+}
+
 public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAccess
 {
     private const int MaxTextPatternCaptureLength = 65536;
     private readonly Func<TextSurfaceDiscoveryResult> _surfaceDiscovery;
+    private readonly IVerifiedComposerReplay _replay;
 
     public NativeVerifiedComposerTextAccess()
-        : this(() => WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface())
+        : this(
+            () => WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface(),
+            new NativeVerifiedComposerReplay())
     {
     }
 
-    internal NativeVerifiedComposerTextAccess(Func<TextSurfaceDiscoveryResult> surfaceDiscovery)
+    internal NativeVerifiedComposerTextAccess(
+        Func<TextSurfaceDiscoveryResult> surfaceDiscovery,
+        IVerifiedComposerReplay? replay = null)
     {
         _surfaceDiscovery = surfaceDiscovery ?? throw new ArgumentNullException(nameof(surfaceDiscovery));
+        _replay = replay ?? new NativeVerifiedComposerReplay();
     }
 
     public TextCaptureResult CaptureText(TextSurfaceDescriptor surface)
@@ -642,17 +772,13 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                         new Dictionary<string, string> { ["submit_binding"] = "unknown" });
                 }
 
-                element.SetFocus();
-                SendKeys.SendWait(sendKeysText);
-                Thread.Sleep(120);
-                return new SubmitActionResult(
-                    true,
-                    OsInteractionStatusIds.Submitted,
-                    new Dictionary<string, string>
-                    {
-                        ["submit_strategy"] = "verified-composer-binding",
-                        ["submit_binding"] = surface.Metadata.TryGetValue("submit_binding") ?? "configured"
-                    });
+                var replay = _replay.Replay(element, sendKeysText);
+                var diagnostics = new Dictionary<string, string>(replay.Diagnostics)
+                {
+                    ["submit_strategy"] = "verified-composer-binding",
+                    ["submit_binding"] = surface.Metadata.TryGetValue("submit_binding") ?? "configured"
+                };
+                return new SubmitActionResult(replay.Succeeded, replay.Status, diagnostics);
             });
         }
         catch (InvalidOperationException)

@@ -144,6 +144,41 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void ProtectedSendTrace_AllowsReplayIndeterminateTerminalOutcome()
+    {
+        const string fingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        var trace = Array.Empty<ProtectedSendTraceEntry>();
+        Assert.That(ProtectedSendTrace.TryAppend(
+            trace,
+            7,
+            3,
+            fingerprint,
+            "send_detected",
+            "checking_prompt",
+            0,
+            out var detected), Is.True);
+        Assert.That(ProtectedSendTrace.TryAppend(
+            detected,
+            7,
+            3,
+            fingerprint,
+            "target_matched",
+            "target_verified",
+            0,
+            out var matched), Is.True);
+        Assert.That(ProtectedSendTrace.TryAppend(
+            matched,
+            7,
+            3,
+            fingerprint,
+            "terminal_blocked",
+            OsInteractionStatusIds.ReplayIndeterminate,
+            0,
+            out var terminal), Is.True);
+        Assert.That(terminal[^1].ResultCode, Is.EqualTo(OsInteractionStatusIds.ReplayIndeterminate));
+    }
+
+    [Test]
     public void ProtectedSendTrace_TypedAppendKeepsStoredTraceRawFree()
     {
         const string fingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -5686,6 +5721,32 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("text_written"));
         Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
         Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
+    }
+
+    [TestCase(1)]
+    [TestCase(2)]
+    public void ReferenceComposerAcceptance_ReplayFailureBlocksWithoutSuccessTrace(int replayModeValue)
+    {
+        var replayMode = (ReferenceComposerReplayMode)replayModeValue;
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
+            "Connect to 192.168.10.25",
+            ReferenceComposerDecision.Approve,
+            ReferenceComposerForegroundMode.Verified,
+            ReferenceComposerTargetChangeMode.None,
+            ReferenceComposerWriteMode.Available,
+            replayMode);
+
+        Assert.That(report.HookStarted, Is.True);
+        Assert.That(report.OriginalInputSuppressed, Is.True);
+        Assert.That(report.Submitted, Is.False);
+        Assert.That(report.SentTexts, Is.Empty);
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("send_injected"));
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
+        Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
+        Assert.That(report.Trace[^1].ResultCode, Is.EqualTo(OsInteractionStatusIds.ReplayIndeterminate));
+        Assert.That(report.ReplayDiagnostics["replay_outcome"], Is.EqualTo(replayMode == ReferenceComposerReplayMode.Partial ? "partial" : "unavailable"));
+        Assert.That(report.ReplayDiagnostics["modifiers_released"], Is.EqualTo("true"));
     }
 
     [Test]

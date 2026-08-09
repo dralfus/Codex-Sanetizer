@@ -1290,8 +1290,8 @@ and `sent_safely`; any incomplete replay becomes terminal blocked.
 through the production replay boundary and verifies no local sent-text record,
 released modifiers, raw-free terminal trace, and cleanup.
 
-- [ ] Keyboard and pointer replay failures produce no Send and no success trace.
-- [ ] Partial injection reports `replay_indeterminate` and releases all
+- [x] Keyboard and pointer replay failures produce no Send and no success trace.
+- [x] Partial injection reports `replay_indeterminate` and releases all
   modifiers before the fixture returns.
 
 ## 321. Run the interactive reference-composer release acceptance

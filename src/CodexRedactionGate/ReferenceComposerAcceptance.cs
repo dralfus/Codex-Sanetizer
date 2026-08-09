@@ -32,13 +32,21 @@ internal enum ReferenceComposerWriteMode
     Unavailable
 }
 
+internal enum ReferenceComposerReplayMode
+{
+    Available,
+    Unavailable,
+    Partial
+}
+
 internal sealed record ReferenceComposerAcceptanceReport(
     bool HookStarted,
     bool OriginalInputSuppressed,
     string TerminalStatus,
     bool Submitted,
     IReadOnlyList<string> SentTexts,
-    IReadOnlyList<ProtectedSendTraceEntry> Trace);
+    IReadOnlyList<ProtectedSendTraceEntry> Trace,
+    IReadOnlyDictionary<string, string> ReplayDiagnostics);
 
 internal sealed record ReferenceComposerAcceptanceSmokeReport(
     bool SafePromptPassed,
@@ -65,7 +73,8 @@ internal static class ReferenceComposerAcceptanceRunner
         ReferenceComposerDecision decision,
         ReferenceComposerForegroundMode foregroundMode = ReferenceComposerForegroundMode.Verified,
         ReferenceComposerTargetChangeMode targetChangeMode = ReferenceComposerTargetChangeMode.None,
-        ReferenceComposerWriteMode writeMode = ReferenceComposerWriteMode.Available)
+        ReferenceComposerWriteMode writeMode = ReferenceComposerWriteMode.Available,
+        ReferenceComposerReplayMode replayMode = ReferenceComposerReplayMode.Available)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(prompt);
@@ -78,12 +87,15 @@ internal static class ReferenceComposerAcceptanceRunner
                 TerminalStatus: OsInteractionStatusIds.UnsupportedPlatform,
                 Submitted: false,
                 SentTexts: Array.Empty<string>(),
-                Trace: Array.Empty<ProtectedSendTraceEntry>());
+                Trace: Array.Empty<ProtectedSendTraceEntry>(),
+                ReplayDiagnostics: new Dictionary<string, string>());
         }
 
         ReferenceComposerAcceptanceReport? report = null;
         Exception? failure = null;
         Action? abort = null;
+        string lastAcceptanceStatus = "not_started";
+        string lastAcceptanceTraceStage = "none";
         using var completed = new ManualResetEventSlim();
         var thread = new Thread(() =>
         {
@@ -97,6 +109,7 @@ internal static class ReferenceComposerAcceptanceRunner
                 var targets = new ReferenceComposerTargetController(composer, replacementComposer, targetChangeMode);
                 var discovery = new ReferenceComposerSurfaceDiscovery(targets.GetActiveForm);
                 var profile = CreateProfile();
+                var replay = new ReferenceComposerReplayBoundary(composer, replayMode);
                 var hookHost = new WindowsNativeSubmitHookHost(new[] { profile });
                 using var overlay = new WindowsConfirmationOverlay(
                     window =>
@@ -121,7 +134,9 @@ internal static class ReferenceComposerAcceptanceRunner
 
                 var textAccess = writeMode == ReferenceComposerWriteMode.Unavailable
                     ? (IVerifiedComposerTextAccess)new NativeVerifiedComposerTextAccess(discovery.DiscoverActiveSurface)
-                    : new ReferenceComposerTextAccess(composer, discovery.DiscoverActiveSurface);
+                    : replayMode == ReferenceComposerReplayMode.Available
+                        ? new ReferenceComposerTextAccess(composer, discovery.DiscoverActiveSurface)
+                        : new ReferenceComposerTextAccess(composer, discovery.DiscoverActiveSurface, replay);
                 var adapter = new WindowsVerifiedComposerSurfaceAdapter(textAccess);
                 var runtime = new NativeSubmitRuntime(
                     hookHost,
@@ -186,6 +201,10 @@ internal static class ReferenceComposerAcceptanceRunner
                 controller.StateChanged += (_, _) =>
                 {
                     var state = controller.State;
+                    lastAcceptanceStatus = state.LastStatus;
+                    lastAcceptanceTraceStage = state.ProtectedSendAttemptTrace is { Count: > 0 } currentTrace
+                        ? currentTrace[^1].Stage
+                        : "none";
                     if (state.ProtectedSendAttemptTrace is not { Count: > 0 } trace
                         || trace[^1].Stage is not ("sent_safely" or "terminal_blocked"))
                     {
@@ -198,7 +217,8 @@ internal static class ReferenceComposerAcceptanceRunner
                         state.LastStatus,
                         state.LastSubmitted,
                         composer.SentTexts.ToArray(),
-                        trace.ToArray());
+                        trace.ToArray(),
+                        replay.Diagnostics);
                     completed.Set();
                     if (composer.IsHandleCreated && !composer.IsDisposed)
                     {
@@ -233,7 +253,8 @@ internal static class ReferenceComposerAcceptanceRunner
                     OsInteractionStatusIds.FailedClosed,
                     Submitted: false,
                     composer.SentTexts.ToArray(),
-                    controller.State.ProtectedSendAttemptTrace?.ToArray() ?? Array.Empty<ProtectedSendTraceEntry>());
+                    controller.State.ProtectedSendAttemptTrace?.ToArray() ?? Array.Empty<ProtectedSendTraceEntry>(),
+                    replay.Diagnostics);
             }
             catch (Exception exception)
             {
@@ -249,9 +270,12 @@ internal static class ReferenceComposerAcceptanceRunner
         thread.Start();
         if (!completed.Wait(TimeSpan.FromSeconds(15)))
         {
+            var timeoutStatus = lastAcceptanceStatus;
+            var timeoutTraceStage = lastAcceptanceTraceStage;
             abort?.Invoke();
             thread.Join(TimeSpan.FromSeconds(5));
-            throw new TimeoutException("Reference composer acceptance did not reach a terminal state.");
+            throw new TimeoutException(
+                $"Reference composer acceptance did not reach a terminal state: status={timeoutStatus}; trace_stage={timeoutTraceStage}.");
         }
 
         thread.Join(TimeSpan.FromSeconds(5));
@@ -308,7 +332,6 @@ internal static class ReferenceComposerAcceptanceRunner
                     return TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.NotComposer);
                 }
 
-                element.SetFocus();
                 var metadata = new SurfaceMetadata(
                     SurfaceKind: "reference_only_acceptance",
                     CloudSubmission: "false",
@@ -393,13 +416,16 @@ internal static class ReferenceComposerAcceptanceRunner
     {
         private readonly ReferenceComposerForm _form;
         private readonly Func<TextSurfaceDiscoveryResult> _discovery;
+        private readonly IVerifiedComposerReplay? _replay;
 
         public ReferenceComposerTextAccess(
             ReferenceComposerForm form,
-            Func<TextSurfaceDiscoveryResult> discovery)
+            Func<TextSurfaceDiscoveryResult> discovery,
+            IVerifiedComposerReplay? replay = null)
         {
             _form = form;
             _discovery = discovery;
+            _replay = replay;
         }
 
         public TextCaptureResult CaptureText(TextSurfaceDescriptor surface)
@@ -425,6 +451,14 @@ internal static class ReferenceComposerAcceptanceRunner
                 return new SubmitActionResult(false, OsInteractionStatusIds.NotComposer, new Dictionary<string, string>());
             }
 
+            if (_replay is not null)
+            {
+                var replay = _replay.Replay(
+                    null,
+                    surface.Metadata.TryGetValue("submit_binding_sendkeys") ?? ReferenceOnlyInputSource.SubmitBinding.SendKeysText);
+                return new SubmitActionResult(replay.Succeeded, replay.Status, replay.Diagnostics);
+            }
+
             _form.Composer.Focus();
             _form.SubmitFromAcceptance();
             return new SubmitActionResult(true, OsInteractionStatusIds.Submitted, new Dictionary<string, string>());
@@ -437,6 +471,50 @@ internal static class ReferenceComposerAcceptanceRunner
                 && current.Surface is not null
                 && string.Equals(current.Surface.ProfileId, expected.ProfileId, StringComparison.Ordinal)
                 && string.Equals(current.Surface.Metadata.TryGetValue("window_handle"), expected.Metadata.TryGetValue("window_handle"), StringComparison.Ordinal);
+        }
+    }
+
+    private sealed class ReferenceComposerReplayBoundary : IVerifiedComposerReplay
+    {
+        private readonly ReferenceComposerForm _form;
+        private readonly ReferenceComposerReplayMode _mode;
+
+        public ReferenceComposerReplayBoundary(
+            ReferenceComposerForm form,
+            ReferenceComposerReplayMode mode)
+        {
+            _form = form;
+            _mode = mode;
+        }
+
+        public IReadOnlyDictionary<string, string> Diagnostics { get; private set; } =
+            new Dictionary<string, string>();
+
+        public VerifiedComposerReplayResult Replay(AutomationElement? element, string sendKeysText)
+        {
+            var outcome = _mode switch
+            {
+                ReferenceComposerReplayMode.Unavailable => "unavailable",
+                ReferenceComposerReplayMode.Partial => "partial",
+                _ => "completed"
+            };
+            Diagnostics = new Dictionary<string, string>
+            {
+                ["replay_outcome"] = outcome,
+                ["modifiers_released"] = "true"
+            };
+
+            if (_mode != ReferenceComposerReplayMode.Available)
+            {
+                return new VerifiedComposerReplayResult(
+                    false,
+                    OsInteractionStatusIds.ReplayIndeterminate,
+                    Diagnostics);
+            }
+
+            _form.Composer.Focus();
+            _form.SubmitFromAcceptance();
+            return new VerifiedComposerReplayResult(true, OsInteractionStatusIds.Submitted, Diagnostics);
         }
     }
 

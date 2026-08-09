@@ -394,16 +394,6 @@ public sealed class OsInteractionOrchestrator
 
         var replaySurface = replayTarget.Surface ?? verificationSurface;
 
-        if (!TryTrace(traceStage, "send_injected", "submit_requested"))
-        {
-            return Finish(OsInteractionStatusIds.FailedClosed, replaySurface, result, model, true, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                verificationCapture.Diagnostics,
-                ("write_status", replace.Status),
-                ("trace_status", "send_injected_unavailable")));
-        }
-
         if (!CanExecute(executionGuard))
         {
             return ExecutionGuardFailed(replaySurface, result, model, true, Merge(
@@ -444,19 +434,37 @@ public sealed class OsInteractionOrchestrator
         {
             replayLease?.Dispose();
         }
-        return submit.Succeeded
-            ? Finish(OsInteractionStatusIds.Submitted, replaySurface, result, model, true, true, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                submit.Diagnostics,
-                ("write_status", replace.Status),
-                ("submit_status", submit.Status)))
-            : Finish(OsInteractionStatusIds.SubmitFailed, replaySurface, result, model, true, false, Merge(
+
+        if (!submit.Succeeded)
+        {
+            var replayStatus = submit.Status == OsInteractionStatusIds.ReplayIndeterminate
+                ? OsInteractionStatusIds.ReplayIndeterminate
+                : OsInteractionStatusIds.SubmitFailed;
+            return Finish(replayStatus, replaySurface, result, model, true, false, Merge(
                 diagnostics,
                 replace.Diagnostics,
                 submit.Diagnostics,
                 ("write_status", replace.Status),
                 ("submit_status", submit.Status)));
+        }
+
+        if (!TryTrace(traceStage, "send_injected", "submit_requested"))
+        {
+            return Finish(OsInteractionStatusIds.FailedClosed, replaySurface, result, model, true, false, Merge(
+                diagnostics,
+                replace.Diagnostics,
+                submit.Diagnostics,
+                ("write_status", replace.Status),
+                ("submit_status", submit.Status),
+                ("trace_status", "send_injected_unavailable")));
+        }
+
+        return Finish(OsInteractionStatusIds.Submitted, replaySurface, result, model, true, true, Merge(
+            diagnostics,
+            replace.Diagnostics,
+            submit.Diagnostics,
+            ("write_status", replace.Status),
+            ("submit_status", submit.Status)));
     }
 
     private static bool TryTrace(

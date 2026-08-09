@@ -1976,6 +1976,7 @@ internal sealed class TrayProtectionController
                 or OsInteractionStatusIds.BindingUnknown or OsInteractionStatusIds.NotConfigured => "binding_not_verified",
             OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "composer_changed",
             OsInteractionStatusIds.Canceled => "canceled",
+            OsInteractionStatusIds.ReplayIndeterminate => "replay_indeterminate",
             OsInteractionStatusIds.TraceUnavailable => "trace_unavailable",
             OsInteractionStatusIds.EnterpriseBlocked => "policy_blocked",
             OsInteractionStatusIds.Blocked => "content_blocked",
@@ -1999,6 +2000,7 @@ internal sealed class TrayProtectionController
                 or OsInteractionStatusIds.BindingUnknown or OsInteractionStatusIds.NotConfigured => "set_up_prompt_protection",
             OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "focus_and_send_again",
             OsInteractionStatusIds.Canceled => "edit_or_send_again",
+            OsInteractionStatusIds.ReplayIndeterminate => "retry_protection",
             OsInteractionStatusIds.TraceUnavailable => "retry_protection",
             OsInteractionStatusIds.NativeSubmitInProgress => "wait_for_current_send",
             OsInteractionStatusIds.EnterpriseBlocked => "contact_administrator",
@@ -2902,6 +2904,7 @@ internal static class TrayStatusFormatter
             or "setup_required" or "binding_not_verified" or "composer_changed" or "canceled"
             or "local_protection_unavailable" or "policy_blocked" or "protection_unavailable"
             or "content_blocked" or "trace_unavailable" or "settings_unavailable"
+            or "replay_indeterminate"
             ? value
             : "unavailable";
     }
@@ -2940,6 +2943,7 @@ internal static class TrayStatusFormatter
                 or OsInteractionStatusIds.NativeSubmitSetupRequired or OsInteractionStatusIds.TraceUnavailable
                 or OsInteractionStatusIds.ProfilesUnavailable
                 or OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported
+                or OsInteractionStatusIds.ReplayIndeterminate
                 or LocalProtectionRecovery.ReadyCode or LocalProtectionRecovery.RecoveryRequiredCode
                 or LocalProtectionRecovery.ConfirmationRequiredCode or LocalProtectionRecovery.RecoveredCode
                 or LocalProtectionRecovery.RecoveryFailedCode or LocalProtectionRecovery.RecoveryNotRequiredCode
