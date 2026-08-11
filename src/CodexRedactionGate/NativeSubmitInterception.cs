@@ -999,11 +999,10 @@ public sealed class NativeSubmitInterceptionController
                 Diagnostics: diagnostics);
         }
 
-        var protectedClaimGate = SuppressIfChatGptProtectedClaimIsUnproven(diagnostics);
-        if (protectedClaimGate is not null)
-        {
-            return protectedClaimGate;
-        }
+        // Resident admission is already fail-closed on local readiness and the
+        // selected target above. Release/CI proof is recorded here as a
+        // diagnostic, but must not become a second runtime admission gate.
+        RecordChatGptProtectedClaimDiagnostics(diagnostics);
 
         var enforcement = EvaluateEnterpriseEnforcement(hookHealthy);
         if (enforcement is not null)
@@ -1055,14 +1054,14 @@ public sealed class NativeSubmitInterceptionController
             submitFlow);
     }
 
-    private NativeSubmitInterceptionResult? SuppressIfChatGptProtectedClaimIsUnproven(
+    private void RecordChatGptProtectedClaimDiagnostics(
         Dictionary<string, string> diagnostics)
     {
         if (_setupLayout is null
             || !string.Equals(_profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
             || !_profile.IsProtected)
         {
-            return null;
+            return;
         }
 
         var claim = _residentProtectedClaimProvider is null
@@ -1078,8 +1077,11 @@ public sealed class NativeSubmitInterceptionController
         diagnostics["protected_claim_reason"] = claim.Reason;
         if (claim.Protected)
         {
-            return null;
+            diagnostics["release_evidence_status"] = "current";
+            return;
         }
+
+        diagnostics["release_evidence_status"] = "not_current";
 
         if (_residentProtectedClaimProvider is not null
             && ChatGptAcceptanceProofStore.IsLiveContractArmed(
@@ -1089,21 +1091,13 @@ public sealed class NativeSubmitInterceptionController
             && Interlocked.CompareExchange(ref _liveContractCapturePending, 1, 0) == 0)
         {
             diagnostics["live_contract_capture"] = "armed_reserved";
-            return null;
+            return;
         }
 
         if (Volatile.Read(ref _liveContractCapturePending) != 0)
         {
             diagnostics["live_contract_capture"] = "already_pending";
         }
-
-        diagnostics["fail_closed_reason"] = "chatgpt_protected_claim_unproven";
-        return new NativeSubmitInterceptionResult(
-            claim.Status,
-            SuppressOriginalInput: true,
-            Applied: false,
-            Submitted: false,
-            Diagnostics: diagnostics);
     }
 
     public NativeSubmitInterceptionResult CompleteGuardedSubmit(

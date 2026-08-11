@@ -2509,12 +2509,8 @@ internal sealed class TrayProtectionController
                 "not_applicable",
                 "not_applicable")
             : ChatGptProtectedClaimEvaluator.Evaluate(chatGptRuntime.Profile, _storageLayout);
-        if (effectiveNativeSubmitStatus == OsInteractionStatusIds.Protected
-            && chatGptRuntime is not null
-            && !protectedClaim.Protected)
-        {
-            effectiveNativeSubmitStatus = protectedClaim.Status;
-        }
+        // ProtectedClaimStatus is release/CI evidence. Resident native-submit
+        // admission is owned by local readiness and the active runtime state.
         var (projectFilesProtected, projectFileStatus) = ReadProjectFileProtectionStatus();
         var previousState = _snapshotInitialized ? _currentSnapshot.State : null;
         var residentReadinessAdmitted = !_residentReadinessAdmissionEnabled || IsResidentReadinessAdmitted();
@@ -2987,17 +2983,6 @@ internal sealed class TrayProtectionController
                 setupRequired = true;
             }
 
-            if (status == OsInteractionStatusIds.Protected
-                && string.Equals(runtime.Profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal))
-            {
-                var claim = ChatGptProtectedClaimEvaluator.Evaluate(runtime.Profile, _storageLayout);
-                if (!claim.Protected)
-                {
-                    return new SetupReadiness(
-                        SetupRequired: false,
-                        Status: claim.Status);
-                }
-            }
         }
 
         return new SetupReadiness(

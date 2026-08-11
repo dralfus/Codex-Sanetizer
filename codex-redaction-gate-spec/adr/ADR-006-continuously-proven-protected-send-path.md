@@ -61,10 +61,13 @@ Acceptance has two required layers:
 2. A repeatable live ChatGPT Desktop contract run records the same raw-free
    trace for the pinned fingerprint and configured Send binding.
 
-The product may claim the pinned path is `protected` only when both layers pass
-for the shipped build. This decision does not change the separate status of
-project-file protection, which remains unsupported until a file-context boundary
-exists.
+The release may claim the pinned compatibility path is `protected` only when
+both layers pass for the shipped build. Resident `protected_send_active` is a
+separate admission state: a current verified target with successful local
+readiness may use the resident native-submit path while reference/live proof is
+reported as release/CI evidence. This decision does not change the separate
+status of project-file protection, which remains unsupported until a
+file-context boundary exists.
 
 ## Consequences
 
@@ -94,7 +97,8 @@ Negative:
   artifacts.
 - Do not create one overlay thread per Send attempt or block the input-hook
   callback waiting for it.
-- Do not claim protection for a fingerprint that has not passed both required
-  acceptance layers.
+- Do not claim release compatibility for a fingerprint that has not passed both
+  required acceptance layers. Do not use missing or stale release evidence as a
+  second hidden resident admission gate.
 - Do not use a live cloud response as the sole evidence of Send; the local
   deterministic reference-composer proof remains mandatory.

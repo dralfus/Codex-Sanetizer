@@ -9128,9 +9128,9 @@ public class ResidentFirstRunSetupLaunchTests
         }).Rows[1];
 
         Assert.That(mismatch.Action, Is.EqualTo(LocalProtectionStatusAction.None));
-        Assert.That(mismatch.Consequence, Does.Contain("release/CI evidence"));
+        Assert.That(mismatch.Consequence, Does.Contain("Release/CI evidence"));
         Assert.That(mismatch.Action, Is.Not.EqualTo(LocalProtectionStatusAction.RetryPromptProtection));
-        Assert.That(readyForLiveCheck.OperationalState, Is.EqualTo("final ChatGPT check ready"));
+        Assert.That(readyForLiveCheck.OperationalState, Is.EqualTo("keyboard Send active"));
         Assert.That(readyForLiveCheck.Action, Is.EqualTo(LocalProtectionStatusAction.None));
     }
 
@@ -9152,10 +9152,11 @@ public class ResidentFirstRunSetupLaunchTests
         var row = LocalProtectionStatusView.Create(state).Rows[1];
         var trayText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(state);
 
-        Assert.That(row.Action, Is.EqualTo(LocalProtectionStatusAction.None));
-        Assert.That(row.Consequence, Does.Contain("release/CI evidence"));
-        Assert.That(trayText, Does.Contain("protected claim is unproven"));
-        Assert.That(trayText, Does.Not.Contain("previous Send was interrupted"));
+        Assert.That(row.Action, Is.EqualTo(LocalProtectionStatusAction.RetryPromptProtection));
+        Assert.That(row.Consequence, Does.Contain("Release/CI evidence"));
+        Assert.That(row.Consequence, Does.Contain("previous protected Send was interrupted"));
+        Assert.That(trayText, Does.Contain("previous Send was interrupted"));
+        Assert.That(trayText, Does.Not.Contain("protected claim is unproven"));
     }
 
     [Test]

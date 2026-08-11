@@ -188,7 +188,7 @@ public sealed class ChatGptProtectedClaimTests
     }
 
     [Test]
-    public void ResidentChatGptSendIsSuppressedUntilBothProofsMatch()
+    public void ResidentChatGptSendUsesResidentAdmissionWithoutReleaseProofs()
     {
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-claim-controller-tests", Guid.NewGuid().ToString("N"));
         var layout = DefaultStorageLayout.Create(directory);
@@ -203,15 +203,111 @@ public sealed class ChatGptProtectedClaimTests
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: () => discovery,
             setupLayout: layout);
+        controller.SetResidentReadinessAdmissionProvider(() => true);
 
         try
         {
             var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
 
-            Assert.That(result.Status, Is.EqualTo(ChatGptProtectedClaimEvaluator.DegradedStatus));
+            Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
             Assert.That(result.SuppressOriginalInput, Is.True);
             Assert.That(result.Submitted, Is.False);
             Assert.That(result.Diagnostics["protected_claim_status"], Is.EqualTo(ChatGptProtectedClaimEvaluator.DegradedStatus));
+            Assert.That(result.Diagnostics["release_evidence_status"], Is.EqualTo("not_current"));
+            Assert.That(result.Diagnostics, Does.Not.ContainKey("fail_closed_reason"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void MissingResidentReadinessStillBlocksChatGptSendWithoutReleaseProofs()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-claim-readiness-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var discovery = CreateDiscovery();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Ctrl+Enter",
+            "Enter",
+            discovery);
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => discovery,
+            setupLayout: layout);
+        controller.SetResidentReadinessAdmissionProvider(() => false);
+
+        try
+        {
+            var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+            Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+            Assert.That(result.SuppressOriginalInput, Is.True);
+            Assert.That(result.Diagnostics["fail_closed_reason"], Is.EqualTo("resident_readiness_unproven"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void ResidentTrayKeepsChatGptSendActiveWhenReleaseProofsAreMissing()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-claim-tray-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var discovery = CreateDiscovery();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Ctrl+Enter",
+            "Enter",
+            discovery);
+        var hook = new SanitizerTests.FakeNativeSubmitHookHost();
+        var nativeController = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => discovery);
+
+        try
+        {
+            var controller = TrayProtectionController.CreateTest(
+                new SanitizerTests.FakeTrayHotkeyHost(),
+                () => new OsInteractionResult(
+                    OsInteractionStatusIds.Protected,
+                    Surface: null,
+                    SanitizationResult: null,
+                    ConfirmationModel: null,
+                    Applied: false,
+                    Submitted: false,
+                    Diagnostics: new Dictionary<string, string>()),
+                hook,
+                nativeController,
+                () => new OsInteractionResult(
+                    OsInteractionStatusIds.Protected,
+                    Surface: null,
+                    SanitizationResult: null,
+                    ConfirmationModel: null,
+                    Applied: false,
+                    Submitted: false,
+                    Diagnostics: new Dictionary<string, string>()),
+                nativeProfile: profile,
+                storageLayout: layout,
+                activeSurfaceDiscovery: () => discovery);
+
+            Assert.That(controller.Start(), Is.True);
+            Assert.That(controller.State.NativeSubmitEnabled, Is.True);
+            Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+            Assert.That(controller.State.ComposerProtected, Is.True);
+            Assert.That(controller.State.ProtectedClaimStatus, Is.EqualTo(ChatGptProtectedClaimEvaluator.DegradedStatus));
         }
         finally
         {

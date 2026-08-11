@@ -1180,7 +1180,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             return "Protected Send: retrying protection";
         }
 
-        if (state.LastProtectedSendInterruption is not null && !IsChatGptProtectedClaimUnproven(state))
+        if (state.LastProtectedSendInterruption is not null)
         {
             return "Protected Send: previous Send was interrupted; retry protection before sending";
         }
@@ -1251,9 +1251,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 return "Protected Send: profile settings unavailable; repair profile settings before sending";
         }
 
-        if (IsChatGptProtectedClaimUnproven(state))
+        if (IsChatGptProtectedClaimUnproven(state)
+            && state.NativeSubmitEnabled
+            && state.ComposerProtected)
         {
-            return $"ChatGPT Desktop protected claim is unproven: reference={state.ReferenceAcceptanceStatus}, live={state.LiveContractStatus}; Send is blocked";
+            return $"OpenAI Desktop resident Send is protected; release/CI evidence is not current: reference={state.ReferenceAcceptanceStatus}, live={state.LiveContractStatus}";
         }
 
         if (state.ComposerProtected)

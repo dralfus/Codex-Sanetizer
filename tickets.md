@@ -1392,7 +1392,7 @@ timers, or cloud access.
 - [x] Tests prove no prompt text, sensitive values, paths, UI names, or exception
   details are stored or shown with compatibility evidence.
 
-## 308. Gate the ChatGPT Desktop protected claim on both acceptance proofs
+## 308. Gate the ChatGPT Desktop release claim on both acceptance proofs
 
 **What to build:** Make `protected` for the pinned ChatGPT Desktop path a
 release-gated claim. The shipped build must have both a passing local reference
@@ -1403,11 +1403,15 @@ one complete raw-free trace for the pinned keyboard Send binding.
 
 **State owner:** The resident protection snapshot owns the current compatibility
 claim and the safe evidence result for the pinned fingerprint. Release tooling
-may publish that evidence but cannot derive `protected` from separate flags.
+may publish that evidence but cannot derive the release claim `protected` from
+separate flags. Resident Send admission is owned separately by local readiness
+and the active verified target; see ticket 340.
 
 **Fail-closed state:** Missing, failed, stale, build-mismatched, or fingerprint-
-mismatched evidence makes the release and tray state `unsupported_surface` or
-`degraded`; it cannot display the pinned path as protected.
+mismatched evidence makes the release compatibility claim `unsupported_surface`
+or `degraded`; it cannot display the pinned release path as protected. This
+release-evidence state does not independently block a resident target that has
+passed its local fail-closed admission checks.
 
 **Allowed transitions:** A shipped build moves from `unproven` to `protected`
 only after both required proofs pass for the same build and fingerprint. A later
@@ -1423,10 +1427,11 @@ repeatable operator acceptance procedure, not an automated cloud assertion.
   when any required trace stage or terminal result is absent.
 - [x] The live ChatGPT Desktop contract procedure records one raw-free keyboard
   Send trace and exact fingerprint/build pairing without recording prompt text.
-- [x] The tray and local status call the pinned ChatGPT path protected only when
+- [x] Release claim status calls the pinned ChatGPT path protected only when
   both evidence records match the running build and fingerprint.
 - [x] Changed app version, binding, UI Automation shape, missing live evidence,
-  or missing reference evidence visibly downgrades the profile and blocks Send.
+  or missing reference evidence visibly downgrades the release claim; resident
+  Send remains governed by its own active-target and local-readiness checks.
 
 **Implementation (2026-08-09):** Added the paired reference/live proof
 evaluator and raw-free proof store. `--product-smoke` now runs the complete
@@ -1435,19 +1440,21 @@ trace is present and raw-free. `--reference-composer-release-acceptance`
 records the passing reference proof for the current ChatGPT fingerprint and
 build. `--chatgpt-live-contract-arm` arms one explicit live capture; the
 resident `sent_safely` trace records the live proof and consumes the arm.
-`--chatgpt-protected-claim-status` and tray/local status publish `protected`
-only when both records match. Missing, malformed, stale, or mismatched proof
-remains degraded and suppresses Send. The native controller consumes the claim
-from the resident snapshot rather than reading proof files during input
-handling; every active/reloaded runtime is wired to that snapshot and candidate
-profiles cannot use a stale snapshot claim. The standalone CLI remains
-diagnostic-only and cannot claim resident protection. Live arm consumption is
-single-use and synchronized, with deletion failure remaining fail-closed. The
-stored live proof includes the validated raw-free terminal trace, while the
-release matrix validates canonical stage order, keyboard and mouse hook cleanup.
+`--chatgpt-protected-claim-status` and release status publish `protected` only
+when both records match. Missing, malformed, stale, or mismatched proof remains
+degraded as release evidence. The native controller records the claim from the
+resident snapshot for diagnostics rather than using proof files as a second
+runtime admission gate; every active/reloaded runtime is wired to that snapshot
+and candidate profiles cannot use a stale snapshot claim. The standalone CLI
+remains diagnostic-only and cannot claim resident protection. Live arm
+consumption is single-use and synchronized, with deletion failure remaining
+fail-closed. The stored live proof includes the validated raw-free terminal
+trace, while the release matrix validates canonical stage order, keyboard and
+mouse hook cleanup.
 Automated coverage includes pairing, build/fingerprint mismatch, raw-free
-persistence, resident suppression, complete trace validation, cleanup, and
-one-resident-operation live-arm reservation.
+persistence, release-claim diagnostics with independent resident admission,
+complete trace validation, cleanup, and one-resident-operation live-arm
+reservation.
 
 **Regression follow-up (2026-08-10):** The live-contract arm is persistent
 release evidence, not a consumable input event. A resident operation may reserve
@@ -1459,10 +1466,10 @@ state after a resident refresh.
 
 **Observability follow-up (2026-08-10):** While the live contract is armed,
 the local-status view must render the latest raw-free protected-Send attempt
-before the generic `final ChatGPT check ready` message. This lets release
-acceptance distinguish a hook that never received the configured key from an
-operation that reached a specific blocked terminal state, without logging or
-displaying prompt text.
+before any generic release-check message. This lets release acceptance
+distinguish a hook that never received the configured key from an operation that
+reached a specific blocked terminal state, without logging or displaying prompt
+text. The message must not turn the release check into a resident Send gate.
 
 The same view must also project the latest safe keyboard-hook boundary signal:
 waiting for the configured Send, Enter in an unrelated target, binding mismatch,
@@ -2298,3 +2305,63 @@ produces setup-required. Candidate activation publishes the target temporarily
 and restores the preceding target whenever runtime activation or profile commit
 fails. Focused tests cover a protected unrelated profile, a persisted target,
 startup setup launch, and rollback.
+
+## 340. Make verified onboarding enable protected Send on the current build
+
+**What to build:** A freshly installed current build that completes OpenAI
+Desktop onboarding must make its configured Send binding reach the resident
+native-submit path. Release/reference acceptance remains useful diagnostic and
+CI evidence, but it must not silently block a user-verified resident target or
+require legacy demo commands before the first protected Send can work.
+
+**Blocked by:** 338. Unify automatic OpenAI Desktop onboarding; 339. Make
+automatic setup require the active OpenAI Desktop target.
+
+**State owner:** The resident protection admission state owns whether a verified
+active target may enter the native-submit path. Release acceptance proof is a
+separate diagnostic input and does not independently decide runtime admission.
+The tray only projects the published admission state.
+
+**Fail-closed state:** Missing resident readiness, missing active verified
+target, changed surface fingerprint, failed hook activation, or failed write /
+replay keeps the original Send suppressed. A missing or stale release proof
+must not leave a verified current-build Send silently blocked with no actionable
+status.
+
+**Allowed transitions:** `setup_required -> waiting_for_focus -> verified
+active_target -> resident_ready -> protected_send_active`. Release-proof states
+may be `not_run`, `stale`, or `passed` throughout those transitions and are
+reported separately; they do not reopen setup or downgrade native-send
+admission by themselves.
+
+**Deterministic proof:** Build a current-build fixture with a verified ChatGPT
+profile, active target, resident readiness proof, and no reference/live release
+proof. Assert that `Ctrl+Enter` enters the native interception path. Separately
+prove that each true resident safety failure remains fail-closed and that the
+status explains the blocking reason without raw prompt text or a manual
+release-command instruction.
+
+- [x] A current-build verified target can activate native protected Send without
+      `--os-demo-*`, `--send-mode-enable`, reference-composer, or live-contract
+      command prerequisites.
+- [x] Release/reference evidence is displayed as diagnostics and CI evidence,
+      not as a hidden runtime admission gate for a verified resident target.
+- [x] Fresh-install flow exposes one visible progress/result state and reaches
+      either `protected_send_active` or a concrete resident safety failure.
+- [x] Automated tests reproduce the reported state: verified `Ctrl+Enter`
+      profile plus stale/missing release proof still enters native interception;
+      missing target/readiness/fingerprint/write/replay proof remains blocked.
+
+**Implementation evidence:** The resident callback now records ChatGPT release
+claim diagnostics without suppressing a gesture or downgrading resident state.
+`ChatGptProtectedClaimTests` proves both the callback and tray runtime with a
+verified `Ctrl+Enter` profile and an empty proof store; `LocalProtectionStatus`
+proves stale release evidence is labelled diagnostic-only while an actual
+interrupted Send remains retryable. Release compatibility claim evaluation and
+the explicit live-capture path remain unchanged.
+
+**Diagnostic evidence:** On installed build `0.1.20260811.t1719`, setup and
+resident readiness completed and the active target was `chatgpt-desktop`, but
+the stored reference proof belonged to `0.1.20260810.t2128` and no live contract
+was recorded. The protected-claim gate therefore suppressed `Ctrl+Enter` before
+the replacement overlay could appear.

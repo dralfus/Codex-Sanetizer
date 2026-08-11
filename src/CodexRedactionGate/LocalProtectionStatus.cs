@@ -90,14 +90,13 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 LocalProtectionStatusAction.None);
         }
 
-        var chatGptReleaseCheckRequired = IsChatGptReleaseCheckRequired(state);
-        if (state.LastProtectedSendInterruption is not null && !chatGptReleaseCheckRequired)
+        if (state.LastProtectedSendInterruption is not null)
         {
             return new LocalProtectionStatusRow(
                 "Automatic prompt protection",
                 "Selected-app send interception",
                 "previous Send interrupted",
-                "The previous protected Send was interrupted while protection changed. Retry prompt protection.",
+                $"The previous protected Send was interrupted while protection changed. Retry prompt protection.{ReleaseEvidenceNote(state)}",
                 LocalProtectionStatusAction.RetryPromptProtection);
         }
 
@@ -166,44 +165,13 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
             return attemptRow;
         }
 
-        if (chatGptReleaseCheckRequired)
-        {
-            if (string.Equals(state.ReferenceAcceptanceStatus, "passed", StringComparison.Ordinal)
-                && string.Equals(state.LiveContractStatus, "armed", StringComparison.Ordinal))
-            {
-                return new LocalProtectionStatusRow(
-                    "Automatic prompt protection",
-                    "Selected-app send interception",
-                    "final ChatGPT check ready",
-                    $"The local release check passed. {KeyboardHookNextAction(state.KeyboardHookStatus)} Send remains blocked until it records.",
-                    LocalProtectionStatusAction.None);
-            }
-
-            return new LocalProtectionStatusRow(
-                "Automatic prompt protection",
-                "Selected-app send interception",
-                "degraded",
-                $"Local readiness passed. Full reference acceptance ({state.ReferenceAcceptanceStatus}) and live contract ({state.LiveContractStatus}) are release/CI evidence, not a manual tray action. ChatGPT Desktop Send remains blocked.",
-                LocalProtectionStatusAction.None);
-        }
-
-        if (state.LastProtectedSendInterruption is not null)
-        {
-            return new LocalProtectionStatusRow(
-                "Automatic prompt protection",
-                "Selected-app send interception",
-                "previous Send interrupted",
-                "The previous protected Send was interrupted while protection changed. Retry prompt protection.",
-                LocalProtectionStatusAction.RetryPromptProtection);
-        }
-
         if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
         {
             return new LocalProtectionStatusRow(
                 "Automatic prompt protection",
                 "Selected-app send interception",
                 "keyboard Send active",
-                $"Keyboard Send ({state.ProtectedSendBinding}) is checked before cloud submission. Clicking the app Send button is not protected until pointer pre-action verification is available.",
+                $"Keyboard Send ({state.ProtectedSendBinding}) is checked before cloud submission. Clicking the app Send button is not protected until pointer pre-action verification is available.{ReleaseEvidenceNote(state)}",
                 LocalProtectionStatusAction.None);
         }
 
@@ -227,10 +195,17 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
             LocalProtectionStatusAction.None);
     }
 
-    private static bool IsChatGptReleaseCheckRequired(TrayProtectionState state)
+    private static bool HasUnprovenChatGptReleaseEvidence(TrayProtectionState state)
     {
         return string.Equals(state.ConfiguredProfileId, "chatgpt-desktop", StringComparison.Ordinal)
             && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.Protected, StringComparison.Ordinal);
+    }
+
+    private static string ReleaseEvidenceNote(TrayProtectionState state)
+    {
+        return HasUnprovenChatGptReleaseEvidence(state)
+            ? $" Release/CI evidence is not current (reference={state.ReferenceAcceptanceStatus}, live={state.LiveContractStatus}); it is diagnostic only."
+            : string.Empty;
     }
 
     private static LocalProtectionStatusRow? CreateSetupVerificationRow(TrayProtectionState state)
@@ -453,17 +428,6 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Edit the prompt and send again.",
                 LocalProtectionStatusAction.None),
             _ => null
-        };
-    }
-
-    private static string KeyboardHookNextAction(string status)
-    {
-        return status switch
-        {
-            "configured_send_captured" => "Ctrl+Enter was captured; waiting for the protected Send result.",
-            "enter_seen_binding_mismatch" => "Enter was seen in the selected app, but it did not match the configured Send binding. Verify the binding, then try again.",
-            "enter_seen_unselected_target" => "Enter was seen outside the selected ChatGPT target. Focus the message composer, then send one non-sensitive message with Ctrl+Enter to complete the final check.",
-            _ => "Focus the ChatGPT Desktop message composer, then send one non-sensitive message with Ctrl+Enter to complete the final check."
         };
     }
 

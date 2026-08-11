@@ -151,27 +151,21 @@ public sealed class LocalProtectionStatusTests
         Assert.That(view.Rows[1].OperationalState, Is.Not.EqualTo("final ChatGPT check ready"));
     }
 
-    [TestCase("waiting_for_configured_send", "Focus the ChatGPT Desktop message composer")]
-    [TestCase("enter_seen_unselected_target", "outside the selected ChatGPT target")]
-    [TestCase("enter_seen_binding_mismatch", "did not match the configured Send binding")]
-    [TestCase("configured_send_captured", "Ctrl+Enter was captured")]
-    [TestCase("test.secret.com", "Focus the ChatGPT Desktop message composer")]
-    public void StatusView_RendersOnlySafeKeyboardHookSignalsDuringLiveCheck(
-        string hookStatus,
-        string expectedText)
+    [Test]
+    public void StatusView_ReportsResidentSendAsActiveWhileReleaseSignalsRemainDiagnostic()
     {
         var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
         {
             ConfiguredProfileId = "chatgpt-desktop",
             ProtectedClaimStatus = ChatGptProtectedClaimEvaluator.DegradedStatus,
             ReferenceAcceptanceStatus = "passed",
-            LiveContractStatus = "armed",
-            KeyboardHookStatus = hookStatus
+            LiveContractStatus = "missing"
         });
 
-        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("final ChatGPT check ready"));
-        Assert.That(view.Rows[1].Consequence, Does.Contain(expectedText));
-        Assert.That(view.Rows[1].Consequence, Does.Not.Contain("test.secret.com"));
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("keyboard Send active"));
+        Assert.That(view.Rows[1].Consequence, Does.Contain("Release/CI evidence is not current"));
+        Assert.That(view.Rows[1].Consequence, Does.Contain("diagnostic only"));
+        Assert.That(view.Rows[1].Consequence, Does.Not.Contain("Send remains blocked"));
     }
 
     [Test]
