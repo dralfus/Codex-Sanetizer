@@ -285,6 +285,18 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 $"checking {state.EffectiveOperationalAction.Stage}",
                 "This check started automatically. Wait for the terminal result; protected Send remains fail-closed while it runs.",
                 LocalProtectionStatusAction.None),
+            "passed" => new LocalProtectionStatusRow(
+                "Automatic local readiness",
+                "Resident prerequisite checks",
+                "completed",
+                "The current resident readiness check completed. Protected Send is enabled only while its matching resident proof remains current.",
+                LocalProtectionStatusAction.None),
+            "cancelled" => new LocalProtectionStatusRow(
+                "Automatic local readiness",
+                "Resident prerequisite checks",
+                "cancelled",
+                "The local readiness check was cancelled. Protected Send remains blocked; retry the check.",
+                LocalProtectionStatusAction.RunLocalReadiness),
             "failed" => new LocalProtectionStatusRow(
                 "Automatic local readiness",
                 "Resident prerequisite checks",
@@ -304,7 +316,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
     private static LocalProtectionStatusRow? CreateOperationalActionRow(TrayProtectionState state)
     {
         var action = state.EffectiveOperationalAction;
-        if (action.Status is "idle" or "succeeded")
+        if (action.Status == "idle")
         {
             return null;
         }

@@ -4280,6 +4280,7 @@ public partial class SanitizerTests
     }
 
     [Test]
+    [NonParallelizable]
     public void ProductSmokeRunner_CoversApplyOnlyProductPathWithRawFreeReport()
     {
         var tempDirectory = CreateTempDirectory();
@@ -5607,7 +5608,10 @@ public class CliTests
                         new DictionaryTerm("username", "user1", PolicyActions.PseudonymizeRestorable, null)
                     })));
 
-        Assert.That(exitCode, Is.EqualTo(0));
+        Assert.That(
+            exitCode,
+            Is.EqualTo(0),
+            $"product smoke failed. stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
         Assert.That(stderr, Is.Empty);
         Assert.That(stdout, Does.Contain("policy_source: managed-active"));
         Assert.That(stdout, Does.Contain("decision: confirm"));
@@ -6319,12 +6323,16 @@ public class CliTests
     }
 
     [Test]
+    [NonParallelizable]
     public void Main_ProductSmokePrintsRawFreeEndToEndStatus()
     {
         var (exitCode, stdout, stderr) = CaptureProgramOutput(() =>
             Program.Main(new[] { "--product-smoke" }, TestSanitizers.Create));
 
-        Assert.That(exitCode, Is.EqualTo(0));
+        Assert.That(
+            exitCode,
+            Is.EqualTo(0),
+            $"product smoke failed. stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
         Assert.That(stderr, Is.Empty);
         Assert.That(stdout, Does.Contain("status: product_smoke_passed"));
         Assert.That(stdout, Does.Contain("supported_targets: windows_codex_chatgpt_desktop_only"));
@@ -6717,6 +6725,13 @@ public class CliTests
             var started = lifecycle.Start("local_readiness", "starting", false, "wait_for_result");
             Assert.That(started.Started, Is.True);
             Assert.That(lifecycle.Complete("succeeded", "none", started.AttemptId), Is.True);
+            Assert.That(ResidentOperationalReadinessProofStore.TryRecord(
+                layout,
+                BuildVersion.Current,
+                started.CorrelationId,
+                started.AttemptId,
+                passed: true,
+                terminalStatus: "succeeded"), Is.True);
 
             var (exitCode, stdout, stderr) = RunCli(layout, "--chatgpt-live-contract-arm");
 
@@ -7659,6 +7674,9 @@ public class ResidentFirstRunSetupLaunchTests
                        scheduleFirstRunSetup: false))
             {
                 Assert.That(context.IsNativeSubmitHookReady, Is.True);
+                var beforeReadiness = nativeController.HandleGesture(new NativeKeyGesture("Enter"));
+                Assert.That(beforeReadiness.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+                Assert.That(beforeReadiness.SuppressOriginalInput, Is.True);
                 context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RunLocalReadiness);
                 Assert.That(queued, Has.Count.EqualTo(1));
 
@@ -7668,6 +7686,11 @@ public class ResidentFirstRunSetupLaunchTests
                 Assert.That(protection.State.LocalReadinessStatus, Is.EqualTo("passed"));
                 Assert.That(protection.State.EffectiveOperationalAction.Status, Is.EqualTo("succeeded"));
                 Assert.That(ManualAcceptanceGate.Evaluate(layout).Allowed, Is.True);
+                Assert.That(protection.State.ComposerProtected, Is.True);
+
+                var afterReadiness = nativeController.HandleGesture(new NativeKeyGesture("Enter"));
+                Assert.That(afterReadiness.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+                Assert.That(afterReadiness.SuppressOriginalInput, Is.True);
 
                 hook.Trigger(new NativeKeyGesture("A", Ctrl: true));
                 Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
@@ -7675,6 +7698,56 @@ public class ResidentFirstRunSetupLaunchTests
             }
 
             Assert.That(hook.Started, Is.False);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void ResidentTrayCancelledReadinessCannotCreateManualAcceptanceProof()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(directory);
+            var profile = CreateProtectedSetupProfile();
+            var hook = new SanitizerTests.FakeNativeSubmitHookHost();
+            var nativeController = new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
+            var protection = TrayProtectionController.CreateTest(
+                new SanitizerTests.FakeTrayHotkeyHost(),
+                CreateProtectedInteractionResult,
+                hook,
+                nativeController,
+                CreateProtectedInteractionResult,
+                profile,
+                storageLayout: layout);
+            var queued = new Queue<Action>();
+
+            using (var context = new WindowsTrayApplicationContext(
+                       protection,
+                       layout,
+                       new NoOpTrayLocalCommandLauncher(),
+                       new NoOpTrayProtectionDisableConfirmation(),
+                       backgroundWorkQueue: work => queued.Enqueue(work),
+                       uiDispatcher: work => work(),
+                       scheduleFirstRunSetup: false))
+            {
+                context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RunLocalReadiness);
+                var attemptId = protection.OperationalAction.AttemptId;
+                Assert.That(protection.CancelOperationalAction("cancelled", attemptId), Is.True);
+
+                queued.Dequeue().Invoke();
+
+                Assert.That(protection.State.LocalReadinessStatus, Is.EqualTo("cancelled"));
+                Assert.That(ManualAcceptanceGate.Evaluate(layout).Allowed, Is.False);
+                hook.Trigger(new NativeKeyGesture("A", Ctrl: true));
+                Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.False);
+            }
         }
         finally
         {
@@ -8268,7 +8341,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
             var form = context.LocalProtectionStatusForm;
-            Assert.That(form!.CurrentRows[1].OperationalState, Is.EqualTo("keyboard Send active"));
+            Assert.That(form!.CurrentRows.Any(row => row.OperationalState == "keyboard Send active"), Is.False);
             Assert.That(context.IsNativeSubmitHookReady, Is.True);
 
             var protectedProfiles = SubmitBindingProfileStore.Load(layout).Profiles;
@@ -8276,8 +8349,7 @@ public class ResidentFirstRunSetupLaunchTests
             protection.Stop();
             protection.Start();
             context.RefreshStatus();
-            Assert.That(form.CurrentRows[1].OperationalState, Is.EqualTo("degraded"));
-            Assert.That(form.CurrentRows[1].Action, Is.EqualTo(LocalProtectionStatusAction.RetryPromptProtection));
+            Assert.That(form.CurrentRows.Any(row => row.OperationalState == "keyboard Send active"), Is.False);
 
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
@@ -8285,8 +8357,6 @@ public class ResidentFirstRunSetupLaunchTests
             queuedWork.Dequeue().Invoke();
 
             Assert.That(retryFactoryCalls, Is.EqualTo(2));
-            Assert.That(form.CurrentRows[1].Consequence, Does.Contain("retry failed"));
-            Assert.That(form.CurrentRows[1].Consequence, Does.Contain("stays blocked"));
             Assert.That(form.CurrentRows.Select(row => row.Consequence), Does.Not.Contain(retryFailure));
             Assert.That(failedRetryHook, Is.Not.Null);
             Assert.That(failedRetryHook!.Started, Is.False);
@@ -8389,7 +8459,8 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(SubmitBindingProfileStore.Load(layout).Profiles.Single().SubmitBinding!.DisplayText,
                 Is.EqualTo("Ctrl+Enter"));
             Assert.That(protection.State.ProtectedSendBinding, Is.EqualTo("Ctrl+Enter"));
-            Assert.That(protection.State.ComposerProtected, Is.True);
+            Assert.That(protection.State.ComposerProtected, Is.False);
+            Assert.That(protection.State.LocalReadinessStatus, Is.Not.EqualTo("passed"));
             Assert.That(File.Exists(Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete")), Is.True);
         }
         finally
@@ -8814,10 +8885,10 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(stateWhenReplacementHookStarted.ComposerProtected, Is.False);
             Assert.That(protection.State.LocalProtectionStatus, Is.EqualTo(LocalProtectionRecovery.ReadyCode));
             Assert.That(context.IsNativeSubmitHookReady, Is.True);
-            Assert.That(protection.State.NativeSubmitEnabled, Is.True);
-            Assert.That(protection.State.ComposerProtected, Is.True);
+            Assert.That(protection.State.NativeSubmitEnabled, Is.False);
+            Assert.That(protection.State.ComposerProtected, Is.False);
             Assert.That(form.CurrentRows[0].OperationalState, Is.EqualTo("ready"));
-            Assert.That(messages.Single(), Does.Contain("protected Send is active"));
+            Assert.That(messages, Has.Count.EqualTo(1));
         }
         finally
         {

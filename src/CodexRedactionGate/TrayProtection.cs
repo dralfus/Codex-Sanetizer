@@ -114,6 +114,7 @@ internal sealed class TrayProtectionController
     private readonly ConcurrentDictionary<CapturedTargetProfileKey, string> _capturedTargetProfiles = new();
     private readonly object _reloadGate = new();
     private readonly ResidentOperationalActionLifecycle _operationalActionLifecycle;
+    private bool _residentReadinessAdmissionEnabled;
     private bool _snapshotInitialized;
     private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
     private ResidentProtectedSendOperation? _activeProtectedSendOperation;
@@ -273,6 +274,12 @@ internal sealed class TrayProtectionController
 
     internal OperationalActionState OperationalAction => _operationalActionLifecycle.State;
 
+    internal void EnableResidentReadinessAdmission()
+    {
+        _residentReadinessAdmissionEnabled = true;
+        WireResidentProtectedClaimProviders(ReadSnapshot().RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>());
+    }
+
     internal OperationalActionStartResult StartOperationalAction(
         string actionKind,
         string stage,
@@ -317,46 +324,28 @@ internal sealed class TrayProtectionController
         PublishOperationalActionState(notifyStateChanged: false);
     }
 
-    internal void PublishLocalReadinessChecking()
+    internal bool TryRecordResidentReadinessProof(long expectedAttemptId)
     {
-        while (true)
-        {
-            var current = ReadSnapshot();
-            if (current.State.LocalReadinessStatus == "checking")
-            {
-                return;
-            }
-
-            if (PublishSnapshotIfCurrent(current, current with
-                {
-                    State = current.State with { LocalReadinessStatus = "checking" }
-                }))
-            {
-                return;
-            }
-        }
-    }
-
-    internal bool PublishLocalReadinessResult(LocalReadinessResult result, long expectedAttemptId = 0)
-    {
-        ArgumentNullException.ThrowIfNull(result);
-        if (expectedAttemptId > 0 && !IsCurrentOperationalActionAttempt(expectedAttemptId))
+        var snapshot = ReadSnapshot();
+        var action = _operationalActionLifecycle.State;
+        if (expectedAttemptId <= 0
+            || !snapshot.HookReady
+            || snapshot.RuntimeSet is null
+            || action.ActionKind != "local_readiness"
+            || action.Status != "succeeded"
+            || action.OutcomeCode != "succeeded"
+            || action.AttemptId != expectedAttemptId)
         {
             return false;
         }
 
-        var status = result.Succeeded ? "passed" : "failed";
-        while (true)
-        {
-            var current = ReadSnapshot();
-            if (PublishSnapshotIfCurrent(current, current with
-                {
-                    State = current.State with { LocalReadinessStatus = status }
-                }))
-            {
-                return true;
-            }
-        }
+        return ResidentOperationalReadinessProofStore.TryRecord(
+            _storageLayout,
+            BuildVersion.Current,
+            action.CorrelationId,
+            action.AttemptId,
+            passed: true,
+            terminalStatus: "succeeded");
     }
 
     private void PublishOperationalActionState(bool notifyStateChanged = true)
@@ -368,8 +357,13 @@ internal sealed class TrayProtectionController
             {
                 State = current.State with
                 {
-                    OperationalAction = _operationalActionLifecycle.State
+                    OperationalAction = _operationalActionLifecycle.State,
+                    LocalReadinessStatus = _operationalActionLifecycle.LocalReadinessStatus
                 }
+            };
+            replacement = replacement with
+            {
+                State = ApplyResidentReadinessAdmission(replacement.State, replacement)
             };
             if (!TryReplaceSnapshotIfCurrent(current, replacement))
             {
@@ -383,6 +377,41 @@ internal sealed class TrayProtectionController
 
             return;
         }
+    }
+
+    private TrayProtectionState ApplyResidentReadinessAdmission(
+        TrayProtectionState state,
+        ProtectionSnapshot snapshot)
+    {
+        if (!_residentReadinessAdmissionEnabled)
+        {
+            return state;
+        }
+
+        if (!IsResidentReadinessAdmitted())
+        {
+            return state with
+            {
+                NativeSubmitEnabled = false,
+                ComposerProtected = false,
+                ReadinessStatus = OsInteractionStatusIds.FailedClosed
+            };
+        }
+
+        if (!state.Enabled
+            || !snapshot.HookReady
+            || state.SetupRequired
+            || state.NativeSubmitStatus != OsInteractionStatusIds.Protected)
+        {
+            return state;
+        }
+
+        return state with
+        {
+            NativeSubmitEnabled = true,
+            ComposerProtected = true,
+            ReadinessStatus = OsInteractionStatusIds.Protected
+        };
     }
 
     // Explicit test seam: observes only transitions whose snapshot CAS succeeded.
@@ -776,7 +805,8 @@ internal sealed class TrayProtectionController
 
     public void Stop()
     {
-        _operationalActionLifecycle.Cancel("protection_stopped");
+        var operationalAction = _operationalActionLifecycle.State;
+        _operationalActionLifecycle.Cancel("protection_stopped", operationalAction.AttemptId);
         var operationToCancel = Volatile.Read(ref _activeProtectedSendOperation);
         if (operationToCancel is not null)
         {
@@ -2487,6 +2517,7 @@ internal sealed class TrayProtectionController
         }
         var (projectFilesProtected, projectFileStatus) = ReadProjectFileProtectionStatus();
         var previousState = _snapshotInitialized ? _currentSnapshot.State : null;
+        var residentReadinessAdmitted = !_residentReadinessAdmissionEnabled || IsResidentReadinessAdmitted();
         return new TrayProtectionState(
             Enabled: enabled,
             Mode: "ApplyOnly",
@@ -2499,15 +2530,20 @@ internal sealed class TrayProtectionController
             LastSubmitted: false,
             NativeSubmitEnabled: nativeSubmitEnabled
                 && localProtectionReady
+                && residentReadinessAdmitted
                 && effectiveNativeSubmitStatus == OsInteractionStatusIds.Protected,
             NativeSubmitStatus: effectiveNativeSubmitStatus,
             ProtectedSendBinding: ProtectedSendBindingText(runtimes, effectiveNativeSubmitStatus),
             NewlineBinding: NewlineBindingText(runtimes),
             ManualScanHotkey: _hotkeyHost.Binding.DisplayText,
-            ReadinessStatus: localProtectionReady
+            ReadinessStatus: localProtectionReady && residentReadinessAdmitted
                 ? ReadinessStatus(runtimes, effectiveNativeSubmitStatus)
-                : localProtectionStatus,
-            ComposerProtected: localProtectionReady && effectiveNativeSubmitStatus == OsInteractionStatusIds.Protected,
+                : residentReadinessAdmitted
+                    ? localProtectionStatus
+                    : OsInteractionStatusIds.FailedClosed,
+            ComposerProtected: localProtectionReady
+                && residentReadinessAdmitted
+                && effectiveNativeSubmitStatus == OsInteractionStatusIds.Protected,
             ProjectFilesProtected: projectFilesProtected,
             ProjectFileStatus: projectFileStatus,
             ResidentProcess: enabled,
@@ -2535,11 +2571,43 @@ internal sealed class TrayProtectionController
         {
             runtime.Controller.SetResidentProtectedClaimProvider(
                 () => ReadResidentChatGptClaim(runtime.Profile));
+            runtime.Controller.SetResidentReadinessAdmissionProvider(
+                _residentReadinessAdmissionEnabled
+                    ? IsResidentReadinessAdmitted
+                    : null);
         }
+    }
+
+    private bool IsResidentReadinessAdmitted()
+    {
+        var action = _operationalActionLifecycle.State;
+        if (action.ActionKind != "local_readiness"
+            || action.Status != "succeeded"
+            || action.OutcomeCode != "succeeded"
+            || _operationalActionLifecycle.LocalReadinessStatus != "passed")
+        {
+            return false;
+        }
+
+        var proof = ResidentOperationalReadinessProofStore.Load(_storageLayout);
+        return proof.Available
+            && proof.Proof is not null
+            && proof.Proof.AttemptId == action.AttemptId
+            && proof.Proof.CorrelationId == action.CorrelationId
+            && proof.Proof.BuildVersion == BuildVersion.Current;
     }
 
     private ChatGptProtectedClaimResult ReadResidentChatGptClaim(SubmitBindingProfile profile)
     {
+        if (_residentReadinessAdmissionEnabled && !IsResidentReadinessAdmitted())
+        {
+            return new ChatGptProtectedClaimResult(
+                ChatGptProtectedClaimEvaluator.DegradedStatus,
+                "not_applicable",
+                "not_applicable",
+                "resident_readiness_unproven");
+        }
+
         var snapshot = ReadSnapshot();
         var currentProfile = snapshot.RuntimeSet?.Runtimes
             .FirstOrDefault(runtime => string.Equals(

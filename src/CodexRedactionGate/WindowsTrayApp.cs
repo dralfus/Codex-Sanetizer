@@ -670,6 +670,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         };
 
         _controller.StateChanged += (_, _) => RefreshStatusOnUiThread();
+        _controller.EnableResidentReadinessAdmission();
         var started = _controller.Start();
         RefreshStatus();
         if (!started)
@@ -699,13 +700,22 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 "starting",
                 userInputRequired: false,
                 nextAction: "focus_message_composer");
+            if (!started.Started)
+            {
+                Interlocked.Exchange(ref _firstRunSetupScheduled, 0);
+                RefreshStatus();
+                return;
+            }
+
             _activationWindow.BeginInvoke(new MethodInvoker(() =>
                 ThreadPool.QueueUserWorkItem(_ => RunFirstRunSetupWorker(started.AttemptId))));
         }
         catch (InvalidOperationException)
         {
             // The application is already closing; the setup gate stays fail-closed.
-            _controller.CompleteOperationalAction("startup_failed", "retry_setup");
+            var action = _controller.OperationalAction;
+            _controller.CompleteOperationalAction("startup_failed", "retry_setup", action.AttemptId);
+            Interlocked.Exchange(ref _firstRunSetupScheduled, 0);
         }
     }
 
@@ -896,10 +906,6 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         catch (Exception exception)
         {
             _crashDiagnostics.Capture(exception, "local_readiness", "worker_start_failed");
-            _controller.PublishLocalReadinessResult(new LocalReadinessResult(
-                false,
-                "local_readiness_worker_start_failed",
-                Array.Empty<ReadinessItem>()));
             _controller.CompleteOperationalAction("worker_start_failed", "retry_local_readiness", started.AttemptId);
             Interlocked.Exchange(ref _localReadinessScheduled, 0);
         }
@@ -926,15 +932,19 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 Array.Empty<ReadinessItem>());
         }
 
-        if (!_controller.PublishLocalReadinessResult(result, attemptId))
+        if (!_controller.CompleteOperationalAction(
+                result.Succeeded ? "succeeded" : result.Code,
+                result.Succeeded ? "none" : "retry_local_readiness",
+                attemptId))
         {
             Interlocked.Exchange(ref _localReadinessScheduled, 0);
             return;
         }
-        _controller.CompleteOperationalAction(
-            result.Succeeded ? "succeeded" : result.Code,
-            result.Succeeded ? "none" : "retry_local_readiness",
-            attemptId);
+        if (result.Succeeded)
+        {
+            _controller.TryRecordResidentReadinessProof(attemptId);
+        }
+        _controller.RefreshOperationalActionState();
         Interlocked.Exchange(ref _localReadinessScheduled, 0);
         TryDispatchToUi(RefreshStatusSafely);
     }

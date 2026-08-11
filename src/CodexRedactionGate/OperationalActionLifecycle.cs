@@ -144,12 +144,12 @@ internal sealed class OperationalActionJournal
 
     private static bool IsSafe(OperationalActionJournalEntry entry)
     {
-        return IsSafeToken(entry.CorrelationId, allowNone: true)
-            && IsSafeToken(entry.ActionKind, allowNone: true)
-            && IsSafeToken(entry.Transition, allowNone: false)
-            && IsSafeToken(entry.Stage, allowNone: true)
-            && IsSafeToken(entry.OutcomeCode, allowNone: true)
-            && IsSafeToken(entry.BuildVersion, allowNone: true)
+        return IsSafeCorrelationId(entry.CorrelationId)
+            && IsSafeLifecycleToken(entry.ActionKind, allowNone: false)
+            && IsSafeLifecycleToken(entry.Transition, allowNone: false)
+            && IsSafeLifecycleToken(entry.Stage, allowNone: false)
+            && IsSafeLifecycleToken(entry.OutcomeCode, allowNone: true)
+            && entry.BuildVersion == BuildVersion.Current
             && entry.ElapsedMilliseconds >= 0
             && entry.AttemptNumber > 0;
     }
@@ -159,10 +159,18 @@ internal sealed class OperationalActionJournal
         return !string.IsNullOrWhiteSpace(value)
             && (allowNone || value != "none")
             && value.All(character => character is >= 'a' and <= 'z'
-                or >= 'A' and <= 'Z'
                 or >= '0' and <= '9'
-                or '_' or '-' or '.' or '+');
+                or '_');
     }
+
+    internal static bool IsSafeLifecycleToken(string? value, bool allowNone) =>
+        IsSafeToken(value, allowNone);
+
+    internal static bool IsSafeCorrelationId(string? value) =>
+        Guid.TryParseExact(value, "N", out _);
+
+    internal static bool IsCurrentBuildVersion(string? value) =>
+        string.Equals(value, BuildVersion.Current, StringComparison.Ordinal);
 }
 
 /// <summary>
@@ -179,6 +187,7 @@ internal sealed class ResidentOperationalActionLifecycle
     private int _attemptNumber;
     private long _startedAt;
     private OperationalActionState _state = OperationalActionState.Idle;
+    private string _localReadinessStatus = "not_run";
 
     public ResidentOperationalActionLifecycle(
         DefaultStorageLayout layout,
@@ -206,15 +215,26 @@ internal sealed class ResidentOperationalActionLifecycle
         }
     }
 
+    public string LocalReadinessStatus
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _localReadinessStatus;
+            }
+        }
+    }
+
     public OperationalActionStartResult Start(
         string actionKind,
         string stage,
         bool userInputRequired,
         string nextAction)
     {
-        if (!OperationalActionJournal.IsSafeToken(actionKind, allowNone: false)
-            || !OperationalActionJournal.IsSafeToken(stage, allowNone: false)
-            || !OperationalActionJournal.IsSafeToken(nextAction, allowNone: false))
+        if (!OperationalActionJournal.IsSafeLifecycleToken(actionKind, allowNone: false)
+            || !OperationalActionJournal.IsSafeLifecycleToken(stage, allowNone: false)
+            || !OperationalActionJournal.IsSafeLifecycleToken(nextAction, allowNone: false))
         {
             return new OperationalActionStartResult(false, "invalid_action_state", 0, "none");
         }
@@ -261,6 +281,10 @@ internal sealed class ResidentOperationalActionLifecycle
             }
 
             _state = candidate;
+            if (actionKind == "local_readiness")
+            {
+                _localReadinessStatus = "checking";
+            }
             RaiseChanged();
             return new OperationalActionStartResult(true, "started", attemptId, correlationId);
         }
@@ -268,8 +292,8 @@ internal sealed class ResidentOperationalActionLifecycle
 
     public bool PublishStage(string stage, bool userInputRequired, string nextAction, long expectedAttemptId = 0)
     {
-        if (!OperationalActionJournal.IsSafeToken(stage, allowNone: false)
-            || !OperationalActionJournal.IsSafeToken(nextAction, allowNone: false))
+        if (!OperationalActionJournal.IsSafeLifecycleToken(stage, allowNone: false)
+            || !OperationalActionJournal.IsSafeLifecycleToken(nextAction, allowNone: false))
         {
             return false;
         }
@@ -325,8 +349,8 @@ internal sealed class ResidentOperationalActionLifecycle
         string status,
         long expectedAttemptId)
     {
-        if (!OperationalActionJournal.IsSafeToken(outcomeCode, allowNone: false)
-            || !OperationalActionJournal.IsSafeToken(nextAction, allowNone: true))
+        if (!OperationalActionJournal.IsSafeLifecycleToken(outcomeCode, allowNone: false)
+            || !OperationalActionJournal.IsSafeLifecycleToken(nextAction, allowNone: true))
         {
             return false;
         }
@@ -352,25 +376,6 @@ internal sealed class ResidentOperationalActionLifecycle
                 return false;
             }
 
-            if (_state.ActionKind == "local_readiness")
-            {
-                var proofRecorded = status == "succeeded"
-                    ? ResidentOperationalReadinessProofStore.TryRecord(
-                        _layout,
-                        BuildVersion.Current,
-                        _state.CorrelationId,
-                        _state.AttemptId,
-                        passed: true,
-                        terminalStatus: "succeeded")
-                    : ResidentOperationalReadinessProofStore.TryClear(_layout);
-                if (!proofRecorded && status == "succeeded")
-                {
-                    // Local protection remains represented by the lifecycle
-                    // result, while manual acceptance stays fail-closed until
-                    // the resident proof can be written.
-                }
-            }
-
             _state = _state with
             {
                 Status = status,
@@ -379,6 +384,10 @@ internal sealed class ResidentOperationalActionLifecycle
                 CanCancel = false,
                 ElapsedMilliseconds = elapsed
             };
+            if (_state.ActionKind == "local_readiness")
+            {
+                _localReadinessStatus = status == "succeeded" ? "passed" : status;
+            }
             RaiseChanged();
             return true;
         }
@@ -392,7 +401,8 @@ internal sealed class ResidentOperationalActionLifecycle
     private bool IsCurrentAttempt(long expectedAttemptId)
     {
         return _state.Status == "running"
-            && (expectedAttemptId <= 0 || expectedAttemptId == _state.AttemptId);
+            && expectedAttemptId > 0
+            && expectedAttemptId == _state.AttemptId;
     }
 
     private void RaiseChanged()

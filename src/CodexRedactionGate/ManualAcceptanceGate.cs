@@ -124,8 +124,8 @@ internal static class ResidentOperationalReadinessProofStore
 
     private static bool IsValid(ResidentOperationalReadinessProof proof)
     {
-        return OperationalActionJournal.IsSafeToken(proof.BuildVersion, allowNone: false)
-            && OperationalActionJournal.IsSafeToken(proof.CorrelationId, allowNone: false)
+        return OperationalActionJournal.IsCurrentBuildVersion(proof.BuildVersion)
+            && OperationalActionJournal.IsSafeCorrelationId(proof.CorrelationId)
             && proof.AttemptId > 0
             && proof.Passed
             && proof.TerminalStatus == "succeeded";

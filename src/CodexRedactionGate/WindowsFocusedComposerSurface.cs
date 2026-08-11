@@ -839,9 +839,6 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             return null;
         }
 
-        // Only check ProfileId and WindowHandle, not ElementRuntimeIdHash
-        // This ensures the element can be found even if the focused element changes
-        // (e.g., after showing a confirmation overlay)
         if (!string.Equals(discovery.Surface.ProfileId, surface.ProfileId, StringComparison.Ordinal))
         {
             return null;
@@ -856,6 +853,16 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             return null;
         }
 
+        var expectedRuntimeIdHash = surface.Metadata.TryGetValue("focused_element_hash");
+        var requireCapturedIdentity = !string.Equals(
+            surface.ProfileId,
+            ReferenceOnlyInputSource.ProfileId,
+            StringComparison.Ordinal);
+        if (requireCapturedIdentity && string.IsNullOrWhiteSpace(expectedRuntimeIdHash))
+        {
+            return null;
+        }
+
         // Try to find the element by AutomationId within the verified window
         // This allows us to find the element even if focus has moved to another window
         var windowHandle = IntPtr.Zero;
@@ -865,7 +872,8 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             if (!string.IsNullOrEmpty(automationId))
             {
                 var element = FindElementByAutomationId(windowHandle, automationId);
-                if (element is not null)
+                if (element is not null
+                    && (!requireCapturedIdentity || MatchesCapturedRuntimeId(element, expectedRuntimeIdHash!)))
                 {
                     return element;
                 }
@@ -879,7 +887,8 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             {
                 var fallbackHandle = new IntPtr(fallback.Current.NativeWindowHandle);
                 var fallbackOwningWindow = FindOwningWindow(fallback);
-                if (MatchesVerifiedSurfaceWindow(windowHandle, fallbackHandle, fallbackOwningWindow))
+                if (MatchesVerifiedSurfaceWindow(windowHandle, fallbackHandle, fallbackOwningWindow)
+                    && (!requireCapturedIdentity || MatchesCapturedRuntimeId(fallback, expectedRuntimeIdHash!)))
                 {
                     return fallback;
                 }
@@ -887,6 +896,28 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         }
 
         return null; // Fail closed if we cannot verify the element
+    }
+
+    private static bool MatchesCapturedRuntimeId(AutomationElement element, string expectedRuntimeIdHash)
+    {
+        try
+        {
+            var joined = string.Join(
+                ".",
+                element.GetRuntimeId().Select(item => item.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            var actual = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(joined)))
+                .Substring(0, 16)
+                .ToLowerInvariant();
+            return string.Equals(actual, expectedRuntimeIdHash, StringComparison.Ordinal);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (COMException)
+        {
+            return false;
+        }
     }
 
     internal static bool MatchesVerifiedSurfaceWindow(

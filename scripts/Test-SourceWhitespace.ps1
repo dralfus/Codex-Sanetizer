@@ -33,6 +33,12 @@ $violations = foreach ($relativePath in $trackedFiles) {
     }
 
     $fullPath = Join-Path $RepositoryRoot $relativePath
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+        # `git ls-files` retains a staged or unstaged deletion until the commit.
+        # There is no working-tree content left to inspect in that case.
+        continue
+    }
+
     $lines = [System.IO.File]::ReadAllLines($fullPath)
     for ($index = 0; $index -lt $lines.Length; $index++) {
         if ($lines[$index] -match "[ `t]+$") {

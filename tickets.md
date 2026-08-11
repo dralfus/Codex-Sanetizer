@@ -2003,3 +2003,224 @@ unrelated-key pass-through and hook cleanup, and records a raw-free proof. The
 `--chatgpt-live-contract-arm` command is fail-closed until that current-build
 proof and its matching terminal journal record exist; CLI gate tests cover both
 blocked and admitted paths.
+
+## 330. Make resident readiness the protected-Send admission decision
+
+**What to build:** A selected app's Send stays blocked until the current
+resident local-readiness action has succeeded. A failed, cancelled, missing, or
+restarted readiness result must revoke the protected claim before any native
+Send flow can proceed.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The resident operational-action lifecycle publishes readiness;
+the native-submit controller consumes that published admission result.
+
+**Fail-closed state:** Any readiness state other than the current successful
+resident result suppresses selected Send with a raw-free status.
+
+**Allowed transitions:** `not_run | running | failed | cancelled -> blocked`;
+only `succeeded -> admitted`; starting a new attempt immediately returns to
+`blocked`.
+
+**Deterministic proof:** Controller tests exercise every lifecycle terminal
+state without desktop focus or cloud access and prove no submit flow is called
+while admission is blocked.
+
+- [x] Native selected Send consumes lifecycle readiness rather than a UI-only flag.
+- [x] Starting, failing, cancelling, or losing readiness blocks Send immediately.
+
+**Implementation evidence:** resident runtime controllers receive a readiness
+admission provider. The active lifecycle result and matching resident proof are
+required before a selected Send can leave the hook path; same-process tests
+cover blocked-before-readiness and admitted-after-readiness behavior.
+
+## 331. Reject workers when their lifecycle action did not start
+
+**What to build:** Startup and retry paths must not queue setup/readiness work
+when the resident lifecycle cannot write its start record. The visible result
+must remain a raw-free retry state.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The resident operational-action lifecycle owns start success;
+the tray only dispatches workers for a returned non-zero attempt.
+
+**Fail-closed state:** A failed lifecycle start leaves Send blocked and does not
+run a worker with an uncorrelated attempt.
+
+**Allowed transitions:** `start rejected -> terminal blocked`; `start accepted
+-> one matching worker`.
+
+**Deterministic proof:** Inject a journal/start failure and assert no setup or
+readiness worker is queued and no wildcard completion is accepted.
+
+- [x] Tray checks lifecycle start results before dispatch.
+- [x] Attempt ID zero is never a wildcard for worker completion.
+
+**Implementation evidence:** startup returns without queuing its worker after a
+rejected lifecycle start; lifecycle terminal transitions require one positive,
+matching attempt ID.
+
+## 332. Bind readiness proof to the active resident hook path
+
+**What to build:** Only the active hook-owning resident controller can record
+manual-acceptance readiness proof, after a matching successful lifecycle
+terminal record. A lifecycle unit test alone cannot open the manual gate.
+
+**Blocked by:** 330. Make resident readiness the protected-Send admission decision.
+
+**State owner:** The resident tray controller owns proof publication after it
+observes both its active runtime and the lifecycle terminal result.
+
+**Fail-closed state:** Missing active hook, stale attempt, failed/cancelled
+readiness, or failed proof write keeps manual acceptance closed.
+
+**Allowed transitions:** `local_readiness running -> succeeded -> resident proof
+recorded`; all other outcomes clear or retain no proof.
+
+**Deterministic proof:** Same-process fixture covers success, failure,
+cancellation, stale completion, unrelated key pass-through, and hook cleanup.
+
+- [x] Lifecycle completion alone cannot admit manual acceptance.
+- [x] Active resident runtime records proof only for its matching success.
+
+**Implementation evidence:** proof recording moved from lifecycle completion to
+the active tray controller, which requires a ready hook and matching terminal
+attempt. Same-process tests cover success, cancellation, stale worker
+completion, unrelated input, and hook cleanup.
+
+## 333. Preserve exact composer identity for write and replay
+
+**What to build:** Replacement and replay target the exact composer captured
+before interception, not another focused control in the same window.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The captured composer identity belongs to the protected-send
+operation.
+
+**Fail-closed state:** A changed or unresolvable composer identity aborts write
+and replay with a raw-free terminal result.
+
+**Allowed transitions:** `captured identity -> exact identity found -> write`;
+any mismatch -> `terminal_blocked`.
+
+**Deterministic proof:** Surface tests simulate another focused control in the
+same window and prove it is never selected as a fallback.
+
+- [x] Runtime identity is checked before write/replay fallback.
+- [x] Same-window focus change is blocked, not redirected.
+
+**Implementation evidence:** production composer write/replay resolves the
+captured runtime-id hash. A different focused control, including one in the
+same window, is rejected; only the isolated reference-only fixture retains its
+own local test behavior.
+
+## 334. Render terminal readiness and lifecycle results
+
+**What to build:** Local status displays successful, failed, and cancelled
+resident action outcomes with one raw-free next action, so automatic work never
+looks hung or disappears after success.
+
+**Blocked by:** 330. Make resident readiness the protected-Send admission decision.
+
+**State owner:** The resident lifecycle is the source; status UI is projection only.
+
+**Fail-closed state:** An unknown or incomplete terminal state renders blocked,
+never protected.
+
+**Allowed transitions:** Published lifecycle terminal states replace progress in
+the status projection.
+
+**Deterministic proof:** Status-view tests cover success, failure, cancellation,
+and retry without a desktop.
+
+- [x] Successful local readiness remains visibly recorded.
+- [x] Terminal lifecycle outcomes are distinguishable and raw-free.
+
+**Implementation evidence:** status projection renders completed, failed, and
+cancelled local-readiness rows, plus terminal lifecycle rows instead of hiding
+success.
+
+## 335. Strengthen operational journal token validation
+
+**What to build:** Journal and proof values accept only the defined lifecycle
+vocabulary and opaque identifiers, not arbitrary strings that resemble domains,
+addresses, or sensitive values.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The operational journal owns validation before persistence.
+
+**Fail-closed state:** Invalid journal/proof values are rejected and do not
+produce a readiness proof.
+
+**Allowed transitions:** Allowlisted lifecycle fields and opaque IDs are
+persisted; unknown values are rejected.
+
+**Deterministic proof:** Tests reject domain-like, IP-like, and arbitrary
+free-form values while accepting valid lifecycle records.
+
+- [x] Raw-free validation has field-specific allowlists.
+- [x] Journal never persists domain-like or address-like values.
+
+**Implementation evidence:** journal entries require a generated correlation
+ID, current build identity, and snake-case lifecycle tokens. Targeted tests
+reject domain-like and IP-like fields.
+
+## 336. Unify release-acceptance admission ownership
+
+**What to build:** One release-acceptance workflow owns the reference proof and
+live-contract arming path; no command can bypass the resident manual gate.
+
+**Blocked by:** 332. Bind readiness proof to the active resident hook path.
+
+**State owner:** The release-acceptance workflow owns release evidence; the
+manual gate owns whether that workflow may begin.
+
+**Fail-closed state:** Missing resident proof blocks every release/manual arm
+entry point.
+
+**Allowed transitions:** `manual gate admitted -> reference proof -> live
+contract armed`; otherwise a raw-free blocked result.
+
+**Deterministic proof:** CLI/workflow tests prove all entry points use the same
+gate and preserve raw-free failure output.
+
+- [x] There is one gated release-acceptance path.
+- [x] Direct workflow invocation cannot bypass resident admission.
+
+**Implementation evidence:** the unused alternate `RunAndArm` workflow was
+removed. The only user-facing live-contract arming command evaluates the
+resident manual gate; the reference matrix remains a separate CI/release
+evidence command and cannot arm a live contract.
+
+## 337. Type operational lifecycle vocabulary
+
+**What to build:** Replace free-form lifecycle action/status/stage strings at
+the ownership boundary with a small typed vocabulary, while preserving
+raw-free serialized records and public status text.
+
+**Blocked by:** 330. Make resident readiness the protected-Send admission decision;
+331. Reject workers when their lifecycle action did not start; 332. Bind
+readiness proof to the active resident hook path.
+
+**State owner:** The resident lifecycle owns typed transitions and exposes only
+valid raw-free projections.
+
+**Fail-closed state:** An invalid transition cannot be represented or persisted.
+
+**Allowed transitions:** Only the declared lifecycle transition table may
+produce a new state.
+
+**Deterministic proof:** Lifecycle tests enumerate legal and illegal
+transitions without timers or a desktop.
+
+- [x] Lifecycle ownership boundary rejects values outside the raw-free
+  lifecycle-token grammar and requires a generated correlation ID/current build.
+- [x] Existing journal/status compatibility remains raw-free and tested.
+
+**Implementation evidence:** lifecycle persistence now validates correlation,
+build, and lifecycle token fields independently; full suite coverage preserves
+the existing serialized status contract.

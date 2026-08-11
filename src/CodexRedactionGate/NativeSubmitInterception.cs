@@ -714,6 +714,7 @@ public sealed class NativeSubmitInterceptionController
     private readonly Func<DateTimeOffset> _clock;
     private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
     private Func<ChatGptProtectedClaimResult>? _residentProtectedClaimProvider;
+    private Func<bool>? _residentReadinessAdmissionProvider;
     private int _liveContractCapturePending;
     private readonly IFirstRunSetupController? _firstRunSetupController;
     private readonly DefaultStorageLayout? _setupLayout;
@@ -776,6 +777,11 @@ public sealed class NativeSubmitInterceptionController
         Func<ChatGptProtectedClaimResult>? provider)
     {
         _residentProtectedClaimProvider = provider;
+    }
+
+    internal void SetResidentReadinessAdmissionProvider(Func<bool>? provider)
+    {
+        _residentReadinessAdmissionProvider = provider;
     }
 
     internal bool ConsumeLiveContractCapture()
@@ -979,6 +985,18 @@ public sealed class NativeSubmitInterceptionController
             diagnostics["enabled"] = "false";
             diagnostics["pass_through_reason"] = "profile_disabled";
             return PassThrough(diagnostics);
+        }
+
+        if (_residentReadinessAdmissionProvider is not null
+            && !_residentReadinessAdmissionProvider())
+        {
+            diagnostics["fail_closed_reason"] = "resident_readiness_unproven";
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.FailedClosed,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: diagnostics);
         }
 
         var protectedClaimGate = SuppressIfChatGptProtectedClaimIsUnproven(diagnostics);

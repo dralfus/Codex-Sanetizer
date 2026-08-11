@@ -86,6 +86,7 @@ internal static class ResidentLifecycleSmokeRunner
         var protectedStatusPassed = false;
         var cloudSubmissionCount = 0;
         var layout = DefaultStorageLayout.Create(directory);
+        _ = Sanitizer.CreateProduction(layout);
         var setup = new SmokeSetupController();
         var initialHook = new WindowsNativeSubmitHookHost();
         var reloadedHook = new WindowsNativeSubmitHookHost();
@@ -131,19 +132,22 @@ internal static class ResidentLifecycleSmokeRunner
                     reloadedHook,
                     new[] { NativeSubmitRuntime.CreateTest(reloadedHook, reloadedController, NoCloudSubmission, protectedProfile) }),
                 () => setup,
-                _ =>
+                backgroundWorkQueue: work => work(),
+                uiDispatcher: work => work(),
+                firstRunSetupCompleted: _ =>
                 {
+                    var readinessPassed = protection.State.LocalReadinessStatus == "passed";
                     runtimeReloadPassed = reloadedHook.IsKeyboardHookRegistered
                         && !initialHook.IsKeyboardHookRegistered
                         && protection.State.NativeSubmitStatus == OsInteractionStatusIds.Protected
-                        && protection.State.ComposerProtected;
+                        && protection.State.ComposerProtected == readinessPassed;
                     var rejectedCandidate = new UnavailableNativeSubmitHookHost("resident_smoke_candidate_unavailable");
                     runtimeRollbackPassed = !protection.ReloadNativeSubmit(new NativeSubmitRuntimeSet(
                         rejectedCandidate,
                         new[] { NativeSubmitRuntime.CreateTest(rejectedCandidate, reloadedController, NoCloudSubmission, protectedProfile) }))
                         && reloadedHook.IsKeyboardHookRegistered
                         && protection.State.NativeSubmitStatus == OsInteractionStatusIds.Protected
-                        && protection.State.ComposerProtected;
+                        && protection.State.ComposerProtected == readinessPassed;
                     var selectedFailure = reloadedController.HandleIdentifiedSendControl(
                         TextSurfaceDiscoveryResult.Failure(
                             OsInteractionStatusIds.SurfaceUnverified,
@@ -165,8 +169,11 @@ internal static class ResidentLifecycleSmokeRunner
                     protectedStatusPassed = renderedStatus.Contains("protected_send_binding=Enter", StringComparison.Ordinal)
                         && renderedStatus.Contains("newline_binding=Ctrl+Enter", StringComparison.Ordinal)
                         && renderedStatus.Contains("manual_scan_hotkey=Ctrl+Shift+F9", StringComparison.Ordinal)
-                        && renderedStatus.Contains("composer_protected=true", StringComparison.Ordinal);
+                        && renderedStatus.Contains(
+                            $"composer_protected={readinessPassed.ToString().ToLowerInvariant()}",
+                            StringComparison.Ordinal);
                     completed.Set();
+                    Application.ExitThread();
                 });
 
             hookRegistrationPassed = initialHook.IsKeyboardHookRegistered;
@@ -176,17 +183,6 @@ internal static class ResidentLifecycleSmokeRunner
                 && setupGate.Status == OsInteractionStatusIds.NativeSubmitSetupRequired
                 && setupGate.SuppressOriginalInput;
 
-            using var timer = new System.Windows.Forms.Timer { Interval = 25 };
-            var ticks = 0;
-            timer.Tick += (_, _) =>
-            {
-                if (completed.IsSet || ++ticks > 240)
-                {
-                    timer.Stop();
-                    context.ExitThread();
-                }
-            };
-            timer.Start();
             Application.Run(context);
         }
         catch

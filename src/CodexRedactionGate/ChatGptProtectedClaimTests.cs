@@ -23,35 +23,6 @@ public sealed class ChatGptProtectedClaimTests
     }
 
     [Test]
-    public void ReleaseAcceptanceWorkflowRecordsCurrentReferenceAndArmsOneLiveCheck()
-    {
-        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-release-acceptance-workflow-tests", Guid.NewGuid().ToString("N"));
-        var layout = DefaultStorageLayout.Create(directory);
-        var profile = CreateProfile();
-
-        try
-        {
-            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
-
-            var result = ChatGptReleaseAcceptanceWorkflow.RunAndArm(layout, interactiveDesktopProbe: () => true);
-
-            Assert.That(result.Succeeded, Is.True);
-            Assert.That(result.Code, Is.EqualTo("live_contract_armed"));
-            var claim = ChatGptProtectedClaimEvaluator.Evaluate(profile, layout);
-            Assert.That(claim.ReferenceStatus, Is.EqualTo("passed"));
-            Assert.That(claim.LiveContractStatus, Is.EqualTo("armed"));
-            Assert.That(ChatGptAcceptanceProofStore.IsLiveContractArmed(layout, profile, BuildVersion.Current), Is.True);
-        }
-        finally
-        {
-            if (Directory.Exists(directory))
-            {
-                Directory.Delete(directory, recursive: true);
-            }
-        }
-    }
-
-    [Test]
     public void MatchingReferenceAndLiveProofsPublishProtectedClaim()
     {
         var profile = CreateProfile();

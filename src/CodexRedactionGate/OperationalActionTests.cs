@@ -31,11 +31,11 @@ public sealed class OperationalActionTests
             Assert.That(lifecycle.State.Stage, Is.EqualTo("prepare_storage"));
 
             now = 1250L;
-            Assert.That(lifecycle.PublishStage("verify_local_protection", userInputRequired: false, "wait_for_result"), Is.True);
+            Assert.That(lifecycle.PublishStage("verify_local_protection", userInputRequired: false, "wait_for_result", started.AttemptId), Is.True);
             Assert.That(lifecycle.State.ElapsedMilliseconds, Is.EqualTo(250));
 
             now = 1400L;
-            Assert.That(lifecycle.Complete("succeeded", "none"), Is.True);
+            Assert.That(lifecycle.Complete("succeeded", "none", started.AttemptId), Is.True);
             Assert.That(lifecycle.State.Status, Is.EqualTo("succeeded"));
             Assert.That(lifecycle.State.CanCancel, Is.False);
 
@@ -69,7 +69,7 @@ public sealed class OperationalActionTests
             var lifecycle = new ResidentOperationalActionLifecycle(layout, () => 1000L);
 
             var first = lifecycle.Start("first_run_setup", "waiting_for_focus", userInputRequired: true, "focus_message_composer");
-            Assert.That(lifecycle.Cancel("user_cancelled"), Is.True);
+            Assert.That(lifecycle.Cancel("user_cancelled", first.AttemptId), Is.True);
             Assert.That(lifecycle.State.Status, Is.EqualTo("cancelled"));
             Assert.That(lifecycle.State.OutcomeCode, Is.EqualTo("user_cancelled"));
 
@@ -97,8 +97,70 @@ public sealed class OperationalActionTests
 
             Assert.That(lifecycle.Start("local_readiness", "prepare_storage", false, "wait_for_result").Started, Is.True);
             Assert.That(lifecycle.Start("other_action", "prepare_storage", false, "wait_for_result").Started, Is.False);
-            Assert.That(lifecycle.Complete("bad code", "none"), Is.False);
+            Assert.That(lifecycle.Complete("bad code", "none", lifecycle.State.AttemptId), Is.False);
             Assert.That(lifecycle.State.Status, Is.EqualTo("running"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void LifecycleRejectsAnUncorrelatedTerminalCompletion()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var lifecycle = new ResidentOperationalActionLifecycle(DefaultStorageLayout.Create(directory), () => 1000L);
+            var started = lifecycle.Start("local_readiness", "starting", false, "wait_for_result");
+
+            Assert.That(started.Started, Is.True);
+            Assert.That(lifecycle.Complete("succeeded", "none"), Is.False);
+            Assert.That(lifecycle.State.Status, Is.EqualTo("running"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void OperationalJournalRejectsDomainAndAddressLikeLifecycleValues()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var journal = new OperationalActionJournal(DefaultStorageLayout.Create(directory));
+            var validCorrelation = Guid.NewGuid().ToString("N");
+
+            Assert.That(journal.TryAppend(new OperationalActionJournalEntry(
+                validCorrelation,
+                "local_readiness",
+                "completed",
+                "check_local_prerequisites",
+                "succeeded",
+                1,
+                1,
+                BuildVersion.Current)), Is.True);
+            Assert.That(journal.TryAppend(new OperationalActionJournalEntry(
+                Guid.NewGuid().ToString("N"),
+                "local_readiness",
+                "completed",
+                "test.secret.com",
+                "succeeded",
+                1,
+                2,
+                BuildVersion.Current)), Is.False);
+            Assert.That(journal.TryAppend(new OperationalActionJournalEntry(
+                Guid.NewGuid().ToString("N"),
+                "local_readiness",
+                "completed",
+                "check_local_prerequisites",
+                "192.168.10.25",
+                1,
+                3,
+                BuildVersion.Current)), Is.False);
         }
         finally
         {
@@ -116,7 +178,8 @@ public sealed class OperationalActionTests
             var lifecycle = new ResidentOperationalActionLifecycle(layout, () => 1000L);
 
             Assert.That(lifecycle.Start("first_run_setup", "starting", false, "retry_setup").Started, Is.True);
-            Assert.That(lifecycle.Complete("setup_failed", "retry_setup"), Is.True);
+            var started = lifecycle.State.AttemptId;
+            Assert.That(lifecycle.Complete("setup_failed", "retry_setup", started), Is.True);
             Assert.That(lifecycle.State.Status, Is.EqualTo("failed"));
             Assert.That(lifecycle.State.CanCancel, Is.False);
         }
@@ -225,10 +288,10 @@ public sealed class OperationalActionTests
             LiveContractStatus: "missing",
             LocalReadinessStatus: "passed");
 
-        var row = LocalProtectionStatusView.Create(state).Rows[1];
-        Assert.That(row.Consequence, Does.Contain("release/CI evidence"));
-        Assert.That(row.Consequence, Does.Contain("remains blocked"));
-        Assert.That(row.Action, Is.EqualTo(LocalProtectionStatusAction.None));
+        var rows = LocalProtectionStatusView.Create(state).Rows;
+        var readiness = rows.Single(item => item.Name == "Automatic local readiness");
+        Assert.That(readiness.OperationalState, Is.EqualTo("completed"));
+        Assert.That(readiness.Consequence, Does.Not.Contain("release/CI"));
     }
 
     [Test]
@@ -269,8 +332,8 @@ public sealed class OperationalActionTests
 
             var result = ManualAcceptanceGate.Evaluate(layout);
 
-            Assert.That(result.Allowed, Is.True);
-            Assert.That(result.Code, Is.EqualTo("manual_acceptance_ready"));
+            Assert.That(result.Allowed, Is.False);
+            Assert.That(result.Code, Is.EqualTo("resident_readiness_proof_missing"));
         }
         finally
         {
