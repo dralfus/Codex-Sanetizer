@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace CodexRedactionGate;
@@ -706,6 +707,7 @@ internal sealed class FirstRunSetupForm : Form
     private RadioButton? _ctrlEnterSendRadioButton;
     private Label? _bindingPairLabel;
     private Label? _verificationStatusLabel;
+    private long _verificationGeneration;
 
     public bool SetupCompleted => _setupCompleted;
 
@@ -883,7 +885,7 @@ internal sealed class FirstRunSetupForm : Form
         return (string.Empty, string.Empty);
     }
 
-    private void OnVerifyFocusedProfile()
+    private async void OnVerifyFocusedProfile()
     {
         var (selectedSubmit, selectedNewline) = GetSelectedBindingPair();
         if (string.IsNullOrEmpty(selectedSubmit) || string.IsNullOrEmpty(selectedNewline))
@@ -906,21 +908,24 @@ internal sealed class FirstRunSetupForm : Form
             return;
         }
 
-        _verificationStatusLabel!.Text = "Verification is waiting for the focused Codex or ChatGPT Desktop composer...";
+        var verificationGeneration = Interlocked.Increment(ref _verificationGeneration);
+        _verificationStatusLabel!.Text = "Switch to the selected app's message composer now. Verification captures focus in 10 seconds; this setup window stays responsive.";
         _verificationStatusLabel.ForeColor = Color.DarkOrange;
+        _verifyFocusedAppButton!.Enabled = false;
         if (_setupController is ISetupVerificationProgressReporter setupProgressReporter)
         {
             setupProgressReporter.PublishSetupProgress("waiting_for_focus", "focus_message_composer", binding: selectedSubmit);
         }
         TopMost = false;
-        WindowState = FormWindowState.Minimized;
-        Hide();
-        Application.DoEvents();
+        var result = await FocusedProfileVerificationWorker.RunAsync(
+            () => focusedSetupController.VerifyFocusedProfile(selectedSubmit, selectedNewline, _layout));
 
-        var result = focusedSetupController.VerifyFocusedProfile(selectedSubmit, selectedNewline, _layout);
+        if (IsDisposed || verificationGeneration != Volatile.Read(ref _verificationGeneration))
+        {
+            return;
+        }
 
-        Show();
-        WindowState = FormWindowState.Normal;
+        _verifyFocusedAppButton.Enabled = true;
         TopMost = true;
         Activate();
 
@@ -953,6 +958,7 @@ internal sealed class FirstRunSetupForm : Form
 
     private void OnSkipSetup()
     {
+        Interlocked.Increment(ref _verificationGeneration);
         var confirmed = MessageBox.Show(
             "Exit setup? Codex/ChatGPT protected Send will remain blocked until profile verification succeeds.",
             "Code Sanitizer - setup is not complete",
@@ -966,5 +972,33 @@ internal sealed class FirstRunSetupForm : Form
 
         _setupCompleted = false;
         Close();
+    }
+}
+
+internal static class FocusedProfileVerificationWorker
+{
+    internal static Task<T> RunAsync<T>(Func<T> work)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                completion.SetResult(work());
+            }
+            catch (Exception exception)
+            {
+                completion.SetException(exception);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "CodexRedactionGate.ProfileVerification"
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task;
     }
 }

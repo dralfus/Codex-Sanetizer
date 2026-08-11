@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading.Tasks;
 using NUnit.Framework;
 
 namespace CodexRedactionGate;
@@ -21,6 +20,35 @@ public sealed class ChatGptProtectedClaimTests
         Assert.That(result.Status, Is.EqualTo(ChatGptProtectedClaimEvaluator.DegradedStatus));
         Assert.That(result.ReferenceStatus, Is.EqualTo(ChatGptProtectedClaimEvaluator.MissingStatus));
         Assert.That(result.LiveContractStatus, Is.EqualTo(ChatGptProtectedClaimEvaluator.MissingStatus));
+    }
+
+    [Test]
+    public void ReleaseAcceptanceWorkflowRecordsCurrentReferenceAndArmsOneLiveCheck()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-release-acceptance-workflow-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = CreateProfile();
+
+        try
+        {
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
+
+            var result = ChatGptReleaseAcceptanceWorkflow.RunAndArm(layout, interactiveDesktopProbe: () => true);
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.Code, Is.EqualTo("live_contract_armed"));
+            var claim = ChatGptProtectedClaimEvaluator.Evaluate(profile, layout);
+            Assert.That(claim.ReferenceStatus, Is.EqualTo("passed"));
+            Assert.That(claim.LiveContractStatus, Is.EqualTo("armed"));
+            Assert.That(ChatGptAcceptanceProofStore.IsLiveContractArmed(layout, profile, BuildVersion.Current), Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     [Test]
@@ -267,27 +295,54 @@ public sealed class ChatGptProtectedClaimTests
     }
 
     [Test]
-    public void LiveContractArmCanBeConsumedOnlyOnceConcurrently()
+    public void FailedLiveContractCaptureKeepsPersistentArmAndAllowsOneRetry()
     {
-        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-live-arm-concurrency-tests", Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-live-arm-retry-tests", Guid.NewGuid().ToString("N"));
         var layout = DefaultStorageLayout.Create(directory);
-        var profile = CreateProfile();
+        var discovery = CreateDiscovery();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Ctrl+Enter",
+            "Enter",
+            discovery);
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => discovery,
+            setupLayout: layout);
 
         try
         {
-            Assert.That(ChatGptAcceptanceProofStore.ArmLiveContract(layout, profile), Is.True);
-            var attempts = Enumerable.Range(0, 16)
-                .Select(_ => Task.Run(() => ChatGptAcceptanceProofStore.TryConsumeLiveContractArm(
+            Assert.That(
+                ChatGptAcceptanceProofStore.RecordReference(
                     layout,
                     profile,
-                    BuildVersion.Current)))
-                .ToArray();
-            Task.WaitAll(attempts);
+                    BuildVersion.Current,
+                    passed: true,
+                    terminalStatus: "passed"),
+                Is.True);
+            Assert.That(ChatGptAcceptanceProofStore.ArmLiveContract(layout, profile), Is.True);
+            controller.SetResidentProtectedClaimProvider(
+                () => ChatGptProtectedClaimEvaluator.Evaluate(profile, layout));
 
-            Assert.That(attempts.Count(attempt => attempt.Result), Is.EqualTo(1));
+            var first = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+            Assert.That(first.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+            Assert.That(first.Diagnostics["live_contract_capture"], Is.EqualTo("armed_reserved"));
             Assert.That(
                 ChatGptAcceptanceProofStore.IsLiveContractArmed(layout, profile, BuildVersion.Current),
-                Is.False);
+                Is.True);
+
+            controller.ClearLiveContractCapture();
+            var claimAfterFailure = ChatGptProtectedClaimEvaluator.Evaluate(profile, layout);
+
+            Assert.That(claimAfterFailure.ReferenceStatus, Is.EqualTo("passed"));
+            Assert.That(claimAfterFailure.LiveContractStatus, Is.EqualTo("armed"));
+
+            var retry = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+            Assert.That(retry.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+            Assert.That(retry.Diagnostics["live_contract_capture"], Is.EqualTo("armed_reserved"));
         }
         finally
         {

@@ -130,7 +130,19 @@ public static class ChatGptProtectedClaimEvaluator
     {
         ArgumentNullException.ThrowIfNull(layout);
         var stored = ChatGptAcceptanceProofStore.Load(layout);
-        return Evaluate(profile, BuildVersion.Current, stored.Proofs);
+        var claim = Evaluate(profile, BuildVersion.Current, stored.Proofs);
+        return claim.ReferenceStatus == "passed"
+            && claim.LiveContractStatus == MissingStatus
+            && ChatGptAcceptanceProofStore.IsLiveContractArmed(
+                layout,
+                profile,
+                BuildVersion.Current)
+            ? claim with
+            {
+                LiveContractStatus = "armed",
+                Reason = "live_contract_armed"
+            }
+            : claim;
     }
 
     public static bool TryCreateLiveProof(
@@ -356,36 +368,6 @@ public static class ChatGptAcceptanceProofStore
         lock (LiveContractArmGate)
         {
             return IsLiveContractArmedCore(layout, profile, buildVersion);
-        }
-    }
-
-    public static bool TryConsumeLiveContractArm(
-        DefaultStorageLayout layout,
-        SubmitBindingProfile profile,
-        string buildVersion)
-    {
-        ArgumentNullException.ThrowIfNull(layout);
-        ArgumentNullException.ThrowIfNull(profile);
-        ArgumentException.ThrowIfNullOrWhiteSpace(buildVersion);
-
-        lock (LiveContractArmGate)
-        {
-            if (!IsLiveContractArmedCore(layout, profile, buildVersion))
-            {
-                return false;
-            }
-
-            try
-            {
-                File.Delete(Path.Combine(layout.SettingsDirectory, LiveContractArmFileName));
-                return true;
-            }
-            catch (Exception exception) when (exception is IOException
-                or UnauthorizedAccessException
-                or ArgumentException)
-            {
-                return false;
-            }
         }
     }
 

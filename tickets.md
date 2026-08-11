@@ -1447,7 +1447,36 @@ stored live proof includes the validated raw-free terminal trace, while the
 release matrix validates canonical stage order, keyboard and mouse hook cleanup.
 Automated coverage includes pairing, build/fingerprint mismatch, raw-free
 persistence, resident suppression, complete trace validation, cleanup, and
-one-use live arm consumption.
+one-resident-operation live-arm reservation.
+
+**Regression follow-up (2026-08-10):** The live-contract arm is persistent
+release evidence, not a consumable input event. A resident operation may reserve
+it for one in-flight capture, but an interrupted, blocked, or failed capture
+releases that reservation and leaves the arm available for retry. Only a saved
+`sent_safely` proof clears the arm. Claim evaluation projects the persisted arm
+as `reference=passed, live=armed`, so the tray cannot lose the ready-to-check
+state after a resident refresh.
+
+**Observability follow-up (2026-08-10):** While the live contract is armed,
+the local-status view must render the latest raw-free protected-Send attempt
+before the generic `final ChatGPT check ready` message. This lets release
+acceptance distinguish a hook that never received the configured key from an
+operation that reached a specific blocked terminal state, without logging or
+displaying prompt text.
+
+The same view must also project the latest safe keyboard-hook boundary signal:
+waiting for the configured Send, Enter in an unrelated target, binding mismatch,
+or configured Send captured. Unknown values are rendered as unavailable rather
+than copied to the UI. The signal is observational only; it cannot permit Send
+or alter fail-closed handling.
+
+**Pipeline-failure follow-up (2026-08-10):** A terminal fail-closed operation
+must publish an allowlisted, raw-free resident failure code when the local
+orchestrator or the resident submit wrapper throws. The status UI must explain
+that the original Send remained blocked and distinguish these two cases from a
+missing keyboard capture, trace failure, or unsupported surface. It must never
+display an exception message, type name, prompt text, or arbitrary diagnostic
+value. Deterministic tests inject each known code and an arbitrary value.
 
 ## 309. Trace protected pointer Send through the resident operation
 
@@ -1647,6 +1676,15 @@ live cloud access, or raw prompt data.
 - [ ] Tests prove the evidence generation and normalized target identity are
   carried into the resident pointer operation.
 
+**Regression follow-up (2026-08-10):** The shipped global low-level mouse hook
+classified every left click in a selected ChatGPT window. A slow UI Automation
+lookup then suppressed navigation and other non-Send controls. Native pointer
+registration is disabled in the production profile until this ticket provides
+resident pre-action Send-control evidence; the resident status must state that
+only keyboard Send is protected. Completion requires a deterministic proof that
+the actual Send button is suppressed without blocking `Ctrl+C`, chat/project
+navigation, skill controls, or any other click outside its verified boundary.
+
 ## 315. Make protected-Send trace publication transactional
 
 **What to build:** Remove the remaining split between appending a transition
@@ -1758,3 +1796,210 @@ fixture can create a protected profile, while each one-field override produces
 - [ ] The builder exposes only intentional, named overrides for negative cases.
 - [ ] Adding a required evidence field breaks one canonical fixture test rather
   than silently desynchronising multiple copies.
+
+## Manual desktop acceptance gate (effective immediately)
+
+No new manual Codex/ChatGPT Desktop acceptance run may be started until tickets
+325 through 329 are complete. Tickets 325 through 329 are now complete in the
+current source tree. Manual acceptance remains admitted only through the
+resident-proof gate and still cannot claim release readiness without the
+separate release/CI evidence.
+
+## 325. Own operational readiness state and write a raw-free journal
+
+**What to build:** Give every desktop action needed for Code Sanitizer to become
+or remain operational one resident-owned lifecycle: first-run setup, selected
+profile verification, recovery/retry, local readiness, and any local release
+prerequisite. The same owner must publish a durable, bounded raw-free journal
+that lets support identify the exact failed stage.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The resident operational-action lifecycle owns the correlation
+identifier, action kind, stage, cancellation, retry eligibility, terminal
+outcome, and journal publication. Tray and status windows only project the
+published state.
+
+**Fail-closed state:** A required action that is idle before automatic start,
+running, failed, cancelled, or missing a journal outcome leaves protected Send
+blocked for the selected profile. No tray-local flag may report protection ready.
+
+**Allowed transitions:** `idle -> running(named stage) -> succeeded | failed(code)
+| cancelled`; retry starts a new correlated action. Only the lifecycle owner may
+publish these transitions.
+
+**Deterministic proof:** A deterministic lifecycle seam drives automatic start,
+all terminal outcomes, cancellation, and retry without timers, desktop focus,
+or cloud access. Tests assert exactly one correlated raw-free journal record per
+terminal action and fail if it contains prompt text, sensitive values, mappings,
+paths, window/control names, local addresses, or exception messages.
+
+- [x] One resident action-lifecycle API supplies all operation status instead of
+  tray or form-local readiness flags.
+- [x] Journal records contain correlation ID, action kind, transition, stage,
+  outcome/failure code, duration, attempt count, and build identity only.
+- [x] A failed/cancelled/missing action outcome keeps selected Send fail-closed.
+
+**Implementation evidence:** `ResidentOperationalActionLifecycle` is the
+resident owner; `OperationalActionJournal` persists bounded safe-token JSONL.
+Targeted lifecycle tests and the full `1669/1669` suite cover terminal outcomes,
+cancellation, retry correlation, stale attempts, and raw-free records.
+
+## 326. Start required setup and readiness actions automatically
+
+**What to build:** On installation and resident startup, automatically start
+the next required first-run setup, profile verification, recovery, or short
+local readiness action. The user may provide only the explicitly requested
+security input, such as focusing the composer or choosing a Send binding; they
+must never need to discover a command or infer an execution order.
+
+**Blocked by:** 325. Own operational readiness state and write a raw-free
+journal.
+
+**State owner:** The resident operational-action lifecycle chooses and starts
+the next prerequisite from the published protection state. The installer and
+tray request startup only; they do not decide which prerequisite is complete.
+
+**Fail-closed state:** If the next prerequisite cannot start or cannot collect
+the required user input, selected Send remains blocked with its raw-free action
+outcome. The product does not silently fall back to a manual command path.
+
+**Allowed transitions:** Startup selects one next prerequisite and starts it
+automatically. A user-required stage may wait for focus/binding input; success
+selects the next prerequisite, while failure/cancellation remains retryable but
+protected Send stays blocked.
+
+**Deterministic proof:** Tests start a clean installation/runtime state and
+prove that the correct next action begins without a tray click or console
+command. They cover focus-required verification, retry after failure, and an
+already-ready profile without timers, live cloud, or a real desktop.
+
+- [x] No operational prerequisite relies on the user opening a tray command or
+  remembering a command-line sequence.
+- [x] Startup automatically advances only through verified prerequisite results.
+- [x] The one allowed user-input stage is explicit and preserves fail-closed
+  Send behavior until it succeeds.
+
+**Implementation evidence:** resident startup schedules first-run setup and
+then local readiness without a tray click; attempt guards prevent stale worker
+completion from activating protection. Tray retries remain fail-closed.
+
+## 327. Show detailed, usable operational-action progress
+
+**What to build:** Make tray and status UI render the resident action lifecycle
+as a readable operation: action name, named current stage, whether input is
+automatic or required from the user, elapsed time, cancellation availability,
+terminal result, and one safe next action. A long check must never look like a
+hung empty window.
+
+**Blocked by:** 325. Own operational readiness state and write a raw-free
+journal; 326. Start required setup and readiness actions automatically.
+
+**State owner:** The resident operational-action lifecycle publishes progress;
+the tray/status UI is a projection only and owns no readiness decision.
+
+**Fail-closed state:** An unknown, stale, or incomplete progress state cannot
+be rendered as `protected`; it is shown as a raw-free blocked/retry state while
+the selected Send remains blocked.
+
+**Allowed transitions:** UI updates only follow published lifecycle
+transitions. A visible cancel/retry request is routed to the owner and receives
+a new published outcome; closing or moving the window does not cancel an action.
+
+**Deterministic proof:** UI tests feed lifecycle states through one dispatcher
+seam and assert the visible stage/result/next action, including cancellation and
+failure, without timers, foreground focus, or cloud access. They also prove the
+window remains usable and does not suppress unrelated navigation, clipboard, or
+editing input.
+
+- [x] `checking` is never displayed without a named stage and visible outcome.
+- [x] The user can distinguish automatic work from the one input required from
+  them and knows exactly what to do next.
+- [x] Status UI remains moveable/closeable when no critical decision is pending.
+
+**Implementation evidence:** status projection renders action, stage, input
+mode, elapsed time, cancellation, terminal outcome, and next action. The
+status and tray-context tests cover running, failure, cancellation, retry, and
+unrelated input without timers or live cloud access.
+
+## 328. Separate short installed readiness from release/CI acceptance
+
+**What to build:** Keep the complete reference-composer scenario matrix in the
+release/CI acceptance path. The installed tray runs only a short local
+readiness action automatically, reports its scoped result, and does not present
+the full matrix as an unexplained foreground reference-composer window.
+
+**Blocked by:** 325. Own operational readiness state and write a raw-free
+journal; 326. Start required setup and readiness actions automatically.
+
+**State owner:** The resident operational-action lifecycle owns local readiness;
+the release/CI acceptance workflow owns the full matrix and its release record.
+Neither may use the other result as its own success state.
+
+**Fail-closed state:** A missing, failed, or mismatched local readiness result
+keeps the profile blocked. A successful local readiness action cannot claim
+release compatibility or substitute for the recorded release/CI matrix.
+
+**Allowed transitions:** Resident startup launches the short local check only.
+Release tooling launches the complete matrix explicitly in its CI/release scope.
+Both results are correlated and raw-free, but remain separate evidence classes.
+
+**Deterministic proof:** Tests prove the resident path performs only the short
+readiness path and the release path performs the complete matrix. They assert
+that neither result is accepted as the other, without timers, live cloud, or a
+manual desktop.
+
+- [x] Post-install setup never opens the full reference-composer matrix as an
+  opaque tray action.
+- [x] Local readiness and release/CI evidence have distinct result types and
+  cannot be confused in status.
+- [x] The complete matrix remains repeatable and raw-free in release/CI.
+
+**Implementation evidence:** tray uses `LocalReadinessWorkflow`; the complete
+reference matrix remains in `ReferenceComposerReleaseAcceptanceRunner` and is
+not invoked by `WindowsTrayApplicationContext`. Separation is covered by the
+source contract, status, product smoke, and full-suite tests.
+
+## 329. Prove the active tray path and reopen manual acceptance
+
+**What to build:** Add the missing same-process proof: start the actual
+hook-owning tray runtime, run the installed local readiness action, and prove it
+reaches a terminal resident state without deadlock, stale hooks, blocked
+unrelated input, or a hung UI. Reopen manual desktop acceptance only after this
+proof and tickets 325-328 are complete.
+
+**Blocked by:** 325. Own operational readiness state and write a raw-free
+journal; 326. Start required setup and readiness actions automatically; 327.
+Show detailed, usable operational-action progress; 328. Separate short
+installed readiness from release/CI acceptance.
+
+**State owner:** The resident runtime owns the hook and operational action;
+the integration fixture observes only published lifecycle state and raw-free
+journal records. The manual-test gate is released only by the completed proof.
+
+**Fail-closed state:** A missing terminal result, hook leak, stale generation,
+unrelated-input suppression, UI deadlock, or absent raw-free diagnostic keeps
+manual acceptance closed and selected Send blocked.
+
+**Allowed transitions:** The fixture starts one resident tray runtime with one
+hook, invokes its automatic/local readiness action, waits deterministically for
+a published terminal state, and performs cleanup. Only a passing result enables
+the manual-test admission gate.
+
+**Deterministic proof:** The product-level fixture executes in the same process
+as the tray and active native hook. It proves success, failure, cancellation,
+cleanup, and one unrelated-input pass-through case without timers, live cloud,
+or a real ChatGPT/Codex session.
+
+- [x] Same-process tray/hook readiness reaches one observable terminal state.
+- [x] The fixture proves no hung UI, stale hook, leaked state, or unrelated
+  input suppression.
+- [x] Manual desktop acceptance is explicitly blocked before this ticket and
+  explicitly enabled only when tickets 325-328 and this proof pass.
+
+**Implementation evidence:** the same-process resident fixture observes the
+active hook, runs local readiness, verifies terminal resident state, checks
+unrelated-key pass-through and hook cleanup, and records a raw-free proof. The
+`--chatgpt-live-contract-arm` command is fail-closed until that current-build
+proof and its matching terminal journal record exist; CLI gate tests cover both
+blocked and admitted paths.

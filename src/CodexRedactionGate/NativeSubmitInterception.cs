@@ -1064,14 +1064,19 @@ public sealed class NativeSubmitInterceptionController
         }
 
         if (_residentProtectedClaimProvider is not null
-            && ChatGptAcceptanceProofStore.TryConsumeLiveContractArm(
+            && ChatGptAcceptanceProofStore.IsLiveContractArmed(
                 _setupLayout,
                 _profile,
-                BuildVersion.Current))
+                BuildVersion.Current)
+            && Interlocked.CompareExchange(ref _liveContractCapturePending, 1, 0) == 0)
         {
-            Interlocked.Exchange(ref _liveContractCapturePending, 1);
-            diagnostics["live_contract_capture"] = "armed_consumed";
+            diagnostics["live_contract_capture"] = "armed_reserved";
             return null;
+        }
+
+        if (Volatile.Read(ref _liveContractCapturePending) != 0)
+        {
+            diagnostics["live_contract_capture"] = "already_pending";
         }
 
         diagnostics["fail_closed_reason"] = "chatgpt_protected_claim_unproven";
@@ -1489,6 +1494,11 @@ internal interface INativeSubmitHookHost
     void Stop();
 }
 
+internal interface INativeSubmitHookDiagnostics
+{
+    string LastKeyboardSignal { get; }
+}
+
 internal interface INativeSubmitPointerHookHost
 {
     bool StartPointer(
@@ -1523,7 +1533,7 @@ internal sealed class UnavailableNativeSubmitHookHost : INativeSubmitHookHost
     }
 }
 
-internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INativeSubmitPointerHookHost
+internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INativeSubmitHookDiagnostics, INativeSubmitPointerHookHost
 {
     private static readonly TimeSpan ClassificationBudget = TimeSpan.FromMilliseconds(75);
     private const int WhKeyboardLl = 13;
@@ -1544,6 +1554,7 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     private readonly IReadOnlyDictionary<string, SubmitKeyBinding> _submitBindings;
     private readonly IReadOnlySet<string> _configuredProfiles;
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
+    private readonly bool _enableNativePointerHook;
     private readonly ConcurrentDictionary<(nint Window, uint ProcessId), string> _selectedTargets = new();
     private readonly object _referenceInputGate = new();
     private Timer? _selectedTargetMonitor;
@@ -1557,10 +1568,12 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
     private Func<NativePointerGesture, bool>? _shouldSuppressPointerClassificationFailure;
     private ReferenceOnlyInputCapability? _referenceInputCapability;
     private ReferenceOnlyInputTarget? _referenceInputTarget;
+    private string _lastKeyboardSignal = "waiting_for_configured_send";
 
     public WindowsNativeSubmitHookHost(
         IReadOnlyList<SubmitBindingProfile>? profiles = null,
-        Func<IntPtr, string?>? selectedWindowProfileResolver = null)
+        Func<IntPtr, string?>? selectedWindowProfileResolver = null,
+        bool enableNativePointerHook = false)
     {
         _callback = HookCallback;
         _mouseCallback = MouseHookCallback;
@@ -1574,9 +1587,12 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
             .Where(profile => profile.Enabled && profile.SubmitBinding is not null)
             .ToDictionary(profile => profile.ProfileId, profile => profile.SubmitBinding!, StringComparer.Ordinal);
         _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
+        _enableNativePointerHook = enableNativePointerHook;
     }
 
     public string? LastErrorCode { get; private set; }
+
+    public string LastKeyboardSignal => Volatile.Read(ref _lastKeyboardSignal);
 
     internal bool IsKeyboardHookRegistered => _hook != IntPtr.Zero;
 
@@ -1674,6 +1690,15 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         _classifyPointer = classify;
         _onSuppressedPointerSubmit = onSuppressedSubmit;
         _shouldSuppressPointerClassificationFailure = shouldSuppressClassificationFailure;
+        if (!_enableNativePointerHook)
+        {
+            // A low-level mouse hook sees every click in the selected window.
+            // Until the production path has a pre-action Send-control boundary,
+            // retain callbacks for the reference composer but do not register a
+            // global hook that could suppress unrelated UI.
+            return true;
+        }
+
         if (_mouseHook != IntPtr.Zero)
         {
             return true;
@@ -1859,9 +1884,19 @@ internal sealed class WindowsNativeSubmitHookHost : INativeSubmitHookHost, INati
         if (!IsPotentialKeyboardInterception(gesture, virtualKey)
             || !IsSelectedSubmitGesture(gesture))
         {
+            if (virtualKey == VkReturn)
+            {
+                Volatile.Write(
+                    ref _lastKeyboardSignal,
+                    IsSelectedTarget(gesture.TargetWindow, gesture.TargetProcessId)
+                        ? "enter_seen_binding_mismatch"
+                        : "enter_seen_unselected_target");
+            }
+
             return false;
         }
 
+        Volatile.Write(ref _lastKeyboardSignal, "configured_send_captured");
         QueueKeyboardClassification(gesture);
         return true;
     }

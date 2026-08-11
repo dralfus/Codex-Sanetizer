@@ -79,7 +79,7 @@ public sealed class LocalProtectionStatusTests
         state = state with { NativeSubmitEnabled = false, ComposerProtected = false };
         form.RefreshView();
 
-        Assert.That(form.CurrentRows[1].OperationalState, Is.EqualTo("active"));
+        Assert.That(form.CurrentRows[1].OperationalState, Is.EqualTo("keyboard Send active"));
         Assert.That(text.IsDisposed, Is.False);
         Assert.That(text.SelectionLength, Is.EqualTo(1));
     }
@@ -99,7 +99,7 @@ public sealed class LocalProtectionStatusTests
             "ready",
             "Local mappings are available to this Windows user.",
             LocalProtectionStatusAction.None)));
-        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("active"));
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("keyboard Send active"));
         Assert.That(view.Rows[1].Action, Is.EqualTo(LocalProtectionStatusAction.None));
         Assert.That(view.Rows[2].OperationalState, Is.EqualTo("broker demo only"));
         Assert.That(view.Rows[2].Consequence, Does.Contain("not intercepted"));
@@ -131,6 +131,47 @@ public sealed class LocalProtectionStatusTests
         Assert.That(canceled.Rows[1].OperationalState, Is.EqualTo("last Send canceled"));
         Assert.That(new[] { checking, sent, canceled }
             .All(view => !view.RenderText().Contains("DOMAIN_C195C3D8E8F3", StringComparison.Ordinal)), Is.True);
+    }
+
+    [Test]
+    public void StatusView_ShowsLatestChatGptAttemptInsteadOfHidingItBehindLiveCheckReady()
+    {
+        var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ConfiguredProfileId = "chatgpt-desktop",
+            ProtectedClaimStatus = ChatGptProtectedClaimEvaluator.DegradedStatus,
+            ReferenceAcceptanceStatus = "passed",
+            LiveContractStatus = "armed",
+            ProtectedSendAttemptStatus = "trace_unavailable",
+            ProtectedSendAttemptAction = "retry_protection"
+        });
+
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("Send blocked"));
+        Assert.That(view.Rows[1].Consequence, Does.Contain("trace"));
+        Assert.That(view.Rows[1].OperationalState, Is.Not.EqualTo("final ChatGPT check ready"));
+    }
+
+    [TestCase("waiting_for_configured_send", "Focus the ChatGPT Desktop message composer")]
+    [TestCase("enter_seen_unselected_target", "outside the selected ChatGPT target")]
+    [TestCase("enter_seen_binding_mismatch", "did not match the configured Send binding")]
+    [TestCase("configured_send_captured", "Ctrl+Enter was captured")]
+    [TestCase("test.secret.com", "Focus the ChatGPT Desktop message composer")]
+    public void StatusView_RendersOnlySafeKeyboardHookSignalsDuringLiveCheck(
+        string hookStatus,
+        string expectedText)
+    {
+        var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ConfiguredProfileId = "chatgpt-desktop",
+            ProtectedClaimStatus = ChatGptProtectedClaimEvaluator.DegradedStatus,
+            ReferenceAcceptanceStatus = "passed",
+            LiveContractStatus = "armed",
+            KeyboardHookStatus = hookStatus
+        });
+
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("final ChatGPT check ready"));
+        Assert.That(view.Rows[1].Consequence, Does.Contain(expectedText));
+        Assert.That(view.Rows[1].Consequence, Does.Not.Contain("test.secret.com"));
     }
 
     [Test]
@@ -189,6 +230,11 @@ public sealed class LocalProtectionStatusTests
             ("composer_changed", "Send blocked", LocalProtectionStatusAction.None, "Focus the original composer"),
             ("binding_not_verified", "Send blocked", LocalProtectionStatusAction.VerifyProfiles, "Verify prompt protection"),
             ("setup_required", "Send blocked", LocalProtectionStatusAction.VerifyProfiles, "Verify prompt protection"),
+            ("capture_failed", "Send blocked: text capture failed", LocalProtectionStatusAction.None, "original Send stayed blocked"),
+            ("write_failed", "Send blocked: replacement write failed", LocalProtectionStatusAction.None, "original Send stayed blocked"),
+            ("verification_failed", "Send blocked: replacement verification failed", LocalProtectionStatusAction.None, "original Send stayed blocked"),
+            ("submit_failed", "Send blocked: protected replay failed", LocalProtectionStatusAction.None, "original Send stayed blocked"),
+            ("replay_indeterminate", "Send blocked: protected replay uncertain", LocalProtectionStatusAction.None, "original Send stayed blocked"),
             ("local_protection_unavailable", "Send blocked: local protection unavailable", LocalProtectionStatusAction.RepairLocalProtection, "Repair local protection"),
             ("policy_blocked", "Send blocked by policy", LocalProtectionStatusAction.None, "contact the administrator"),
             ("protection_unavailable", "Send blocked: protection unavailable", LocalProtectionStatusAction.RetryPromptProtection, "Retry prompt protection"),
@@ -208,6 +254,34 @@ public sealed class LocalProtectionStatusTests
             Assert.That(promptRow.Consequence, Does.Contain(expectedConsequence), attemptStatus);
             Assert.That(view.RenderText(), Does.Not.Contain("DOMAIN_C195C3D8E8F3"), attemptStatus);
         }
+    }
+
+    [Test]
+    public void StatusView_ExplainsKnownResidentPipelineFailureWithoutLeakingDiagnostics()
+    {
+        var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ProtectedSendAttemptStatus = "protection_unavailable",
+            LastProtectedSendFailureCode = "orchestrator_failure",
+            LastStatus = "DOMAIN_C195C3D8E8F3"
+        });
+
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("Send blocked: local pipeline failed"));
+        Assert.That(view.Rows[1].Consequence, Does.Contain("confirmation, write, or replay"));
+        Assert.That(view.RenderText(), Does.Not.Contain("DOMAIN_C195C3D8E8F3"));
+    }
+
+    [Test]
+    public void StatusView_DoesNotRenderUnknownProtectedSendFailureCode()
+    {
+        var view = LocalProtectionStatusView.Create(ProtectedTrayState() with
+        {
+            ProtectedSendAttemptStatus = "protection_unavailable",
+            LastProtectedSendFailureCode = "test.secret.com"
+        });
+
+        Assert.That(view.Rows[1].OperationalState, Is.EqualTo("Send blocked: protection unavailable"));
+        Assert.That(view.RenderText(), Does.Not.Contain("test.secret.com"));
     }
 
     [Test]

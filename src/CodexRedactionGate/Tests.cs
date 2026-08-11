@@ -6636,6 +6636,101 @@ public class CliTests
         Assert.That(stdout, Does.Contain("--self-test"));
     }
 
+    [Test]
+    public void Main_ChatGptLiveContractArmIsBlockedWithoutResidentReadinessProof()
+    {
+        var directory = CreateTempDirectory();
+        var layout = DefaultStorageLayout.Create(directory);
+        try
+        {
+            var profile = new SubmitBindingProfile(
+                "chatgpt-desktop",
+                Enabled: true,
+                BindingSource: "user_verified",
+                SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+                NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+                CapabilityStatus: OsInteractionStatusIds.Protected,
+                CompatibilityEvidence: new SurfaceCompatibilityEvidence(
+                    "test.package",
+                    "test.package",
+                    "1.0",
+                    "test.exe",
+                    "test",
+                    "TestWindow",
+                    "Chrome",
+                    "ControlType.Group",
+                    "TestComposer",
+                    new string('a', 64),
+                    DateTimeOffset.UtcNow,
+                    "Enter",
+                    "Ctrl+Enter",
+                    "test-send-control"),
+                Diagnostics: new Dictionary<string, string>());
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
+
+            var (exitCode, stdout, stderr) = RunCli(layout, "--chatgpt-live-contract-arm");
+
+            Assert.That(exitCode, Is.EqualTo(1));
+            Assert.That(stderr, Is.Empty);
+            Assert.That(stdout, Does.Contain("status: manual_acceptance_blocked"));
+            Assert.That(stdout, Does.Contain("reason: resident_readiness_proof_missing"));
+            Assert.That(stdout, Does.Contain("cloud_submission: false"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Test]
+    public void Main_ChatGptLiveContractArmOpensAfterCurrentResidentReadinessProof()
+    {
+        var directory = CreateTempDirectory();
+        var layout = DefaultStorageLayout.Create(directory);
+        try
+        {
+            var profile = new SubmitBindingProfile(
+                "chatgpt-desktop",
+                Enabled: true,
+                BindingSource: "user_verified",
+                SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
+                NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
+                CapabilityStatus: OsInteractionStatusIds.Protected,
+                CompatibilityEvidence: new SurfaceCompatibilityEvidence(
+                    "test.package",
+                    "test.package",
+                    "1.0",
+                    "test.exe",
+                    "test",
+                    "TestWindow",
+                    "Chrome",
+                    "ControlType.Group",
+                    "TestComposer",
+                    new string('a', 64),
+                    DateTimeOffset.UtcNow,
+                    "Enter",
+                    "Ctrl+Enter",
+                    "test-send-control"),
+                Diagnostics: new Dictionary<string, string>());
+            Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
+            var lifecycle = new ResidentOperationalActionLifecycle(layout, () => 1000L);
+            var started = lifecycle.Start("local_readiness", "starting", false, "wait_for_result");
+            Assert.That(started.Started, Is.True);
+            Assert.That(lifecycle.Complete("succeeded", "none", started.AttemptId), Is.True);
+
+            var (exitCode, stdout, stderr) = RunCli(layout, "--chatgpt-live-contract-arm");
+
+            Assert.That(exitCode, Is.EqualTo(0), stdout);
+            Assert.That(stderr, Is.Empty);
+            Assert.That(stdout, Does.Contain("status: live_contract_armed"));
+            Assert.That(stdout, Does.Contain("cloud_submission: false"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static (int ExitCode, string Stdout, string Stderr) CaptureProgramOutput(Func<int> action)
     {
         var originalOut = Console.Out;
@@ -6689,6 +6784,25 @@ public class CliTests
                 SurfaceKind: "test",
                 CloudSubmission: "false",
                 ComposerStatus: OsInteractionStatusIds.SupportedComposer));
+    }
+
+    [Test]
+    public void NativeVerifiedComposerTextAccess_AcceptsFocusedChildThroughVerifiedOwningWindow()
+    {
+        var expectedWindow = new IntPtr(0x1234);
+
+        Assert.That(
+            NativeVerifiedComposerTextAccess.MatchesVerifiedSurfaceWindow(
+                expectedWindow,
+                elementWindow: IntPtr.Zero,
+                owningWindow: expectedWindow),
+            Is.True);
+        Assert.That(
+            NativeVerifiedComposerTextAccess.MatchesVerifiedSurfaceWindow(
+                expectedWindow,
+                elementWindow: IntPtr.Zero,
+                owningWindow: new IntPtr(0x5678)),
+            Is.False);
     }
 
     private static TextSurfaceDiscoveryResult CreateCliChatGptDiscovery()
@@ -7502,6 +7616,72 @@ public class SingleInstanceEnforcementTests
 [TestFixture]
 public class ResidentFirstRunSetupLaunchTests
 {
+    [Test]
+    public void TrayLocalReadinessDoesNotRunTheFullReferenceAcceptanceMatrix()
+    {
+        var projectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
+        var source = File.ReadAllText(Path.Combine(projectDirectory, "WindowsTrayApp.cs"));
+
+        Assert.That(source, Does.Contain("RunLocalReadinessFromTray"));
+        Assert.That(source, Does.Not.Contain("ChatGptReleaseAcceptanceWorkflow.RunAndArm"));
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void ResidentTrayReadinessRunsInTheSameProcessAsTheActiveHook()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(directory);
+            var profile = CreateProtectedSetupProfile();
+            var hook = new SanitizerTests.FakeNativeSubmitHookHost();
+            var nativeController = new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
+            var protection = TrayProtectionController.CreateTest(
+                new SanitizerTests.FakeTrayHotkeyHost(),
+                CreateProtectedInteractionResult,
+                hook,
+                nativeController,
+                CreateProtectedInteractionResult,
+                profile,
+                storageLayout: layout);
+            var queued = new Queue<Action>();
+
+            using (var context = new WindowsTrayApplicationContext(
+                       protection,
+                       layout,
+                       new NoOpTrayLocalCommandLauncher(),
+                       new NoOpTrayProtectionDisableConfirmation(),
+                       backgroundWorkQueue: work => queued.Enqueue(work),
+                       uiDispatcher: work => work(),
+                       scheduleFirstRunSetup: false))
+            {
+                Assert.That(context.IsNativeSubmitHookReady, Is.True);
+                context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RunLocalReadiness);
+                Assert.That(queued, Has.Count.EqualTo(1));
+
+                queued.Dequeue().Invoke();
+
+                Assert.That(context.IsNativeSubmitHookReady, Is.True);
+                Assert.That(protection.State.LocalReadinessStatus, Is.EqualTo("passed"));
+                Assert.That(protection.State.EffectiveOperationalAction.Status, Is.EqualTo("succeeded"));
+                Assert.That(ManualAcceptanceGate.Evaluate(layout).Allowed, Is.True);
+
+                hook.Trigger(new NativeKeyGesture("A", Ctrl: true));
+                Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
+                Assert.That(hook.LastClassification?.SuppressOriginalInput, Is.False);
+            }
+
+            Assert.That(hook.Started, Is.False);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string CreateTempDirectory()
     {
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-tests", Guid.NewGuid().ToString("N"));
@@ -8085,8 +8265,10 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
             Assert.That(setupController.EnsureSetupCalls, Is.EqualTo(2));
+            Assert.That(queuedWork, Has.Count.EqualTo(1));
+            queuedWork.Dequeue().Invoke();
             var form = context.LocalProtectionStatusForm;
-            Assert.That(form!.CurrentRows[1].OperationalState, Is.EqualTo("active"));
+            Assert.That(form!.CurrentRows[1].OperationalState, Is.EqualTo("keyboard Send active"));
             Assert.That(context.IsNativeSubmitHookReady, Is.True);
 
             var protectedProfiles = SubmitBindingProfileStore.Load(layout).Profiles;
@@ -8826,6 +9008,15 @@ public class ResidentFirstRunSetupLaunchTests
                 Reason: "runtime_replaced",
                 Action: "retry_protection")
         });
+        var retryingText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState with
+        {
+            PromptProtectionRetryInProgress = true,
+            LastProtectedSendInterruption = new ProtectedSendInterruption(
+                AttemptId: 12,
+                SourceGeneration: 7,
+                Reason: "runtime_replaced",
+                Action: "retry_protection")
+        });
 
         Assert.That(protectedText, Does.Contain("ChatGPT Desktop"));
         Assert.That(protectedText, Does.Contain("Ctrl+Enter"));
@@ -8838,8 +9029,83 @@ public class ResidentFirstRunSetupLaunchTests
         Assert.That(traceUnavailableText, Does.Contain("retry protection"));
         Assert.That(interruptedText, Does.Contain("previous Send was interrupted"));
         Assert.That(interruptedText, Does.Contain("retry protection"));
+        Assert.That(retryingText, Is.EqualTo("Protected Send: retrying protection"));
+        Assert.That(retryingText, Does.Not.Contain("previous Send was interrupted"));
         Assert.That(new[] { protectedText, setupText, repairText, focusLostText, checkingText, sentText, traceUnavailableText }
             .All(text => !text.Contains(OsInteractionStatusIds.NativeSubmitSetupRequired, StringComparison.Ordinal)), Is.True);
+    }
+
+    [Test]
+    public void LocalProtectionStatus_ReportsReleaseEvidenceWithoutTrayReleaseActionForChatGptProofMismatch()
+    {
+        var state = CreateReadableProtectionState() with
+        {
+            ProtectedClaimStatus = ChatGptProtectedClaimEvaluator.DegradedStatus,
+            ReferenceAcceptanceStatus = "mismatch",
+            LiveContractStatus = "missing"
+        };
+
+        var mismatch = LocalProtectionStatusView.Create(state).Rows[1];
+        var readyForLiveCheck = LocalProtectionStatusView.Create(state with
+        {
+            ReferenceAcceptanceStatus = "passed",
+            LiveContractStatus = "armed"
+        }).Rows[1];
+
+        Assert.That(mismatch.Action, Is.EqualTo(LocalProtectionStatusAction.None));
+        Assert.That(mismatch.Consequence, Does.Contain("release/CI evidence"));
+        Assert.That(mismatch.Action, Is.Not.EqualTo(LocalProtectionStatusAction.RetryPromptProtection));
+        Assert.That(readyForLiveCheck.OperationalState, Is.EqualTo("final ChatGPT check ready"));
+        Assert.That(readyForLiveCheck.Action, Is.EqualTo(LocalProtectionStatusAction.None));
+    }
+
+    [Test]
+    public void LocalProtectionStatus_ReportsReleaseEvidenceWhenAnOlderSendWasInterrupted()
+    {
+        var state = CreateReadableProtectionState() with
+        {
+            ProtectedClaimStatus = ChatGptProtectedClaimEvaluator.DegradedStatus,
+            ReferenceAcceptanceStatus = "mismatch",
+            LiveContractStatus = "missing",
+            LastProtectedSendInterruption = new ProtectedSendInterruption(
+                AttemptId: 12,
+                SourceGeneration: 7,
+                Reason: "runtime_replaced",
+                Action: "retry_protection")
+        };
+
+        var row = LocalProtectionStatusView.Create(state).Rows[1];
+        var trayText = WindowsTrayApplicationContext.FormatReadableProtectionStatus(state);
+
+        Assert.That(row.Action, Is.EqualTo(LocalProtectionStatusAction.None));
+        Assert.That(row.Consequence, Does.Contain("release/CI evidence"));
+        Assert.That(trayText, Does.Contain("protected claim is unproven"));
+        Assert.That(trayText, Does.Not.Contain("previous Send was interrupted"));
+    }
+
+    [Test]
+    public void LocalProtectionStatus_DoesNotClaimMouseSendProtectionFromKeyboardEvidence()
+    {
+        var row = LocalProtectionStatusView.Create(CreateReadableProtectionState() with
+        {
+            ProtectedClaimStatus = OsInteractionStatusIds.Protected
+        }).Rows[1];
+
+        Assert.That(row.OperationalState, Is.EqualTo("keyboard Send active"));
+        Assert.That(row.Consequence, Does.Contain("Clicking the app Send button is not protected"));
+    }
+
+    [Test]
+    public void FocusedProfileVerificationWorkerRunsOffTheSetupWindowThread()
+    {
+        var callingThreadId = Thread.CurrentThread.ManagedThreadId;
+
+        var worker = FocusedProfileVerificationWorker.RunAsync(() =>
+            (Thread.CurrentThread.ManagedThreadId, Thread.CurrentThread.GetApartmentState()));
+        var result = worker.GetAwaiter().GetResult();
+
+        Assert.That(result.ManagedThreadId, Is.Not.EqualTo(callingThreadId));
+        Assert.That(result.Item2, Is.EqualTo(ApartmentState.STA));
     }
 
     [Test]

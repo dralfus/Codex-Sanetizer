@@ -194,6 +194,8 @@ If the status is `not_configured`, `binding_unknown`, `surface_unverified`, or `
 
 ### ChatGPT Desktop Release Gate
 
+Use the step-by-step [ChatGPT Desktop live acceptance checklist](CHATGPT-DESKTOP-308-ACCEPTANCE-CHECKLIST.md) when validating an installed build.
+
 For ChatGPT Desktop, a verified binding is not the final release claim. The
 resident app reports `protected` only after the current build and pinned
 fingerprint have both passed the local reference-composer acceptance and one

@@ -1914,6 +1914,11 @@ public partial class SanitizerTests
             (OsInteractionStatusIds.StaleComposer, "composer_changed"),
             (OsInteractionStatusIds.SurfaceUnverified, "binding_not_verified"),
             (OsInteractionStatusIds.NativeSubmitSetupRequired, "setup_required"),
+            (OsInteractionStatusIds.CaptureFailed, "capture_failed"),
+            (OsInteractionStatusIds.WriteFailed, "write_failed"),
+            (OsInteractionStatusIds.VerificationFailed, "verification_failed"),
+            (OsInteractionStatusIds.SubmitFailed, "submit_failed"),
+            (OsInteractionStatusIds.ReplayIndeterminate, "replay_indeterminate"),
             (OsInteractionStatusIds.FailedClosed, "protection_unavailable"),
             (OsInteractionStatusIds.TraceUnavailable, "trace_unavailable"),
             (OsInteractionStatusIds.EnterpriseBlocked, "policy_blocked"),
@@ -3978,6 +3983,25 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
+    public void WindowsNativeSubmitHookHost_ConfiguresPointerCallbacksWithoutRegisteringGlobalMouseHook()
+    {
+        var host = new WindowsNativeSubmitHookHost();
+
+        var started = host.StartPointer(
+            _ => new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.NativeSubmitPassThrough,
+                SuppressOriginalInput: false,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>()),
+            (_, _) => { },
+            _ => false);
+
+        Assert.That(started, Is.True);
+        Assert.That(host.IsMouseHookRegistered, Is.False);
+    }
+
+    [Test]
     public void TrayProtectionController_PointerClassificationFailureDoesNotResolveLiveTargetWithoutCache()
     {
         var hook = new FakeNativeSubmitHookHost();
@@ -5901,6 +5925,40 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         {
             Console.SetOut(originalOutput);
         }
+    }
+
+    [Test]
+    public void TrayProtectionController_PublishesKnownRawFreePipelineFailureCode()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var controller = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            hook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => new OsInteractionResult(
+                OsInteractionStatusIds.FailedClosed,
+                CreateNativeSubmitSurface("codex-desktop"),
+                null,
+                null,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["exception_status"] = "orchestrator_failure",
+                    ["exception_type"] = "test.secret.com"
+                }),
+            profile);
+
+        Assert.That(controller.Start(), Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo("protection_unavailable"));
+        Assert.That(controller.State.LastProtectedSendFailureCode, Is.EqualTo("orchestrator_failure"));
+        Assert.That(controller.State.LastProtectedSendFailureCode, Does.Not.Contain("test.secret.com"));
     }
 
     [Test]

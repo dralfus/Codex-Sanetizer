@@ -538,6 +538,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly TrayRemediationActionExecutor _remediationActionExecutor;
     private LocalProtectionStatusForm? _localProtectionStatusForm;
     private int _firstRunSetupScheduled;
+    private int _localReadinessScheduled;
 
     internal bool IsTrayIconVisible => _notifyIcon.Visible;
 
@@ -693,17 +694,28 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
         try
         {
+            var started = _controller.StartOperationalAction(
+                "first_run_setup",
+                "starting",
+                userInputRequired: false,
+                nextAction: "focus_message_composer");
             _activationWindow.BeginInvoke(new MethodInvoker(() =>
-                ThreadPool.QueueUserWorkItem(_ => RunFirstRunSetupWorker())));
+                ThreadPool.QueueUserWorkItem(_ => RunFirstRunSetupWorker(started.AttemptId))));
         }
         catch (InvalidOperationException)
         {
             // The application is already closing; the setup gate stays fail-closed.
+            _controller.CompleteOperationalAction("startup_failed", "retry_setup");
         }
     }
 
-    private void RunFirstRunSetupWorker()
+    private void RunFirstRunSetupWorker(long attemptId)
     {
+        _controller.PublishOperationalActionStage(
+            "awaiting_user_focus",
+            userInputRequired: true,
+            nextAction: "focus_message_composer",
+            expectedAttemptId: attemptId);
         var result = FirstRunSetupBackgroundRunner.Run(
             _layout,
             _firstRunSetupControllerFactory,
@@ -713,7 +725,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         {
             try
             {
-                _activationWindow.BeginInvoke(new MethodInvoker(() => CompleteFirstRunSetup(result)));
+                _activationWindow.BeginInvoke(new MethodInvoker(() => CompleteFirstRunSetup(result, attemptId)));
             }
             catch (InvalidOperationException)
             {
@@ -722,8 +734,14 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
     }
 
-    private void CompleteFirstRunSetup(FirstRunSetupResult? result)
+    private void CompleteFirstRunSetup(FirstRunSetupResult? result, long operationalAttemptId = 0)
     {
+        if (operationalAttemptId > 0
+            && !_controller.IsCurrentOperationalActionAttempt(operationalAttemptId))
+        {
+            return;
+        }
+
         if (result?.Succeeded == true && !result.State.Required)
         {
             var setupAttemptId = SetupVerificationAttemptId(result);
@@ -824,6 +842,23 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 "setup_cancelled", "retry_setup", AttemptId: SetupVerificationAttemptId(result)));
         }
 
+        if (_controller.OperationalAction.Status == "running")
+        {
+            var setupSucceeded = result?.Succeeded == true
+                && !result.State.Required
+                && (result.Code == "setup_complete"
+                    || _controller.State.SetupVerificationStatus == "protected");
+            _controller.CompleteOperationalAction(
+                setupSucceeded ? "succeeded" : result?.Code == "setup_cancelled" ? "cancelled" : "setup_failed",
+                setupSucceeded ? "none" : "retry_setup",
+                operationalAttemptId);
+
+            if (setupSucceeded)
+            {
+                ScheduleLocalReadinessIfRequired();
+            }
+        }
+
         RefreshStatus();
         try
         {
@@ -832,6 +867,93 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         catch (Exception exception)
         {
             _crashDiagnostics.Capture(exception, "first_run_setup", "completion_callback_failed");
+        }
+    }
+
+    private void ScheduleLocalReadinessIfRequired()
+    {
+        if (string.Equals(_controller.State.LocalReadinessStatus, "passed", StringComparison.Ordinal)
+            || Interlocked.Exchange(ref _localReadinessScheduled, 1) != 0)
+        {
+            return;
+        }
+
+        var started = _controller.StartOperationalAction(
+            "local_readiness",
+            "starting",
+            userInputRequired: false,
+            nextAction: "wait_for_result");
+        if (!started.Started)
+        {
+            Interlocked.Exchange(ref _localReadinessScheduled, 0);
+            return;
+        }
+
+        try
+        {
+            _backgroundWorkQueue(() => RunLocalReadinessWorker(started.AttemptId));
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "local_readiness", "worker_start_failed");
+            _controller.PublishLocalReadinessResult(new LocalReadinessResult(
+                false,
+                "local_readiness_worker_start_failed",
+                Array.Empty<ReadinessItem>()));
+            _controller.CompleteOperationalAction("worker_start_failed", "retry_local_readiness", started.AttemptId);
+            Interlocked.Exchange(ref _localReadinessScheduled, 0);
+        }
+    }
+
+    private void RunLocalReadinessWorker(long attemptId)
+    {
+        _controller.PublishOperationalActionStage(
+            "check_local_prerequisites",
+            userInputRequired: false,
+            nextAction: "wait_for_result",
+            expectedAttemptId: attemptId);
+        LocalReadinessResult result;
+        try
+        {
+            result = LocalReadinessWorkflow.Run(_layout);
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "local_readiness", "check_failed");
+            result = new LocalReadinessResult(
+                false,
+                "local_readiness_check_failed",
+                Array.Empty<ReadinessItem>());
+        }
+
+        if (!_controller.PublishLocalReadinessResult(result, attemptId))
+        {
+            Interlocked.Exchange(ref _localReadinessScheduled, 0);
+            return;
+        }
+        _controller.CompleteOperationalAction(
+            result.Succeeded ? "succeeded" : result.Code,
+            result.Succeeded ? "none" : "retry_local_readiness",
+            attemptId);
+        Interlocked.Exchange(ref _localReadinessScheduled, 0);
+        TryDispatchToUi(RefreshStatusSafely);
+    }
+
+    private void RunLocalReadinessFromTray()
+    {
+        Interlocked.Exchange(ref _localReadinessScheduled, 0);
+        ScheduleLocalReadinessIfRequired();
+    }
+
+    private void TryDispatchToUi(Action action)
+    {
+        try
+        {
+            _uiDispatcher(action);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException)
+        {
+            // The resident state and raw-free journal are already published.
         }
     }
 
@@ -973,6 +1095,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     internal void RefreshStatus()
     {
+        _controller.RefreshOperationalActionState();
         var state = _controller.State;
         var localProtectionStatus = LocalProtectionRecovery.ToSafeStatusCode(state.LocalProtectionStatus);
         _versionItem.Text = TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion);
@@ -1006,7 +1129,12 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             return "Prompt protection: stopped";
         }
 
-        if (state.LastProtectedSendInterruption is not null)
+        if (state.PromptProtectionRetryInProgress)
+        {
+            return "Protected Send: retrying protection";
+        }
+
+        if (state.LastProtectedSendInterruption is not null && !IsChatGptProtectedClaimUnproven(state))
         {
             return "Protected Send: previous Send was interrupted; retry protection before sending";
         }
@@ -1014,6 +1142,19 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         if (!string.Equals(state.LocalProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
             return "Prompt protection: local protection needs repair before sending";
+        }
+
+        var operationalAction = state.EffectiveOperationalAction;
+        if (string.Equals(operationalAction.ActionKind, "local_readiness", StringComparison.Ordinal)
+            && operationalAction.Status == "running")
+        {
+            return $"Local readiness: stage={operationalAction.Stage}, input={operationalAction.InputMode}, elapsed={operationalAction.ElapsedMilliseconds} ms, next={operationalAction.NextAction}";
+        }
+
+        if (string.Equals(operationalAction.ActionKind, "local_readiness", StringComparison.Ordinal)
+            && operationalAction.Status is "failed" or "cancelled")
+        {
+            return "Local readiness: failed; retry the local readiness action before sending";
         }
 
         if (state.SetupVerificationStatus != "idle"
@@ -1031,11 +1172,6 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         if (state.LastStatus == OsInteractionStatusIds.EmergencyDisabled)
         {
             return $"Emergency bypass is active: {NativeSubmitEmergencyState.BypassDisplayText}";
-        }
-
-        if (state.LastProtectedSendInterruption is not null)
-        {
-            return "Protected Send: previous Send was interrupted; retry protection before sending";
         }
 
         switch (state.ProtectedSendAttemptStatus)
@@ -1069,16 +1205,14 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 return "Protected Send: profile settings unavailable; repair profile settings before sending";
         }
 
-        if (string.Equals(state.ConfiguredProfileId, "chatgpt-desktop", StringComparison.Ordinal)
-            && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.Protected, StringComparison.Ordinal)
-            && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.NotConfigured, StringComparison.Ordinal))
+        if (IsChatGptProtectedClaimUnproven(state))
         {
             return $"ChatGPT Desktop protected claim is unproven: reference={state.ReferenceAcceptanceStatus}, live={state.LiveContractStatus}; Send is blocked";
         }
 
         if (state.ComposerProtected)
         {
-            return $"Prompt protection: {ProfileDisplayName(state)} protected, Send {state.ProtectedSendBinding}";
+            return $"Prompt protection: {ProfileDisplayName(state)} keyboard Send protected ({state.ProtectedSendBinding}); mouse Send is not protected";
         }
 
         return state.ReadinessStatus switch
@@ -1097,6 +1231,13 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         };
     }
 
+    private static bool IsChatGptProtectedClaimUnproven(TrayProtectionState state)
+    {
+        return string.Equals(state.ConfiguredProfileId, "chatgpt-desktop", StringComparison.Ordinal)
+            && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.Protected, StringComparison.Ordinal)
+            && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.NotConfigured, StringComparison.Ordinal);
+    }
+
     private static string ProfileDisplayName(TrayProtectionState state)
     {
         var profileId = state.SetupVerificationProfileId ?? state.LastProfileId ?? state.ConfiguredProfileId;
@@ -1110,7 +1251,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private static string FormatSetupVerificationStatus(TrayProtectionState state)
     {
-        return state.SetupVerificationStatus switch
+        var message = state.SetupVerificationStatus switch
         {
             "waiting_for_focus" => "Prompt setup: focus the message composer in the selected app",
             "composer_recognized" => $"Prompt setup: {ProfileDisplayName(state)} composer recognized",
@@ -1122,6 +1263,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             "setup_cancelled" => "Prompt setup: not completed; select Set up prompt protection",
             _ => "Prompt setup: verification failed; focus the message composer and try again"
         };
+        var action = state.EffectiveOperationalAction;
+        return action.Status == "running"
+            ? $"{message}; stage={action.Stage}, input={action.InputMode}, elapsed={action.ElapsedMilliseconds} ms, next={action.NextAction}"
+            : message;
     }
 
     private void RefreshStatusOnUiThread()
@@ -1182,6 +1327,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private LocalProtectionStatusView CreateLocalProtectionStatusView()
     {
+        _controller.RefreshNativeSubmitHookDiagnostics();
         var state = _controller.State;
         return LocalProtectionStatusView.Create(state);
     }
@@ -1193,6 +1339,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             case LocalProtectionStatusAction.VerifyProfiles:
                 VerifyProfilesFromTray();
                 break;
+            case LocalProtectionStatusAction.RunLocalReadiness:
+                RunLocalReadinessFromTray();
+                break;
             case LocalProtectionStatusAction.RetryPromptProtection:
                 RetryPromptProtectionFromTray();
                 break;
@@ -1202,7 +1351,26 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             case LocalProtectionStatusAction.RepairProfileSettings:
                 OpenProfileSettings();
                 break;
+            case LocalProtectionStatusAction.CancelOperationalAction:
+                _controller.CancelOperationalAction();
+                RefreshStatus();
+                break;
+            case LocalProtectionStatusAction.RetryOperationalAction:
+                RetryOperationalActionFromTray();
+                break;
         }
+    }
+
+    private void RetryOperationalActionFromTray()
+    {
+        var actionKind = _controller.OperationalAction.ActionKind;
+        if (string.Equals(actionKind, "local_readiness", StringComparison.Ordinal))
+        {
+            RunLocalReadinessFromTray();
+            return;
+        }
+
+        VerifyProfilesFromTray();
     }
 
     private void OpenProfileSettings()
@@ -1228,6 +1396,16 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void VerifyProfilesFromTray()
     {
+        if (_controller.OperationalAction.Status != "running")
+        {
+            _controller.StartOperationalAction(
+                "first_run_setup",
+                "starting",
+                userInputRequired: false,
+                nextAction: "focus_message_composer");
+        }
+        var operationalAttemptId = _controller.OperationalAction.AttemptId;
+
         _remediationActionExecutor.TryRun(
             () =>
             {
@@ -1248,7 +1426,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                         Diagnostics: new Dictionary<string, string>());
                 }
             },
-            CompleteFirstRunSetup,
+            result => CompleteFirstRunSetup(result, operationalAttemptId),
             exception => PublishRemediationFailure(exception, "tray_profile_verification", "worker_failed"),
             _ => PublishPromptProtectionRetryFailure());
     }
@@ -1256,7 +1434,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private void RetryPromptProtectionFromTray()
     {
         _remediationActionExecutor.TryRun(
-            CreatePromptProtectionRetryRuntime,
+            () =>
+            {
+                _controller.PublishPromptProtectionRetryStarted();
+                return CreatePromptProtectionRetryRuntime();
+            },
             CompletePromptProtectionRetry,
             exception => PublishRemediationFailure(exception, "tray_prompt_protection_retry", "worker_failed"),
             runtimeSet =>
@@ -1295,6 +1477,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         if (!retrySucceeded)
         {
             _controller.PublishPromptProtectionRetryFailure();
+        }
+        else
+        {
+            _controller.PublishPromptProtectionRetrySucceeded();
         }
 
         RefreshStatus();

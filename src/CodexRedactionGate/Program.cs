@@ -1226,6 +1226,16 @@ public static class Program
     private static int RunChatGptLiveContractArm(Func<DefaultStorageLayout> layoutFactory)
     {
         var layout = layoutFactory();
+        var gate = ManualAcceptanceGate.Evaluate(layout);
+        if (!gate.Allowed)
+        {
+            Console.WriteLine("status: manual_acceptance_blocked");
+            Console.WriteLine($"reason: {SafeStatus(gate.Code)}");
+            Console.WriteLine("cloud_submission: false");
+            Console.WriteLine("next_action: wait_for_automatic_resident_readiness");
+            return 1;
+        }
+
         var profile = SubmitBindingProfileStore.Load(layout).Profiles
             .FirstOrDefault(item => string.Equals(item.ProfileId, "chatgpt-desktop", StringComparison.Ordinal));
         var armed = profile is not null

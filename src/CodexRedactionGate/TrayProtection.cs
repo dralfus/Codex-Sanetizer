@@ -55,8 +55,10 @@ public sealed record TrayProtectionState(
     bool ResidentProcess = false,
     bool SetupRequired = false,
     string ProgrammaticUiaInvokeStatus = OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported,
+    string PointerSendStatus = OsInteractionStatusIds.PointerSendPreActionUnavailable,
     string LocalProtectionStatus = LocalProtectionRecovery.ReadyCode,
     bool PromptProtectionRetryFailed = false,
+    bool PromptProtectionRetryInProgress = false,
     string? ConfiguredProfileId = null,
     string ProtectedSendAttemptStatus = "idle",
     string ProtectedSendAttemptAction = "none",
@@ -72,7 +74,14 @@ public sealed record TrayProtectionState(
     long SetupVerificationAttemptId = 0,
     string ProtectedClaimStatus = OsInteractionStatusIds.NotConfigured,
     string ReferenceAcceptanceStatus = "not_applicable",
-    string LiveContractStatus = "not_applicable");
+    string LiveContractStatus = "not_applicable",
+    string KeyboardHookStatus = "unavailable",
+    string LastProtectedSendFailureCode = "none",
+    OperationalActionState? OperationalAction = null,
+    string LocalReadinessStatus = "not_run")
+{
+    public OperationalActionState EffectiveOperationalAction => OperationalAction ?? OperationalActionState.Idle;
+}
 
 public sealed record ProtectionDisableResult(
     bool Succeeded,
@@ -104,6 +113,8 @@ internal sealed class TrayProtectionController
     private IDisposable? _residentRuntimeOwner;
     private readonly ConcurrentDictionary<CapturedTargetProfileKey, string> _capturedTargetProfiles = new();
     private readonly object _reloadGate = new();
+    private readonly ResidentOperationalActionLifecycle _operationalActionLifecycle;
+    private bool _snapshotInitialized;
     private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
     private ResidentProtectedSendOperation? _activeProtectedSendOperation;
     private ProtectionSnapshot _currentSnapshot;
@@ -136,6 +147,7 @@ internal sealed class TrayProtectionController
         var runtimes = nativeSubmitRuntimes ?? Array.Empty<NativeSubmitRuntime>();
         _enterprisePolicy = enterprisePolicy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         _storageLayout = storageLayout ?? DefaultStorageLayout.CreateDefault();
+        _operationalActionLifecycle = new ResidentOperationalActionLifecycle(_storageLayout);
         _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
         _protectedSendStageObserver = protectedSendStageObserver;
         _beforeProtectedSendTracePublishForTesting = beforeProtectedSendTracePublishForTesting;
@@ -154,6 +166,8 @@ internal sealed class TrayProtectionController
             HookReady: false,
             sendControlDiscovery,
             surfaceDiscovery);
+        _snapshotInitialized = true;
+        _operationalActionLifecycle.StateChanged += (_, _) => PublishOperationalActionState();
         if (nativeSubmitController is not null && resolvedProfile is not null)
         {
             nativeSubmitController.SetResidentProtectedClaimProvider(
@@ -257,6 +271,120 @@ internal sealed class TrayProtectionController
 
     public TrayProtectionState State => ReadSnapshot().State;
 
+    internal OperationalActionState OperationalAction => _operationalActionLifecycle.State;
+
+    internal OperationalActionStartResult StartOperationalAction(
+        string actionKind,
+        string stage,
+        bool userInputRequired,
+        string nextAction)
+    {
+        return _operationalActionLifecycle.Start(actionKind, stage, userInputRequired, nextAction);
+    }
+
+    internal bool PublishOperationalActionStage(
+        string stage,
+        bool userInputRequired,
+        string nextAction,
+        long expectedAttemptId = 0)
+    {
+        return _operationalActionLifecycle.PublishStage(stage, userInputRequired, nextAction, expectedAttemptId);
+    }
+
+    internal bool CompleteOperationalAction(
+        string outcomeCode,
+        string nextAction = "none",
+        long expectedAttemptId = 0)
+    {
+        return _operationalActionLifecycle.Complete(outcomeCode, nextAction, expectedAttemptId);
+    }
+
+    internal bool CancelOperationalAction(string outcomeCode = "cancelled", long expectedAttemptId = 0)
+    {
+        return _operationalActionLifecycle.Cancel(outcomeCode, expectedAttemptId);
+    }
+
+    internal bool IsCurrentOperationalActionAttempt(long attemptId)
+    {
+        var action = _operationalActionLifecycle.State;
+        return attemptId > 0
+            && action.Status == "running"
+            && action.AttemptId == attemptId;
+    }
+
+    internal void RefreshOperationalActionState()
+    {
+        PublishOperationalActionState(notifyStateChanged: false);
+    }
+
+    internal void PublishLocalReadinessChecking()
+    {
+        while (true)
+        {
+            var current = ReadSnapshot();
+            if (current.State.LocalReadinessStatus == "checking")
+            {
+                return;
+            }
+
+            if (PublishSnapshotIfCurrent(current, current with
+                {
+                    State = current.State with { LocalReadinessStatus = "checking" }
+                }))
+            {
+                return;
+            }
+        }
+    }
+
+    internal bool PublishLocalReadinessResult(LocalReadinessResult result, long expectedAttemptId = 0)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (expectedAttemptId > 0 && !IsCurrentOperationalActionAttempt(expectedAttemptId))
+        {
+            return false;
+        }
+
+        var status = result.Succeeded ? "passed" : "failed";
+        while (true)
+        {
+            var current = ReadSnapshot();
+            if (PublishSnapshotIfCurrent(current, current with
+                {
+                    State = current.State with { LocalReadinessStatus = status }
+                }))
+            {
+                return true;
+            }
+        }
+    }
+
+    private void PublishOperationalActionState(bool notifyStateChanged = true)
+    {
+        while (true)
+        {
+            var current = ReadSnapshot();
+            var replacement = current with
+            {
+                State = current.State with
+                {
+                    OperationalAction = _operationalActionLifecycle.State
+                }
+            };
+            if (!TryReplaceSnapshotIfCurrent(current, replacement))
+            {
+                continue;
+            }
+
+            if (notifyStateChanged)
+            {
+                NotifyStateChanged();
+            }
+
+            return;
+        }
+    }
+
     // Explicit test seam: observes only transitions whose snapshot CAS succeeded.
     internal void SetProtectedSendTracePublishedObserverForTesting(Action<ProtectedSendTraceEntry>? observer)
     {
@@ -286,6 +414,35 @@ internal sealed class TrayProtectionController
                 }
             };
             if (PublishSnapshotIfCurrent(snapshot, replacement))
+            {
+                return;
+            }
+        }
+    }
+
+    internal void RefreshNativeSubmitHookDiagnostics()
+    {
+        while (true)
+        {
+            var snapshot = ReadSnapshot();
+            var observed = snapshot.RuntimeSet?.HookHost is INativeSubmitHookDiagnostics diagnostics
+                ? diagnostics.LastKeyboardSignal
+                : "unavailable";
+            var safeStatus = observed is "waiting_for_configured_send"
+                or "enter_seen_unselected_target"
+                or "enter_seen_binding_mismatch"
+                or "configured_send_captured"
+                ? observed
+                : "unavailable";
+            if (string.Equals(snapshot.State.KeyboardHookStatus, safeStatus, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (PublishSnapshotIfCurrent(snapshot, snapshot with
+                {
+                    State = snapshot.State with { KeyboardHookStatus = safeStatus }
+                }))
             {
                 return;
             }
@@ -334,14 +491,106 @@ internal sealed class TrayProtectionController
         while (true)
         {
             var snapshot = ReadSnapshot();
-            if (snapshot.State.PromptProtectionRetryFailed)
+            if (snapshot.State.PromptProtectionRetryFailed
+                && !snapshot.State.PromptProtectionRetryInProgress
+                && snapshot.State.LastProtectedSendInterruption is null)
             {
                 return;
             }
 
             var replacement = snapshot with
             {
-                State = snapshot.State with { PromptProtectionRetryFailed = true }
+                State = snapshot.State with
+                {
+                    PromptProtectionRetryFailed = true,
+                    PromptProtectionRetryInProgress = false,
+                    LastProtectedSendInterruption = null
+                }
+            };
+            if (PublishSnapshotIfCurrent(snapshot, replacement))
+            {
+                return;
+            }
+        }
+    }
+
+    internal void PublishPromptProtectionRetryStarted()
+    {
+        while (true)
+        {
+            var snapshot = ReadSnapshot();
+            if (snapshot.State.PromptProtectionRetryInProgress)
+            {
+                return;
+            }
+
+            var replacement = snapshot with
+            {
+                State = snapshot.State with
+                {
+                    PromptProtectionRetryFailed = false,
+                    PromptProtectionRetryInProgress = true,
+                    LastProtectedSendInterruption = null
+                }
+            };
+            if (PublishSnapshotIfCurrent(snapshot, replacement))
+            {
+                return;
+            }
+        }
+    }
+
+    internal void PublishPromptProtectionRetrySucceeded()
+    {
+        while (true)
+        {
+            var snapshot = ReadSnapshot();
+            var replacement = snapshot with
+            {
+                State = snapshot.State with
+                {
+                    PromptProtectionRetryFailed = false,
+                    PromptProtectionRetryInProgress = false,
+                    LastProtectedSendInterruption = null
+                }
+            };
+            if (PublishSnapshotIfCurrent(snapshot, replacement))
+            {
+                return;
+            }
+        }
+    }
+
+    internal void PublishChatGptReleaseAcceptanceChecking()
+    {
+        PublishChatGptReleaseAcceptanceState("checking", "not_applicable");
+    }
+
+    internal void PublishChatGptReleaseAcceptanceReadyForLiveContract()
+    {
+        PublishChatGptReleaseAcceptanceState("passed", "armed");
+    }
+
+    internal void PublishChatGptReleaseAcceptanceFailure()
+    {
+        PublishChatGptReleaseAcceptanceState("failed", "missing");
+    }
+
+    private void PublishChatGptReleaseAcceptanceState(string referenceStatus, string liveContractStatus)
+    {
+        while (true)
+        {
+            var snapshot = ReadSnapshot();
+            var replacement = snapshot with
+            {
+                State = snapshot.State with
+                {
+                    ProtectedClaimStatus = ChatGptProtectedClaimEvaluator.DegradedStatus,
+                    ReferenceAcceptanceStatus = referenceStatus,
+                    LiveContractStatus = liveContractStatus,
+                    PromptProtectionRetryFailed = false,
+                    PromptProtectionRetryInProgress = false
+                }
             };
             if (PublishSnapshotIfCurrent(snapshot, replacement))
             {
@@ -527,6 +776,7 @@ internal sealed class TrayProtectionController
 
     public void Stop()
     {
+        _operationalActionLifecycle.Cancel("protection_stopped");
         var operationToCancel = Volatile.Read(ref _activeProtectedSendOperation);
         if (operationToCancel is not null)
         {
@@ -735,6 +985,7 @@ internal sealed class TrayProtectionController
                     ProgrammaticUiaInvokeStatus = current.State.ProgrammaticUiaInvokeStatus,
                     LocalProtectionStatus = current.State.LocalProtectionStatus,
                     PromptProtectionRetryFailed = current.State.PromptProtectionRetryFailed,
+                    PromptProtectionRetryInProgress = current.State.PromptProtectionRetryInProgress,
                     SetupVerificationStatus = current.State.SetupVerificationStatus,
                     SetupVerificationAction = current.State.SetupVerificationAction,
                     SetupVerificationProfileId = current.State.SetupVerificationProfileId,
@@ -957,6 +1208,7 @@ internal sealed class TrayProtectionController
             ProgrammaticUiaInvokeStatus: snapshot.State.ProgrammaticUiaInvokeStatus,
             LocalProtectionStatus: snapshot.State.LocalProtectionStatus,
             PromptProtectionRetryFailed: snapshot.State.PromptProtectionRetryFailed,
+            PromptProtectionRetryInProgress: snapshot.State.PromptProtectionRetryInProgress,
             ConfiguredProfileId: snapshot.State.ConfiguredProfileId,
             ProtectedSendAttemptStatus: snapshot.State.ProtectedSendAttemptStatus,
             ProtectedSendAttemptAction: snapshot.State.ProtectedSendAttemptAction,
@@ -971,7 +1223,9 @@ internal sealed class TrayProtectionController
             SetupVerificationAttemptId: snapshot.State.SetupVerificationAttemptId,
             ProtectedClaimStatus: snapshot.State.ProtectedClaimStatus,
             ReferenceAcceptanceStatus: snapshot.State.ReferenceAcceptanceStatus,
-            LiveContractStatus: snapshot.State.LiveContractStatus);
+            LiveContractStatus: snapshot.State.LiveContractStatus,
+            OperationalAction: snapshot.State.EffectiveOperationalAction,
+            LocalReadinessStatus: snapshot.State.LocalReadinessStatus);
         PublishSnapshotIfCurrent(snapshot, snapshot with { State = state });
     }
 
@@ -1546,6 +1800,7 @@ internal sealed class TrayProtectionController
                 ProgrammaticUiaInvokeStatus: current.State.ProgrammaticUiaInvokeStatus,
                 LocalProtectionStatus: current.State.LocalProtectionStatus,
                 PromptProtectionRetryFailed: current.State.PromptProtectionRetryFailed,
+                PromptProtectionRetryInProgress: current.State.PromptProtectionRetryInProgress,
                 ConfiguredProfileId: current.State.ConfiguredProfileId,
                 ProtectedSendAttemptStatus: ProtectedSendAttemptStatus(lastStatus, submitted),
                 ProtectedSendAttemptAction: ProtectedSendAttemptAction(lastStatus, submitted),
@@ -1561,7 +1816,11 @@ internal sealed class TrayProtectionController
                 SetupVerificationAttemptId: current.State.SetupVerificationAttemptId,
                 ProtectedClaimStatus: current.State.ProtectedClaimStatus,
                 ReferenceAcceptanceStatus: current.State.ReferenceAcceptanceStatus,
-                LiveContractStatus: current.State.LiveContractStatus);
+                LiveContractStatus: current.State.LiveContractStatus,
+                KeyboardHookStatus: current.State.KeyboardHookStatus,
+                LastProtectedSendFailureCode: ProtectedSendFailureCode(diagnostics),
+                OperationalAction: current.State.EffectiveOperationalAction,
+                LocalReadinessStatus: current.State.LocalReadinessStatus);
             if (PublishSnapshotIfCurrent(current, current with { State = state }))
             {
                 return;
@@ -1585,6 +1844,21 @@ internal sealed class TrayProtectionController
                 or "test_trace_unavailable"
                 or "resident_operation_unavailable"
                 or "send_injected_unavailable" => traceStatus,
+            _ => "none"
+        };
+    }
+
+    private static string ProtectedSendFailureCode(IReadOnlyDictionary<string, string>? diagnostics)
+    {
+        if (diagnostics is null
+            || !diagnostics.TryGetValue("exception_status", out var failureCode))
+        {
+            return "none";
+        }
+
+        return failureCode switch
+        {
+            "orchestrator_failure" or "native_submit_flow_failure" => failureCode,
             _ => "none"
         };
     }
@@ -1985,7 +2259,8 @@ internal sealed class TrayProtectionController
 
         return candidateState with
         {
-            LastProtectedSendInterruption = source.State.LastProtectedSendInterruption
+            LastProtectedSendInterruption = source.State.LastProtectedSendInterruption,
+            PromptProtectionRetryInProgress = source.State.PromptProtectionRetryInProgress
         };
     }
 
@@ -2059,6 +2334,10 @@ internal sealed class TrayProtectionController
             OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer
                 or OsInteractionStatusIds.BindingUnknown or OsInteractionStatusIds.NotConfigured => "binding_not_verified",
             OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "composer_changed",
+            OsInteractionStatusIds.CaptureFailed => "capture_failed",
+            OsInteractionStatusIds.WriteFailed => "write_failed",
+            OsInteractionStatusIds.VerificationFailed => "verification_failed",
+            OsInteractionStatusIds.SubmitFailed => "submit_failed",
             OsInteractionStatusIds.Canceled => "canceled",
             OsInteractionStatusIds.ReplayIndeterminate => "replay_indeterminate",
             OsInteractionStatusIds.TraceUnavailable => "trace_unavailable",
@@ -2083,6 +2362,8 @@ internal sealed class TrayProtectionController
             OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer
                 or OsInteractionStatusIds.BindingUnknown or OsInteractionStatusIds.NotConfigured => "set_up_prompt_protection",
             OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "focus_and_send_again",
+            OsInteractionStatusIds.CaptureFailed or OsInteractionStatusIds.WriteFailed
+                or OsInteractionStatusIds.VerificationFailed or OsInteractionStatusIds.SubmitFailed => "retry_protection",
             OsInteractionStatusIds.Canceled => "edit_or_send_again",
             OsInteractionStatusIds.ReplayIndeterminate => "retry_protection",
             OsInteractionStatusIds.TraceUnavailable => "retry_protection",
@@ -2205,6 +2486,7 @@ internal sealed class TrayProtectionController
             effectiveNativeSubmitStatus = protectedClaim.Status;
         }
         var (projectFilesProtected, projectFileStatus) = ReadProjectFileProtectionStatus();
+        var previousState = _snapshotInitialized ? _currentSnapshot.State : null;
         return new TrayProtectionState(
             Enabled: enabled,
             Mode: "ApplyOnly",
@@ -2234,7 +2516,9 @@ internal sealed class TrayProtectionController
             ConfiguredProfileId: runtimes.FirstOrDefault()?.Profile.ProfileId,
             ProtectedClaimStatus: protectedClaim.Status,
             ReferenceAcceptanceStatus: protectedClaim.ReferenceStatus,
-            LiveContractStatus: protectedClaim.LiveContractStatus);
+            LiveContractStatus: protectedClaim.LiveContractStatus,
+            OperationalAction: previousState?.EffectiveOperationalAction ?? _operationalActionLifecycle.State,
+            LocalReadinessStatus: previousState?.LocalReadinessStatus ?? "not_run");
     }
 
     private (bool ProjectFilesProtected, string ProjectFileStatus) ReadProjectFileProtectionStatus()
@@ -3007,7 +3291,8 @@ internal static class TrayStatusFormatter
         var replacements = state.LastReplacementCount is null
             ? "n/a"
             : state.LastReplacementCount.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return $"status={enabled} mode={DisplayMode(state.Mode)} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} protected_claim={DisplayProofStatus(state.ProtectedClaimStatus)} reference_acceptance={DisplayProofStatus(state.ReferenceAcceptanceStatus)} live_contract={DisplayProofStatus(state.LiveContractStatus)} programmatic_uia_invoke={DisplayStatus(state.ProgrammaticUiaInvokeStatus)} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={DisplayProjectFileStatus(state.ProjectFileStatus)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} newline_binding={DisplayBinding(state.NewlineBinding)} manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} protected_send_attempt={DisplayProtectedSendAttempt(state.ProtectedSendAttemptStatus)} attempt_action={DisplayProtectedSendAttemptAction(state.ProtectedSendAttemptAction)} protected_send_interruption={DisplayProtectedSendInterruption(state.LastProtectedSendInterruption)} native_submit={DisplayStatus(state.NativeSubmitStatus)} readiness={DisplayStatus(state.ReadinessStatus)} last={DisplayStatus(state.LastStatus)} replacements={replacements}";
+        var operational = state.EffectiveOperationalAction;
+        return $"status={enabled} mode={DisplayMode(state.Mode)} composer_protected={state.ComposerProtected.ToString().ToLowerInvariant()} protected_claim={DisplayProofStatus(state.ProtectedClaimStatus)} reference_acceptance={DisplayProofStatus(state.ReferenceAcceptanceStatus)} live_contract={DisplayProofStatus(state.LiveContractStatus)} local_readiness={DisplayStatus(state.LocalReadinessStatus)} operational_action={DisplayStatus(operational.ActionKind)} operational_status={DisplayStatus(operational.Status)} operational_stage={DisplayStatus(operational.Stage)} programmatic_uia_invoke={DisplayStatus(state.ProgrammaticUiaInvokeStatus)} pointer_send={DisplayStatus(state.PointerSendStatus)} project_files_protected={state.ProjectFilesProtected.ToString().ToLowerInvariant()} project_file_status={DisplayProjectFileStatus(state.ProjectFileStatus)} protected_send_binding={DisplayBinding(state.ProtectedSendBinding)} newline_binding={DisplayBinding(state.NewlineBinding)} manual_scan_hotkey={DisplayManualHotkey(state.ManualScanHotkey)} protected_send_attempt={DisplayProtectedSendAttempt(state.ProtectedSendAttemptStatus)} attempt_action={DisplayProtectedSendAttemptAction(state.ProtectedSendAttemptAction)} protected_send_interruption={DisplayProtectedSendInterruption(state.LastProtectedSendInterruption)} native_submit={DisplayStatus(state.NativeSubmitStatus)} readiness={DisplayStatus(state.ReadinessStatus)} last={DisplayStatus(state.LastStatus)} replacements={replacements}";
     }
 
     public static string FormatNotifyIconText(TrayProtectionState state, string? buildVersion = null)

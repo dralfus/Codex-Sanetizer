@@ -10,9 +10,12 @@ internal enum LocalProtectionStatusAction
 {
     None,
     VerifyProfiles,
+    RunLocalReadiness,
     RetryPromptProtection,
     RepairLocalProtection,
-    RepairProfileSettings
+    RepairProfileSettings,
+    CancelOperationalAction,
+    RetryOperationalAction
 }
 
 internal sealed record LocalProtectionStatusRow(
@@ -29,12 +32,18 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
     {
         ArgumentNullException.ThrowIfNull(trayState);
 
-        return new LocalProtectionStatusView(new[]
+        var rows = new List<LocalProtectionStatusRow>
         {
             CreateDpapiRow(trayState.LocalProtectionStatus),
             CreatePromptRow(trayState),
             CreateProjectFileRow(trayState.ProjectFilesProtected, trayState.ProjectFileStatus)
-        });
+        };
+        if (CreateOperationalActionRow(trayState) is { } operationalRow)
+        {
+            rows.Add(operationalRow);
+        }
+
+        return new LocalProtectionStatusView(rows);
     }
 
     public string RenderText()
@@ -71,7 +80,18 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
 
     private static LocalProtectionStatusRow CreatePromptRow(TrayProtectionState state)
     {
-        if (state.LastProtectedSendInterruption is not null)
+        if (state.PromptProtectionRetryInProgress)
+        {
+            return new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "retrying protection",
+                "Protection runtime is being restarted; wait for the result before sending.",
+                LocalProtectionStatusAction.None);
+        }
+
+        var chatGptReleaseCheckRequired = IsChatGptReleaseCheckRequired(state);
+        if (state.LastProtectedSendInterruption is not null && !chatGptReleaseCheckRequired)
         {
             return new LocalProtectionStatusRow(
                 "Automatic prompt protection",
@@ -98,6 +118,12 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
         if (setupProgressRow is not null)
         {
             return setupProgressRow;
+        }
+
+        var localReadinessRow = CreateLocalReadinessRow(state);
+        if (localReadinessRow is not null)
+        {
+            return localReadinessRow;
         }
 
         if (state.SetupRequired || state.NativeSubmitStatus == OsInteractionStatusIds.NativeSubmitSetupRequired)
@@ -132,30 +158,52 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 LocalProtectionStatusAction.VerifyProfiles);
         }
 
-        if (string.Equals(state.ConfiguredProfileId, "chatgpt-desktop", StringComparison.Ordinal)
-            && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.Protected, StringComparison.Ordinal))
+        var attemptRow = CreateProtectedSendAttemptRow(
+            state.ProtectedSendAttemptStatus,
+            state.LastProtectedSendFailureCode);
+        if (attemptRow is not null)
         {
-            return new LocalProtectionStatusRow(
-                "Automatic prompt protection",
-                "Selected-app send interception",
-                "degraded",
-                $"ChatGPT Desktop is not released as protected until reference acceptance ({state.ReferenceAcceptanceStatus}) and live contract ({state.LiveContractStatus}) match this build. Send is blocked.",
-                LocalProtectionStatusAction.RetryPromptProtection);
+            return attemptRow;
         }
 
-        if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
+        if (chatGptReleaseCheckRequired)
         {
-            var attemptRow = CreateProtectedSendAttemptRow(state.ProtectedSendAttemptStatus);
-            if (attemptRow is not null)
+            if (string.Equals(state.ReferenceAcceptanceStatus, "passed", StringComparison.Ordinal)
+                && string.Equals(state.LiveContractStatus, "armed", StringComparison.Ordinal))
             {
-                return attemptRow;
+                return new LocalProtectionStatusRow(
+                    "Automatic prompt protection",
+                    "Selected-app send interception",
+                    "final ChatGPT check ready",
+                    $"The local release check passed. {KeyboardHookNextAction(state.KeyboardHookStatus)} Send remains blocked until it records.",
+                    LocalProtectionStatusAction.None);
             }
 
             return new LocalProtectionStatusRow(
                 "Automatic prompt protection",
                 "Selected-app send interception",
-                "active",
-                "Verified selected AI-app prompts are checked before cloud submission.",
+                "degraded",
+                $"Local readiness passed. Full reference acceptance ({state.ReferenceAcceptanceStatus}) and live contract ({state.LiveContractStatus}) are release/CI evidence, not a manual tray action. ChatGPT Desktop Send remains blocked.",
+                LocalProtectionStatusAction.None);
+        }
+
+        if (state.LastProtectedSendInterruption is not null)
+        {
+            return new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "previous Send interrupted",
+                "The previous protected Send was interrupted while protection changed. Retry prompt protection.",
+                LocalProtectionStatusAction.RetryPromptProtection);
+        }
+
+        if (state.Enabled && state.NativeSubmitEnabled && state.ComposerProtected)
+        {
+            return new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "keyboard Send active",
+                $"Keyboard Send ({state.ProtectedSendBinding}) is checked before cloud submission. Clicking the app Send button is not protected until pointer pre-action verification is available.",
                 LocalProtectionStatusAction.None);
         }
 
@@ -177,6 +225,12 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
             "disabled",
             "Selected AI-app prompts are not intercepted while protection is stopped.",
             LocalProtectionStatusAction.None);
+    }
+
+    private static bool IsChatGptReleaseCheckRequired(TrayProtectionState state)
+    {
+        return string.Equals(state.ConfiguredProfileId, "chatgpt-desktop", StringComparison.Ordinal)
+            && !string.Equals(state.ProtectedClaimStatus, OsInteractionStatusIds.Protected, StringComparison.Ordinal);
     }
 
     private static LocalProtectionStatusRow? CreateSetupVerificationRow(TrayProtectionState state)
@@ -212,7 +266,69 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
         };
     }
 
-    private static LocalProtectionStatusRow? CreateProtectedSendAttemptRow(string status)
+    private static LocalProtectionStatusRow? CreateLocalReadinessRow(TrayProtectionState state)
+    {
+        if (state.LocalReadinessStatus == "not_run"
+            && !string.Equals(
+                state.EffectiveOperationalAction.ActionKind,
+                "local_readiness",
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return state.LocalReadinessStatus switch
+        {
+            "checking" => new LocalProtectionStatusRow(
+                "Automatic local readiness",
+                "Resident prerequisite checks",
+                $"checking {state.EffectiveOperationalAction.Stage}",
+                "This check started automatically. Wait for the terminal result; protected Send remains fail-closed while it runs.",
+                LocalProtectionStatusAction.None),
+            "failed" => new LocalProtectionStatusRow(
+                "Automatic local readiness",
+                "Resident prerequisite checks",
+                "failed",
+                "A local prerequisite failed. Protected Send remains blocked; retry the local readiness check after reviewing the raw-free status.",
+                LocalProtectionStatusAction.RunLocalReadiness),
+            "not_run" => new LocalProtectionStatusRow(
+                "Automatic local readiness",
+                "Resident prerequisite checks",
+                "starting automatically",
+                "The resident application will start the local readiness check automatically.",
+                LocalProtectionStatusAction.None),
+            _ => null
+        };
+    }
+
+    private static LocalProtectionStatusRow? CreateOperationalActionRow(TrayProtectionState state)
+    {
+        var action = state.EffectiveOperationalAction;
+        if (action.Status is "idle" or "succeeded")
+        {
+            return null;
+        }
+
+        var status = action.Status == "running"
+            ? $"running: {action.Stage}"
+            : action.Status;
+        var consequence = $"Action: {action.ActionKind}; input: {action.InputMode}; elapsed: {action.ElapsedMilliseconds} ms; next: {action.NextAction}.";
+        var actionButton = action.Status == "running" && action.CanCancel
+            ? LocalProtectionStatusAction.CancelOperationalAction
+            : action.Status is "failed" or "cancelled"
+                ? LocalProtectionStatusAction.RetryOperationalAction
+                : LocalProtectionStatusAction.None;
+        return new LocalProtectionStatusRow(
+            "Current automatic action",
+            "Resident operational lifecycle",
+            status,
+            consequence,
+            actionButton);
+    }
+
+    private static LocalProtectionStatusRow? CreateProtectedSendAttemptRow(
+        string status,
+        string failureCode)
     {
         return status switch
         {
@@ -246,6 +362,36 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Send blocked",
                 "Focus the original composer and send again.",
                 LocalProtectionStatusAction.None),
+            "capture_failed" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked: text capture failed",
+                "The protected text capture failed; the original Send stayed blocked. Focus the composer and send again.",
+                LocalProtectionStatusAction.None),
+            "write_failed" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked: replacement write failed",
+                "The protected replacement could not be written; the original Send stayed blocked. Focus the composer and send again.",
+                LocalProtectionStatusAction.None),
+            "verification_failed" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked: replacement verification failed",
+                "The protected replacement could not be verified; the original Send stayed blocked. Focus the composer and send again.",
+                LocalProtectionStatusAction.None),
+            "submit_failed" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked: protected replay failed",
+                "The protected replay did not complete; the original Send stayed blocked. Focus the composer and send again.",
+                LocalProtectionStatusAction.None),
+            "replay_indeterminate" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked: protected replay uncertain",
+                "The protected replay could not be confirmed; the original Send stayed blocked. Focus the composer and send again.",
+                LocalProtectionStatusAction.None),
             "binding_not_verified" or "setup_required" => new LocalProtectionStatusRow(
                 "Automatic prompt protection",
                 "Selected-app send interception",
@@ -264,11 +410,29 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Send blocked by policy",
                 "The original Send stayed blocked; contact the administrator.",
                 LocalProtectionStatusAction.None),
+            "protection_unavailable" when failureCode == "orchestrator_failure" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked: local pipeline failed",
+                "The local confirmation, write, or replay pipeline failed. The original Send stayed blocked; retry prompt protection before sending.",
+                LocalProtectionStatusAction.RetryPromptProtection),
+            "protection_unavailable" when failureCode == "native_submit_flow_failure" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked: resident operation failed",
+                "The resident protected Send operation failed. The original Send stayed blocked; retry prompt protection before sending.",
+                LocalProtectionStatusAction.RetryPromptProtection),
             "protection_unavailable" => new LocalProtectionStatusRow(
                 "Automatic prompt protection",
                 "Selected-app send interception",
                 "Send blocked: protection unavailable",
                 "Retry prompt protection before sending.",
+                LocalProtectionStatusAction.RetryPromptProtection),
+            "trace_unavailable" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked",
+                "The protected Send trace could not be completed. Retry prompt protection before sending.",
                 LocalProtectionStatusAction.RetryPromptProtection),
             "content_blocked" => new LocalProtectionStatusRow(
                 "Automatic prompt protection",
@@ -277,6 +441,17 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Edit the prompt and send again.",
                 LocalProtectionStatusAction.None),
             _ => null
+        };
+    }
+
+    private static string KeyboardHookNextAction(string status)
+    {
+        return status switch
+        {
+            "configured_send_captured" => "Ctrl+Enter was captured; waiting for the protected Send result.",
+            "enter_seen_binding_mismatch" => "Enter was seen in the selected app, but it did not match the configured Send binding. Verify the binding, then try again.",
+            "enter_seen_unselected_target" => "Enter was seen outside the selected ChatGPT target. Focus the message composer, then send one non-sensitive message with Ctrl+Enter to complete the final check.",
+            _ => "Focus the ChatGPT Desktop message composer, then send one non-sensitive message with Ctrl+Enter to complete the final check."
         };
     }
 
@@ -464,9 +639,12 @@ internal sealed class LocalProtectionStatusForm : Form
         return action switch
         {
             LocalProtectionStatusAction.VerifyProfiles => "Set up prompt protection",
+            LocalProtectionStatusAction.RunLocalReadiness => "Run local readiness check",
             LocalProtectionStatusAction.RetryPromptProtection => "Retry protection",
             LocalProtectionStatusAction.RepairLocalProtection => "Repair local protection",
             LocalProtectionStatusAction.RepairProfileSettings => "Open profile settings",
+            LocalProtectionStatusAction.CancelOperationalAction => "Cancel action",
+            LocalProtectionStatusAction.RetryOperationalAction => "Retry action",
             _ => string.Empty
         };
     }

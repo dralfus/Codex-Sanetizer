@@ -878,7 +878,8 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             if (fallback != null)
             {
                 var fallbackHandle = new IntPtr(fallback.Current.NativeWindowHandle);
-                if (fallbackHandle == windowHandle)
+                var fallbackOwningWindow = FindOwningWindow(fallback);
+                if (MatchesVerifiedSurfaceWindow(windowHandle, fallbackHandle, fallbackOwningWindow))
                 {
                     return fallback;
                 }
@@ -886,6 +887,33 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         }
 
         return null; // Fail closed if we cannot verify the element
+    }
+
+    internal static bool MatchesVerifiedSurfaceWindow(
+        IntPtr expectedWindow,
+        IntPtr elementWindow,
+        IntPtr owningWindow)
+    {
+        return expectedWindow != IntPtr.Zero
+            && (elementWindow == expectedWindow || owningWindow == expectedWindow);
+    }
+
+    private static IntPtr FindOwningWindow(AutomationElement element)
+    {
+        var current = element;
+        while (current is not null)
+        {
+            var handle = new IntPtr(current.Current.NativeWindowHandle);
+            if (handle != IntPtr.Zero)
+            {
+                var root = NativeMethods.GetAncestor(handle, 2);
+                return root == IntPtr.Zero ? handle : root;
+            }
+
+            current = TreeWalker.ControlViewWalker.GetParent(current);
+        }
+
+        return IntPtr.Zero;
     }
 
     private static ValuePattern? GetValuePattern(AutomationElement element)
@@ -968,6 +996,12 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         {
             return null;
         }
+    }
+
+    private static class NativeMethods
+    {
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
     }
 
     private sealed class ClipboardSnapshot
