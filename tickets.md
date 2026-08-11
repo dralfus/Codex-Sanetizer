@@ -2224,3 +2224,77 @@ transitions without timers or a desktop.
 **Implementation evidence:** lifecycle persistence now validates correlation,
 build, and lifecycle token fields independently; full suite coverage preserves
 the existing serialized status contract.
+
+## 338. Unify automatic OpenAI Desktop onboarding
+
+**What to build:** Setup has no Codex-versus-ChatGPT selector. It automatically
+waits for one compatible OpenAI Desktop composer, discovers its internal
+surface variant, and activates exactly that detected target after a successful
+verification.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** The setup verification operation owns the one detected target
+for an attempt; the tray only projects its published result.
+
+**Fail-closed state:** No compatible focused composer, unsupported focus, or an
+incomplete verification leaves Send blocked. An internal profile label must
+never require the user to decide which product is running.
+
+**Allowed transitions:** `waiting_for_focus -> compatible composer discovered
+-> verified -> activation`; every other discovery result terminates as blocked.
+
+**Deterministic proof:** A discovered Codex or ChatGPT surface is stored as the
+one detected target; unsupported discovery stores nothing. UI tests prove no
+manual product selector is present and show the waiting status.
+
+- [x] Setup does not present Codex/ChatGPT product selection to the user.
+- [x] Automatic setup waits for and verifies one compatible foreground composer.
+- [x] The resulting status uses a product-neutral display name and records the
+      internal surface variant only in raw-free diagnostics.
+
+**Implementation evidence:** first-run and tray retry publish the same
+`awaiting_user_focus` stage before verification. The setup UI names only
+`OpenAI Desktop`; it discovers the internal surface after the user confirms the
+Send/newline binding, which remains explicit because a guessed binding could
+intercept the wrong key.
+
+**Diagnostic evidence:** In build `t1604`, startup completed setup in 80 ms
+because a previously protected ChatGPT profile satisfied the global condition,
+while later manual attempts followed a different lifecycle. The prior manual
+selector approach was therefore rejected and removed.
+
+## 339. Make automatic setup require the active OpenAI Desktop target
+
+**What to build:** Startup distinguishes an active verified target from an
+unrelated previously protected internal profile. When there is no current
+target, it starts the same automatic waiting flow rather than completing setup
+because any old profile exists.
+
+**Blocked by:** 338. Unify automatic OpenAI Desktop onboarding.
+
+**State owner:** Resident setup state owns the verified target identity; the
+tray reads and projects that state.
+
+**Fail-closed state:** Missing, unreadable, stale, or unprotected target keeps
+Send blocked and requests setup; a protected unrelated profile cannot satisfy
+it.
+
+**Allowed transitions:** `no active target -> waiting_for_focus -> detected
+target verified -> startup complete`; an incompatible change returns to setup
+required.
+
+**Deterministic proof:** A stored protected profile without a current verified
+target causes startup setup-required; repeated startup and manual retry use the
+same lifecycle records, without timers or a desktop.
+
+- [x] Automatic startup does not confuse an old internal profile with a current
+      target.
+- [x] Status identifies the current automatic stage and a safe next action.
+
+**Implementation evidence:** `.active_prompt_protection_target` persists only
+the detected internal profile ID. Missing, unreadable, or invalid target data
+produces setup-required. Candidate activation publishes the target temporarily
+and restores the preceding target whenever runtime activation or profile commit
+fails. Focused tests cover a protected unrelated profile, a persisted target,
+startup setup launch, and rollback.

@@ -2570,8 +2570,97 @@ public partial class SanitizerTests
 
         Assert.That(source, Does.Contain("Verify active app"));
         Assert.That(source, Does.Contain("VerifyFocusedProfile"));
-        Assert.That(source, Does.Not.Contain("Verify Codex Desktop"));
-        Assert.That(source, Does.Not.Contain("Verify ChatGPT Desktop"));
+        Assert.That(source, Does.Not.Contain("Protect this app:"));
+        Assert.That(source, Does.Contain("Waiting for focus:"));
+        Assert.That(source, Does.Not.Contain("Select Codex Desktop or ChatGPT Desktop before verification."));
+    }
+
+    [Test]
+    public void FirstRunSetupController_GetSetupStatusRequiresSetupWhenOnlyAnUnselectedProtectedProfileExists()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Upsert(layout, CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" });
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(CreateVerifiedChatGptDiscovery()),
+                (_, _, _) => throw new InvalidOperationException("GetSetupStatus must be side-effect free."));
+
+            var result = controller.GetSetupStatus(layout);
+
+            Assert.That(result.Succeeded, Is.False);
+            Assert.That(result.Code, Is.EqualTo("setup_required"));
+            Assert.That(result.State.Required, Is.True);
+            Assert.That(result.Diagnostics["active_target_status"], Is.EqualTo("target_missing"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupController_GetSetupStatusCompletesOnlyForThePersistedActiveTarget()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Upsert(layout, CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" });
+            Assert.That(ActivePromptProtectionTargetStore.Save(layout, "chatgpt-desktop").Succeeded, Is.True);
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(CreateVerifiedChatGptDiscovery()),
+                (_, _, _) => throw new InvalidOperationException("GetSetupStatus must be side-effect free."));
+
+            var result = controller.GetSetupStatus(layout);
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(result.State.Required, Is.False);
+            Assert.That(result.Diagnostics["active_target_profile_id"], Is.EqualTo("chatgpt-desktop"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void FirstRunSetupLaunchCoordinator_StartsAutomaticSetupWhenOnlyAnOldProtectedProfileExists()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            SubmitBindingProfileStore.Upsert(layout, CreateProtectedProfile() with { ProfileId = "chatgpt-desktop" });
+            var setupWindowCalls = 0;
+            var controller = new FirstRunSetupController(
+                new StaticFirstRunProfileVerifier(CreateVerifiedChatGptDiscovery()),
+                (_, _, _) =>
+                {
+                    setupWindowCalls++;
+                    return false;
+                });
+
+            var result = new FirstRunSetupLaunchCoordinator(layout, controller).RunIfRequired();
+
+            Assert.That(setupWindowCalls, Is.EqualTo(1));
+            Assert.That(result.Code, Is.EqualTo("setup_cancelled"));
+            Assert.That(result.State.Required, Is.True);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
     }
 
     [Test]

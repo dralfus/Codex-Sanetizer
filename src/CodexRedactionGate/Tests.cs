@@ -8323,9 +8323,9 @@ public class ResidentFirstRunSetupLaunchTests
                 firstRunSetupControllerFactory: () => setupController,
                 backgroundWorkQueue: work => queuedWork.Enqueue(work),
                 uiDispatcher: work => work(),
-                scheduleFirstRunSetup: false);
+                scheduleFirstRunSetup: false,
+                recoveryMessagePresenter: (_, _) => { });
 
-            context.OpenLocalProtectionStatus();
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
             Assert.That(queuedWork, Has.Count.EqualTo(1));
@@ -8340,6 +8340,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(setupController.EnsureSetupCalls, Is.EqualTo(2));
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
+            context.OpenLocalProtectionStatus();
             var form = context.LocalProtectionStatusForm;
             Assert.That(form!.CurrentRows.Any(row => row.OperationalState == "keyboard Send active"), Is.False);
             Assert.That(context.IsNativeSubmitHookReady, Is.True);
@@ -8356,7 +8357,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
 
-            Assert.That(retryFactoryCalls, Is.EqualTo(2));
+            Assert.That(retryFactoryCalls, Is.EqualTo(3));
             Assert.That(form.CurrentRows.Select(row => row.Consequence), Does.Not.Contain(retryFailure));
             Assert.That(failedRetryHook, Is.Not.Null);
             Assert.That(failedRetryHook!.Started, Is.False);
@@ -8364,7 +8365,7 @@ public class ResidentFirstRunSetupLaunchTests
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
-            Assert.That(retryFactoryCalls, Is.EqualTo(3));
+            Assert.That(retryFactoryCalls, Is.EqualTo(4));
         }
         finally
         {
@@ -8398,7 +8399,8 @@ public class ResidentFirstRunSetupLaunchTests
                 State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", true, false),
                 Diagnostics: new Dictionary<string, string>
                 {
-                    ["setup_attempt_id"] = "1"
+                    ["setup_attempt_id"] = "1",
+                    ["profile_id"] = "codex-desktop"
                 },
                 PreviousProfiles: new[] { oldProfile },
                 PendingProfiles: new[] { candidateProfile }));
@@ -8622,7 +8624,8 @@ public class ResidentFirstRunSetupLaunchTests
                 State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", true, false),
                 Diagnostics: new Dictionary<string, string>
                 {
-                    ["setup_attempt_id"] = "1"
+                    ["setup_attempt_id"] = "1",
+                    ["profile_id"] = "codex-desktop"
                 },
                 PreviousProfiles: new[] { oldProfile },
                 PendingProfiles: new[] { (SubmitBindingProfile)null! }));
@@ -8656,6 +8659,7 @@ public class ResidentFirstRunSetupLaunchTests
                 backgroundWorkQueue: work => queuedWork.Enqueue(work),
                 uiDispatcher: work => work(),
                 scheduleFirstRunSetup: false,
+                recoveryMessagePresenter: (_, _) => { },
                 candidateNativeSubmitRuntimeFactory: _ => new NativeSubmitRuntimeSet(
                     candidateHook,
                     new[] { CreateRuntime(candidateHook, oldProfile with
@@ -9089,7 +9093,7 @@ public class ResidentFirstRunSetupLaunchTests
                 Action: "retry_protection")
         });
 
-        Assert.That(protectedText, Does.Contain("ChatGPT Desktop"));
+        Assert.That(protectedText, Does.Contain("OpenAI Desktop"));
         Assert.That(protectedText, Does.Contain("Ctrl+Enter"));
         Assert.That(setupText, Does.Contain("select Set up prompt protection"));
         Assert.That(repairText, Does.Contain("Prompt verification required"));
@@ -9209,7 +9213,7 @@ public class ResidentFirstRunSetupLaunchTests
         Assert.That(WindowsTrayApplicationContext.FormatReadableProtectionStatus(verifying),
             Does.Contain("verifying Ctrl+Enter"));
         Assert.That(WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedState),
-            Does.Contain("ChatGPT Desktop is protected"));
+            Does.Contain("OpenAI Desktop is protected"));
         Assert.That(WindowsTrayApplicationContext.FormatReadableProtectionStatus(protectedThenBlocked),
             Does.Contain("blocked by policy"));
     }

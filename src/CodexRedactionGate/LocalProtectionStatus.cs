@@ -239,7 +239,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
         {
             "waiting_for_focus" => new LocalProtectionStatusRow(
                 "Automatic prompt protection", "Selected-app send interception", "waiting for focus",
-                "Focus the selected app composer to continue verification.", LocalProtectionStatusAction.None),
+                "Focus an OpenAI Desktop message composer to continue verification.", LocalProtectionStatusAction.None),
             "composer_recognized" => new LocalProtectionStatusRow(
                 "Automatic prompt protection", "Selected-app send interception", "composer recognized",
                 "The selected app composer was recognized; binding verification is continuing.", LocalProtectionStatusAction.None),
@@ -252,7 +252,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
             "protected" => null,
             "unsupported_surface" => new LocalProtectionStatusRow(
                 "Automatic prompt protection", "Selected-app send interception", "setup needs focus",
-                "Focus a Codex or ChatGPT Desktop message composer and verify prompt protection again.", LocalProtectionStatusAction.VerifyProfiles),
+                "Focus an OpenAI Desktop message composer and verify prompt protection again.", LocalProtectionStatusAction.VerifyProfiles),
             "activation_failed" => new LocalProtectionStatusRow(
                 "Automatic prompt protection", "Selected-app send interception", "activation failed",
                 "Protected Send remains blocked; restart prompt protection and try again.", LocalProtectionStatusAction.RetryPromptProtection),

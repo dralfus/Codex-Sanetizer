@@ -771,6 +771,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             NativeSubmitRuntimeSet? candidateRuntimeSet = null;
             try
             {
+                if (!ActivatePendingTarget(result))
+                {
+                    throw new InvalidOperationException("active_target_activation_failed");
+                }
                 candidateRuntimeSet = result.PendingProfiles is { } candidateProfiles
                     ? _candidateNativeSubmitRuntimeFactory(candidateProfiles)
                     : _nativeSubmitRuntimeFactory?.Invoke();
@@ -778,13 +782,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 {
                     candidateRuntimeSet?.HookHost.Stop();
                     RestorePreviousSetupProfiles(result);
+                    RestorePreviousSetupTarget(result);
                     _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
                         "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
-                    MessageBox.Show(
-                        "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.",
-                        "Codex Redaction Gate - Setup required",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
+                    ShowSetupFailure(
+                        "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.");
                 }
                 else if (result.PendingProfiles is not null && !IsCurrentSetupAttempt(result))
                 {
@@ -799,6 +801,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                     // another setup attempt. Keep the current gate active and
                     // require a fresh verification instead.
                     _controller.PublishPromptProtectionRetryFailure();
+                    RestorePreviousSetupTarget(result);
                     _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
                         "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
                 }
@@ -825,14 +828,12 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 {
                     candidateRuntimeSet?.HookHost.Stop();
                     RestorePreviousSetupProfiles(result);
+                    RestorePreviousSetupTarget(result);
                 }
                 _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
                     "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
-                MessageBox.Show(
-                    "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.",
-                    "Codex Redaction Gate - Setup required",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                ShowSetupFailure(
+                    "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.");
             }
         }
         else if (result is null || result.Code != "setup_cancelled")
@@ -840,11 +841,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
                 result?.Code == "focused_surface_unverified" ? "unsupported_surface" : "verification_failed",
                 "retry_setup", AttemptId: SetupVerificationAttemptId(result)));
-            MessageBox.Show(
-                "Setup could not be completed. Protected Send remains blocked until verification succeeds. Open profile verification from the tray to retry.",
-                "Codex Redaction Gate - Setup required",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            ShowSetupFailure(
+                "Setup could not be completed. Protected Send remains blocked until verification succeeds. Open profile verification from the tray to retry.");
         }
         else
         {
@@ -988,7 +986,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 }
             }
 
-            FirstRunSetupController.MarkSetupComplete(_layout);
+            if (ResolveResultProfileId(result) is not { } profileId
+                || !FirstRunSetupController.MarkSetupComplete(_layout, profileId))
+            {
+                throw new InvalidOperationException("active_target_commit_failed");
+            }
             return true;
         }
         catch (Exception exception)
@@ -1001,9 +1003,15 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
     }
 
+    private void ShowSetupFailure(string message)
+    {
+        _recoveryMessagePresenter(message, MessageBoxIcon.Warning);
+    }
+
     private void RollbackActivatedSetup(FirstRunSetupResult result)
     {
         var profilesRestored = RestorePreviousSetupProfiles(result);
+        var targetRestored = RestorePreviousSetupTarget(result);
 
         NativeSubmitRuntimeSet? rollbackRuntime = null;
         try
@@ -1016,6 +1024,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
 
         var rollbackSucceeded = profilesRestored
+            && targetRestored
             && rollbackRuntime is not null
             && _controller.ReloadNativeSubmit(rollbackRuntime);
         if (!rollbackSucceeded)
@@ -1066,6 +1075,33 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             _crashDiagnostics.Capture(exception, "first_run_setup", "profile_rollback_failed");
             return false;
         }
+    }
+
+    private bool ActivatePendingTarget(FirstRunSetupResult result)
+    {
+        if (result.PendingProfiles is null)
+        {
+            return true;
+        }
+
+        var profileId = ResolveResultProfileId(result);
+        return profileId is not null && ActivePromptProtectionTargetStore.Save(_layout, profileId).Succeeded;
+    }
+
+    private static string? ResolveResultProfileId(FirstRunSetupResult result)
+    {
+        return result.Diagnostics.TryGetValue("profile_id", out var diagnosticProfileId)
+            ? diagnosticProfileId
+            : result.PendingProfiles?.Count == 1 && result.PendingProfiles[0] is { } pendingProfile
+                ? pendingProfile.ProfileId
+                : null;
+    }
+
+    private bool RestorePreviousSetupTarget(FirstRunSetupResult result)
+    {
+        return result.PreviousActiveTargetProfileId is { } profileId
+            ? ActivePromptProtectionTargetStore.Save(_layout, profileId).Succeeded
+            : ActivePromptProtectionTargetStore.Clear(_layout);
     }
 
     protected override void Dispose(bool disposing)
@@ -1251,12 +1287,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private static string ProfileDisplayName(TrayProtectionState state)
     {
         var profileId = state.SetupVerificationProfileId ?? state.LastProfileId ?? state.ConfiguredProfileId;
-        return profileId switch
-        {
-            "chatgpt-desktop" => "ChatGPT Desktop",
-            "codex-desktop" => "Codex Desktop",
-            _ => "the selected desktop app"
-        };
+        return profileId is "chatgpt-desktop" or "codex-desktop"
+            ? "OpenAI Desktop"
+            : "the selected desktop app";
     }
 
     private static string FormatSetupVerificationStatus(TrayProtectionState state)
@@ -1406,15 +1439,30 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void VerifyProfilesFromTray()
     {
+        var operationalAttemptId = _controller.OperationalAction.AttemptId;
         if (_controller.OperationalAction.Status != "running")
         {
-            _controller.StartOperationalAction(
+            var started = _controller.StartOperationalAction(
                 "first_run_setup",
                 "starting",
                 userInputRequired: false,
                 nextAction: "focus_message_composer");
+            if (!started.Started)
+            {
+                RefreshStatus();
+                return;
+            }
+            operationalAttemptId = started.AttemptId;
         }
-        var operationalAttemptId = _controller.OperationalAction.AttemptId;
+        if (!_controller.PublishOperationalActionStage(
+                "awaiting_user_focus",
+                userInputRequired: true,
+                nextAction: "focus_message_composer",
+                expectedAttemptId: operationalAttemptId))
+        {
+            RefreshStatus();
+            return;
+        }
 
         _remediationActionExecutor.TryRun(
             () =>

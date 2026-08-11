@@ -23,7 +23,8 @@ public sealed record FirstRunSetupResult(
     FirstRunSetupState State,
     IReadOnlyDictionary<string, string> Diagnostics,
     IReadOnlyList<SubmitBindingProfile>? PreviousProfiles = null,
-    IReadOnlyList<SubmitBindingProfile>? PendingProfiles = null);
+    IReadOnlyList<SubmitBindingProfile>? PendingProfiles = null,
+    string? PreviousActiveTargetProfileId = null);
 
 public interface IFirstRunSetupController
 {
@@ -362,9 +363,12 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
                 });
         }
 
-        var state = profileId is null
-            ? CreateSetupState(storeResult.Profiles)
-            : CreateSetupState(storeResult.Profiles, profileId);
+        var target = profileId is null
+            ? ActivePromptProtectionTargetStore.Load(layout)
+            : new ActivePromptProtectionTargetStoreResult(true, "target_explicit", profileId);
+        var state = target.Succeeded && target.ProfileId is not null
+            ? CreateSetupState(storeResult.Profiles, target.ProfileId)
+            : CreateSetupStateForMissingTarget();
         return new FirstRunSetupResult(
             Succeeded: !state.Required,
             Code: state.Required ? "setup_required" : "setup_complete",
@@ -373,7 +377,9 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
             {
                 ["profiles_load_status"] = storeResult.Code,
                 ["profile_count"] = storeResult.Profiles.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["unprotected_profile_count"] = state.UnprotectedProfileIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                ["unprotected_profile_count"] = state.UnprotectedProfileIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["active_target_status"] = target.Code,
+                ["active_target_profile_id"] = target.ProfileId ?? "not_configured"
             });
     }
 
@@ -522,6 +528,20 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
                 });
         }
 
+        var previousTarget = ActivePromptProtectionTargetStore.Load(layout);
+        if (!previousTarget.Succeeded)
+        {
+            PublishSetupProgress("verification_failed", "retry_setup", profile.ProfileId, submitBinding);
+            return new FirstRunSetupResult(
+                Succeeded: false,
+                Code: "focused_target_load_failed",
+                State: GetSetupStatus(layout).State,
+                Diagnostics: new Dictionary<string, string>
+                {
+                    ["active_target_status"] = previousTarget.Code
+                });
+        }
+
         var pendingProfiles = previousProfiles.Profiles
             .Where(item => !string.Equals(item.ProfileId, profile.ProfileId, StringComparison.Ordinal))
             .Append(profile)
@@ -541,7 +561,8 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
                 ["setup_attempt_id"] = _setupAttemptId.ToString(System.Globalization.CultureInfo.InvariantCulture)
             }),
             PreviousProfiles: previousProfiles.Profiles,
-            PendingProfiles: pendingProfiles);
+            PendingProfiles: pendingProfiles,
+            PreviousActiveTargetProfileId: previousTarget.ProfileId);
         _lastFocusedVerificationResult = verifiedResult;
         return verifiedResult;
     }
@@ -576,13 +597,21 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        var setupMarkerPath = Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete");
-        return File.Exists(setupMarkerPath);
+        var status = GetSetupStatus(layout);
+        return status.Succeeded && !status.State.Required;
     }
 
-    internal static void MarkSetupComplete(DefaultStorageLayout layout)
+    internal static bool MarkSetupComplete(DefaultStorageLayout layout, string profileId)
     {
-        SetSetupComplete(layout);
+        if (!ActivePromptProtectionTargetStore.Save(layout, profileId).Succeeded)
+        {
+            return false;
+        }
+
+        AtomicFileWriter.WriteAllBytes(
+            Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete"),
+            System.Text.Encoding.UTF8.GetBytes("complete"));
+        return true;
     }
 
     internal static SubmitBindingProfile? CreateDefaultSetupProfile(string profileId)
@@ -632,6 +661,16 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
             VerifiedChatGpt: chatGptProfile?.IsSetupComplete ?? false);
     }
 
+    private static FirstRunSetupState CreateSetupStateForMissingTarget()
+    {
+        return new FirstRunSetupState(
+            Required: true,
+            UnprotectedProfileIds: new[] { "focused_supported_app" },
+            Status: "pending",
+            VerifiedCodex: false,
+            VerifiedChatGpt: false);
+    }
+
     private static FirstRunSetupState CreateSetupState(IReadOnlyList<SubmitBindingProfile> profiles, string profileId)
     {
         var visibleProfiles = SetupVisibleProfiles(profiles);
@@ -644,15 +683,6 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
             Status: setupComplete ? "complete" : "pending",
             VerifiedCodex: profileId == "codex-desktop" && setupComplete,
             VerifiedChatGpt: profileId == "chatgpt-desktop" && setupComplete);
-    }
-
-    private static void SetSetupComplete(DefaultStorageLayout layout)
-    {
-        layout.EnsureDirectories();
-        var setupMarkerPath = Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete");
-        AtomicFileWriter.WriteAllBytes(
-            setupMarkerPath,
-            System.Text.Encoding.UTF8.GetBytes($"complete:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}"));
     }
 
     private static IReadOnlyDictionary<string, string> Merge(
@@ -733,7 +763,7 @@ internal sealed class FirstRunSetupForm : Form
     {
         var instructionLabel = new Label
         {
-            Text = "Before you can use protected send, verify the Codex or ChatGPT Desktop window you use now.",
+            Text = "Before you can use protected send, verify the OpenAI Desktop window you use now.",
             Dock = DockStyle.Top,
             AutoSize = false,
             Height = 60,
@@ -909,7 +939,7 @@ internal sealed class FirstRunSetupForm : Form
         }
 
         var verificationGeneration = Interlocked.Increment(ref _verificationGeneration);
-        _verificationStatusLabel!.Text = "Switch to the selected app's message composer now. Verification captures focus in 10 seconds; this setup window stays responsive.";
+        _verificationStatusLabel!.Text = "Waiting for focus: click the message composer you use within 10 seconds. This window remains responsive.";
         _verificationStatusLabel.ForeColor = Color.DarkOrange;
         _verifyFocusedAppButton!.Enabled = false;
         if (_setupController is ISetupVerificationProgressReporter setupProgressReporter)
@@ -934,7 +964,7 @@ internal sealed class FirstRunSetupForm : Form
             _verificationStatusLabel.Text = "The focused window was not verified. Protected Send remains blocked.";
             _verificationStatusLabel.ForeColor = Color.DarkRed;
             MessageBox.Show(
-                "Verification did not confirm the selected composer. Focus the Codex or ChatGPT Desktop message box and try again. Protected Send remains blocked until setup succeeds.",
+                "Verification did not confirm the focused composer. Focus the OpenAI Desktop message box and try again. Protected Send remains blocked until setup succeeds.",
                 "Codex Redaction Gate - Setup required",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
