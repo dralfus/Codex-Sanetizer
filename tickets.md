@@ -2365,3 +2365,163 @@ resident readiness completed and the active target was `chatgpt-desktop`, but
 the stored reference proof belonged to `0.1.20260810.t2128` and no live contract
 was recorded. The protected-claim gate therefore suppressed `Ctrl+Enter` before
 the replacement overlay could appear.
+
+## 341. Deepen the resident protection runtime behind one published interface
+
+**What to build:** Make the resident protection runtime the single deep module
+for prompt-protection lifecycle. Tray UI and Windows input adapters must use a
+compact interface for start, reload, stop, captured-gesture handling, and the
+published protection snapshot, without learning snapshot mutation, operation
+lease, hook activation, or trace-persistence ordering.
+
+**Blocked by:** 340. Make verified onboarding enable protected Send on the
+current build.
+
+**State owner:** The resident protection runtime owns the immutable snapshot,
+active protected-Send operation, hook lifecycle, reload transaction, and
+published raw-free state. The tray is a projection only.
+
+**Fail-closed state:** Candidate construction, hook activation, reload,
+operation cancellation, trace persistence, or state publication uncertainty
+retains the last complete safe snapshot or suppresses selected Send. No caller
+may reconstruct protected state from local flags.
+
+**Allowed transitions:** `stopped -> starting -> active(snapshot)`;
+`active(old) -> reloading(candidate) -> active(candidate)`; or
+`active(old) -> activation_failed(active old)`. A selected captured gesture is
+handled only by its captured active snapshot and reaches one terminal outcome.
+
+**Deterministic proof:** A lifecycle harness injects hook hosts, runtime
+candidates, captured gestures, and trace stores. It proves start, reload,
+rollback, cancellation, repeated Send, and tray projection without timers,
+foreground focus, or cloud submission.
+
+- [ ] The runtime exposes one compact production interface; tray and hook
+      adapters no longer depend on controller-internal transition methods.
+- [ ] The current fail-closed snapshot/reload/trace semantics remain unchanged
+      and are exercised through the new interface.
+- [ ] Tests prove that no stale callback, failed candidate, or parallel reload
+      can release raw selected-app Send or publish a mixed status.
+
+**Review finding (2026-08-14):** The first implementation added
+`ResidentProtectionRuntimeFacade`, but it is currently only a forwarding layer.
+`WindowsTrayApplicationContext` still calls `TrayProtectionController` for
+workflow transitions, and hook callbacks are still assembled inside that
+controller. Do not close this ticket until the facade is the only production
+port used by tray and input adapters, including captured-gesture handling.
+
+## 342. Make the Windows tray a thin projection of resident protection state
+
+**What to build:** Keep the Windows tray usable while reducing it to a UI
+adapter that renders the published resident snapshot and submits explicit user
+intent. Setup/retry progress presentation, local commands, and tray
+composition must be separated internally so the application context no longer
+owns protection decisions or workflow ordering.
+
+**Blocked by:** 341. Deepen the resident protection runtime behind one
+published interface.
+
+**State owner:** The resident runtime and its operational-action lifecycle own
+protection and action state. The tray owns only local UI lifetime and rendering
+of published raw-free projections.
+
+**Fail-closed state:** A missing, stale, or unreadable snapshot renders a
+non-ready state and offers only safe remediation; the tray cannot mark
+protection active from persisted settings or local UI flags.
+
+**Allowed transitions:** User intent is dispatched to the resident runtime;
+the tray renders only its resulting `idle -> running -> terminal` action
+projection. Closing a non-critical status window does not alter resident
+protection.
+
+**Deterministic proof:** UI-adapter tests use a published-state fixture and
+intent dispatcher to prove status refresh, retry, cancellation, and window
+lifetime without NotifyIcon-dependent timing, a desktop target, or cloud
+submission.
+
+- [ ] The tray context contains only UI composition and intent dispatch; no
+      protection-ready decision is derived in the UI adapter.
+- [ ] Operational progress and terminal result remain visible, raw-free, and
+      usable while ordinary OpenAI Desktop navigation and clipboard use remain
+      unaffected.
+- [ ] Tests prove the tray renders resident state faithfully and cannot enable
+      or release Send independently.
+
+**Review finding (2026-08-14):** The explicit intent dispatcher is a useful
+first step, but the application context still owns setup, retry, recovery and
+reload ordering. Extract those workflows into the resident runtime/action
+coordinator before closing this ticket; menu handlers must only dispatch an
+intent and render the resulting published snapshot.
+
+## 343. Separate profile verification from low-level native input handling
+
+**What to build:** Split the native submit area into two real adapters: a
+profile adapter for verified bindings and compatibility evidence, and an input
+adapter for captured keyboard/pointer gestures and bounded callback fallback.
+The low-level input path must not load profiles, inspect storage, or perform
+unbounded discovery after input capture.
+
+**Blocked by:** 341. Deepen the resident protection runtime behind one
+published interface.
+
+**State owner:** The profile adapter owns persisted binding/evidence validity.
+The resident runtime owns the selected-profile snapshot supplied to the input
+adapter. The input adapter owns only captured-gesture dispatch.
+
+**Fail-closed state:** Missing, invalid, changed, or unavailable profile
+evidence causes the resident runtime to suppress the selected Send with a
+raw-free status. A callback failure suppresses only a precomputed selected
+target; known unrelated input continues normally.
+
+**Allowed transitions:** `profile evidence changed -> candidate snapshot built
+-> candidate hook activated -> snapshot published`; input dispatch uses only
+the captured verdict for that generation. Generic replay remains ignored.
+
+**Deterministic proof:** Profile-storage fixtures and captured-gesture fixtures
+prove that profile changes cannot affect callback latency, selected/unrelated
+classification, replay rejection, or fail-closed behaviour without UIA,
+timers, or a cloud submission.
+
+- [ ] Profile persistence/verification and input callback code have separate
+      production adapters with explicit, minimal interfaces.
+- [ ] The input adapter consumes only the resident-provided captured verdict
+      after callback entry and preserves unrelated-app input.
+- [ ] Regression tests cover profile reload, selected/unrelated fallback,
+      keyboard and pointer Send, reference-only input, and replay rejection.
+
+**Review finding (2026-08-14):** A direct profile-store read was found in
+`NativeSubmitInterceptionController.IsSetupPendingSubmitGesture` on the
+captured-key path. The working change replaces it with precomputed binding and
+readiness inputs, but this ticket remains open until all callback decisions are
+provided from the active resident snapshot and the complete keyboard/pointer
+regression matrix exists.
+
+## 344. Make the full automated suite independent from an installed tray instance
+
+**What to build:** Isolate `SingleInstanceEnforcementTests` from a real,
+already-running Code Sanitizer tray application. Tests must use unique,
+per-test instance IDs and activation-window keys rather than the shared
+production value `tray`.
+
+**Blocked by:** None. This can be completed before the next architecture
+acceptance run.
+
+**State owner:** Each test fixture owns its generated instance ID and cleans up
+only that ID. Production owns the fixed application ID.
+
+**Fail-closed state:** If a test cannot acquire or release its generated mutex
+and activation key, it fails without touching the installed tray process.
+
+**Allowed transitions:** `test instance absent -> acquired -> message loop or
+second-instance case -> released`. No transition may observe or stop the real
+installed instance.
+
+**Deterministic proof:** Run the affected fixture while an installed tray is
+running. The fixture passes and the installed process remains alive.
+
+- [ ] Replace shared `tray` IDs in single-instance tests with generated test IDs.
+- [ ] Prove the complete suite runs while the installed tray application remains running.
+
+**Diagnostic evidence:** On 2026-08-14 the full suite reached 1679/1684. The
+five failures were all `SingleInstanceEnforcementTests` using the shared `tray`
+mutex while `CodexRedactionGate.Tray` was running from the installed path.
