@@ -102,13 +102,11 @@ internal static class ResidentLifecycleSmokeRunner
             var initialController = new NativeSubmitInterceptionController(
                 pendingProfile,
                 new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-                firstRunSetupController: setup,
-                setupLayout: layout);
+                profileSnapshot: NativeSubmitProfileSnapshot.FromProfile(pendingProfile));
             var reloadedController = new NativeSubmitInterceptionController(
                 protectedProfile,
                 new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-                firstRunSetupController: setup,
-                setupLayout: layout);
+                profileSnapshot: NativeSubmitProfileSnapshot.FromProfile(protectedProfile));
             var protection = TrayProtectionController.CreateTest(
                 new UnavailableTrayHotkeyHost(
                     new HotkeyBinding("resident-smoke", "Ctrl+Shift+F9", "resident_smoke"),
@@ -133,7 +131,6 @@ internal static class ResidentLifecycleSmokeRunner
                     new[] { NativeSubmitRuntime.CreateTest(reloadedHook, reloadedController, NoCloudSubmission, protectedProfile) }),
                 () => setup,
                 backgroundWorkQueue: work => work(),
-                uiDispatcher: work => work(),
                 firstRunSetupCompleted: _ =>
                 {
                     var readinessPassed = protection.State.LocalReadinessStatus == "passed";

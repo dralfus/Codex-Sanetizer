@@ -4161,6 +4161,9 @@ public partial class SanitizerTests
         Assert.That(installerScript, Does.Contain("CodexRedactionGateSetup-*.exe"));
         Assert.That(installerScript, Does.Contain("CodexRedactionGateSetup-$BuildVersion.exe"));
         Assert.That(installerScript, Does.Contain("Expected installer was not created"));
+        Assert.That(installerScript, Does.Contain("FileVersionInfo]::GetVersionInfo($installerPath).ProductVersion"));
+        Assert.That(installerScript, Does.Contain("Installer version smoke failed"));
+        Assert.That(installerScript, Does.Contain("installer_version_smoke=passed"));
         Assert.That(consoleProject, Does.Contain("<UseWPF>true</UseWPF>"));
         Assert.That(trayProject, Does.Contain("<UseWPF>true</UseWPF>"));
     }
@@ -7132,6 +7135,9 @@ internal sealed class FixedConfirmationOverlay : IConfirmationOverlay
 [TestFixture]
 public class SingleInstanceEnforcementTests
 {
+    private static string CreateTestInstanceId() =>
+        "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+
     private static string CreateTempDirectory()
     {
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-tests", Guid.NewGuid().ToString("N"));
@@ -7142,7 +7148,7 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_IsFirstInstance()
     {
-        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        var instanceId = CreateTestInstanceId();
         using var enforcement = new SingleInstanceEnforcement(instanceId);
         Assert.That(enforcement.IsFirstInstance, Is.True);
     }
@@ -7150,7 +7156,7 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_NoInstanceWhenEmpty()
     {
-        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        var instanceId = CreateTestInstanceId();
 
         Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId), Is.False);
     }
@@ -7158,7 +7164,7 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_ReentrantCheckDoesNotCreateAnotherOwner()
     {
-        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        var instanceId = CreateTestInstanceId();
         using var first = new SingleInstanceEnforcement(instanceId);
 
         Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId), Is.False);
@@ -7170,14 +7176,14 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_BuildMutexNameKeepsPerUserAsDefault()
     {
-        Assert.That(SingleInstanceEnforcement.BuildMutexName("tray", useGlobalNamespace: false), Is.EqualTo("CodexRedactionGate_tray"));
-        Assert.That(SingleInstanceEnforcement.BuildMutexName("tray", useGlobalNamespace: true), Is.EqualTo("Global\\CodexRedactionGate_tray"));
+        Assert.That(SingleInstanceEnforcement.BuildMutexName(WindowsTrayApp.ProductionInstanceId, useGlobalNamespace: false), Is.EqualTo("CodexRedactionGate_tray"));
+        Assert.That(SingleInstanceEnforcement.BuildMutexName(WindowsTrayApp.ProductionInstanceId, useGlobalNamespace: true), Is.EqualTo("Global\\CodexRedactionGate_tray"));
     }
 
     [Test]
     public void SingleInstanceEnforcement_RecoversAfterAbandonedMutex()
     {
-        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        var instanceId = CreateTestInstanceId();
         using var ready = new ManualResetEventSlim(false);
         var thread = new Thread(() =>
         {
@@ -7202,7 +7208,7 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_RecoversAcrossRapidAbandonRestartCycles()
     {
-        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        var instanceId = CreateTestInstanceId();
 
         for (var cycle = 0; cycle < 3; cycle++)
         {
@@ -7280,7 +7286,7 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_DisposeIsIdempotent()
     {
-        var enforcement = new SingleInstanceEnforcement("codex-redaction-gate-test-" + Guid.NewGuid().ToString("N"));
+        var enforcement = new SingleInstanceEnforcement(CreateTestInstanceId());
 
         Assert.DoesNotThrow(enforcement.Dispose);
         Assert.DoesNotThrow(enforcement.Dispose);
@@ -7289,7 +7295,7 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_ActivateExistingInstance_ReportsFailureWithoutAnActivationWindow()
     {
-        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        var instanceId = CreateTestInstanceId();
         string? capturedTitle = null;
         string? capturedMessage = null;
         bool? capturedIncludeDiagnostics = null;
@@ -7316,7 +7322,7 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_ActivateExistingInstance_WithoutWindowReturnsFalse()
     {
-        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        var instanceId = CreateTestInstanceId();
 
         // Start first instance
         using var enforcement1 = new SingleInstanceEnforcement(instanceId);
@@ -7330,7 +7336,7 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_ActivateExistingInstance_NoInstanceReturnsFalse()
     {
-        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        var instanceId = CreateTestInstanceId();
 
         // No instance running - should return false
         var result = SingleInstanceEnforcement.ActivateExistingInstance(instanceId);
@@ -7340,7 +7346,7 @@ public class SingleInstanceEnforcementTests
     [Test]
     public void SingleInstanceEnforcement_ActivateExistingInstance_NoInstanceIncludesNoDiagnosticsLink()
     {
-        var instanceId = "codex-redaction-gate-test-" + Guid.NewGuid().ToString("N");
+        var instanceId = CreateTestInstanceId();
         bool? capturedIncludeDiagnostics = null;
 
         // No instance running - callback should be called with includeDiagnosticsLink=false
@@ -7365,6 +7371,7 @@ public class SingleInstanceEnforcementTests
     public void WindowsTrayApp_RunFirstInstanceRetainsNativeHookAndTrayIconUntilMessageLoopExits()
     {
         var tempDirectory = CreateTempDirectory();
+        var instanceId = CreateTestInstanceId();
         try
         {
             var trayIconVisible = false;
@@ -7378,17 +7385,53 @@ public class SingleInstanceEnforcementTests
                 {
                     trayIconVisible = context.IsTrayIconVisible;
                     nativeHookReady = context.IsNativeSubmitHookReady;
-                    Assert.That(TrayActivationWindowStore.Default.TryRead("tray", out var windowHandle), Is.True);
+                    Assert.That(TrayActivationWindowStore.Default.TryRead(instanceId, out var windowHandle), Is.True);
                     Assert.That(windowHandle, Is.Not.EqualTo(IntPtr.Zero));
                     context.ExitThread();
                 },
-                new SingleInstanceNotificationSettings(false, "none"));
+                new SingleInstanceNotificationSettings(false, "none"),
+                instanceId: instanceId);
 
             Assert.That(exitCode, Is.EqualTo(0));
             Assert.That(trayIconVisible, Is.True);
             Assert.That(nativeHookReady, Is.True);
-            Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"), Is.False);
-            Assert.That(TrayActivationWindowStore.Default.TryRead("tray", out _), Is.False);
+            Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId), Is.False);
+            Assert.That(TrayActivationWindowStore.Default.TryRead(instanceId, out _), Is.False);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApp_RunWithTestInstanceIdDoesNotObserveAnUnrelatedRunningInstance()
+    {
+        var tempDirectory = CreateTempDirectory();
+        var unrelatedInstanceId = CreateTestInstanceId();
+        var testInstanceId = CreateTestInstanceId();
+        try
+        {
+            using var unrelatedOwner = new ExternalMutexOwner(unrelatedInstanceId);
+            Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(unrelatedInstanceId), Is.True);
+
+            var enteredMessageLoop = false;
+            var exitCode = WindowsTrayApp.Run(
+                TestSanitizers.Create(),
+                DefaultStorageLayout.Create(tempDirectory),
+                useGlobalMutex: false,
+                context =>
+                {
+                    enteredMessageLoop = true;
+                    context.ExitThread();
+                },
+                new SingleInstanceNotificationSettings(false, "none"),
+                instanceId: testInstanceId);
+
+            Assert.That(exitCode, Is.EqualTo(0));
+            Assert.That(enteredMessageLoop, Is.True);
+            Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(unrelatedInstanceId), Is.True);
         }
         finally
         {
@@ -7400,12 +7443,13 @@ public class SingleInstanceEnforcementTests
     public void WindowsTrayApp_RunSecondInstanceActivatesExistingWindowAndExitsCleanly()
     {
         var tempDirectory = CreateTempDirectory();
+        var instanceId = CreateTestInstanceId();
         try
         {
             SecondInstanceNotification? notification = null;
-            using var owner = new ExternalMutexOwner("tray");
+            using var owner = new ExternalMutexOwner(instanceId);
 
-            Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"), Is.True);
+            Assert.That(SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId), Is.True);
             var exitCode = WindowsTrayApp.Run(
                 TestSanitizers.Create(),
                 DefaultStorageLayout.Create(tempDirectory),
@@ -7413,13 +7457,14 @@ public class SingleInstanceEnforcementTests
                 _ => throw new AssertionException("A second tray instance must not enter the message loop."),
                 new SingleInstanceNotificationSettings(true, "balloon"),
                 shown => notification = shown,
-                existingInstanceActivator: new TestExistingTrayInstanceActivator(activationSucceeded: true));
+                existingInstanceActivator: new TestExistingTrayInstanceActivator(instanceId, activationSucceeded: true),
+                instanceId: instanceId);
             Assert.That(exitCode, Is.EqualTo(0));
             Assert.That(notification?.ActivationSucceeded, Is.True);
         }
         finally
         {
-            SingleInstanceEnforcement.ClearActivationWindow("tray");
+            SingleInstanceEnforcement.ClearActivationWindow(instanceId);
             Directory.Delete(tempDirectory, recursive: true);
         }
     }
@@ -7428,10 +7473,11 @@ public class SingleInstanceEnforcementTests
     public void WindowsTrayApp_RunSecondInstanceReportsVisibleFallbackWhenActivationWindowIsUnavailable()
     {
         var tempDirectory = CreateTempDirectory();
+        var instanceId = CreateTestInstanceId();
         try
         {
             SecondInstanceNotification? notification = null;
-            using var owner = new ExternalMutexOwner("tray");
+            using var owner = new ExternalMutexOwner(instanceId);
 
             var exitCode = WindowsTrayApp.Run(
                 TestSanitizers.Create(),
@@ -7440,7 +7486,8 @@ public class SingleInstanceEnforcementTests
                 _ => throw new AssertionException("A second tray instance must not enter the message loop."),
                 new SingleInstanceNotificationSettings(true, "balloon"),
                 shown => notification = shown,
-                existingInstanceActivator: new TestExistingTrayInstanceActivator(activationSucceeded: false));
+                existingInstanceActivator: new TestExistingTrayInstanceActivator(instanceId, activationSucceeded: false),
+                instanceId: instanceId);
 
             Assert.That(exitCode, Is.EqualTo(0));
             Assert.That(notification, Is.Not.Null);
@@ -7448,7 +7495,7 @@ public class SingleInstanceEnforcementTests
         }
         finally
         {
-            SingleInstanceEnforcement.ClearActivationWindow("tray");
+            SingleInstanceEnforcement.ClearActivationWindow(instanceId);
             Directory.Delete(tempDirectory, recursive: true);
         }
     }
@@ -7457,10 +7504,11 @@ public class SingleInstanceEnforcementTests
     public void WindowsTrayApp_RunSecondInstanceReportsForegroundRefusalEvenWhenRoutineNotificationsAreDisabled()
     {
         var tempDirectory = CreateTempDirectory();
+        var instanceId = CreateTestInstanceId();
         try
         {
             SecondInstanceNotification? notification = null;
-            using var owner = new ExternalMutexOwner("tray");
+            using var owner = new ExternalMutexOwner(instanceId);
 
             var exitCode = WindowsTrayApp.Run(
                 TestSanitizers.Create(),
@@ -7469,7 +7517,8 @@ public class SingleInstanceEnforcementTests
                 _ => throw new AssertionException("A second tray instance must not enter the message loop."),
                 new SingleInstanceNotificationSettings(false, "none"),
                 shown => notification = shown,
-                existingInstanceActivator: new TestExistingTrayInstanceActivator(activationSucceeded: false));
+                existingInstanceActivator: new TestExistingTrayInstanceActivator(instanceId, activationSucceeded: false),
+                instanceId: instanceId);
 
             Assert.That(exitCode, Is.EqualTo(0));
             Assert.That(notification, Is.Not.Null);
@@ -7477,7 +7526,7 @@ public class SingleInstanceEnforcementTests
         }
         finally
         {
-            SingleInstanceEnforcement.ClearActivationWindow("tray");
+            SingleInstanceEnforcement.ClearActivationWindow(instanceId);
             Directory.Delete(tempDirectory, recursive: true);
         }
     }
@@ -7486,14 +7535,17 @@ public class SingleInstanceEnforcementTests
     {
         private readonly bool _activationSucceeded;
 
-        public TestExistingTrayInstanceActivator(bool activationSucceeded)
+        public TestExistingTrayInstanceActivator(string expectedInstanceId, bool activationSucceeded)
         {
+            _expectedInstanceId = expectedInstanceId;
             _activationSucceeded = activationSucceeded;
         }
 
+        private readonly string _expectedInstanceId;
+
         public bool TryActivate(string instanceId, bool useGlobalMutex)
         {
-            Assert.That(instanceId, Is.EqualTo("tray"));
+            Assert.That(instanceId, Is.EqualTo(_expectedInstanceId));
             Assert.That(useGlobalMutex, Is.False);
             return _activationSucceeded;
         }
@@ -7504,19 +7556,20 @@ public class SingleInstanceEnforcementTests
     public void WindowsTrayApp_RunRecoversAfterAbandonedFirstInstance()
     {
         var tempDirectory = CreateTempDirectory();
+        var instanceId = CreateTestInstanceId();
         try
         {
             using var ownerReady = new ManualResetEventSlim(false);
             var owner = new Thread(() =>
             {
-                _ = new Mutex(initiallyOwned: true, name: SingleInstanceEnforcement.BuildMutexName("tray", false));
+                _ = new Mutex(initiallyOwned: true, name: SingleInstanceEnforcement.BuildMutexName(instanceId, false));
                 ownerReady.Set();
             });
             owner.Start();
             Assert.That(ownerReady.Wait(TimeSpan.FromSeconds(2)), Is.True);
             owner.Join();
             Assert.That(SpinWait.SpinUntil(
-                () => !SingleInstanceEnforcement.IsAnotherInstanceRunning("tray"),
+                () => !SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId),
                 TimeSpan.FromSeconds(2)), Is.True);
 
             var enteredMessageLoop = false;
@@ -7529,7 +7582,8 @@ public class SingleInstanceEnforcementTests
                     enteredMessageLoop = true;
                     context.ExitThread();
                 },
-                new SingleInstanceNotificationSettings(false, "none"));
+                new SingleInstanceNotificationSettings(false, "none"),
+                instanceId: instanceId);
 
             Assert.That(exitCode, Is.EqualTo(0));
             Assert.That(enteredMessageLoop, Is.True);
@@ -7637,7 +7691,7 @@ public class ResidentFirstRunSetupLaunchTests
         var projectDirectory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
         var source = File.ReadAllText(Path.Combine(projectDirectory, "WindowsTrayApp.cs"));
 
-        Assert.That(source, Does.Contain("RunLocalReadinessFromTray"));
+        Assert.That(source, Does.Contain("_residentWorkflowCoordinator.StartLocalReadiness()"));
         Assert.That(source, Does.Not.Contain("ChatGptReleaseAcceptanceWorkflow.RunAndArm"));
     }
 
@@ -8052,8 +8106,7 @@ public class ResidentFirstRunSetupLaunchTests
                         profile,
                         new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
                         activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateSetupTestSurface()),
-                        firstRunSetupController: new FirstRunSetupController(),
-                        setupLayout: layout);
+                        profileSnapshot: NativeSubmitProfileSnapshot.FromProfile(profile));
                     var protection = TrayProtectionController.CreateTest(
                         new SanitizerTests.FakeTrayHotkeyHost(),
                         () => throw new AssertionException("Manual scan should not run."),
@@ -8338,8 +8391,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
             Assert.That(setupController.EnsureSetupCalls, Is.EqualTo(2));
-            Assert.That(queuedWork, Has.Count.EqualTo(1));
-            queuedWork.Dequeue().Invoke();
+            Assert.That(queuedWork, Is.Empty);
             context.OpenLocalProtectionStatus();
             var form = context.LocalProtectionStatusForm;
             Assert.That(form!.CurrentRows.Any(row => row.OperationalState == "keyboard Send active"), Is.False);
@@ -8357,7 +8409,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
 
-            Assert.That(retryFactoryCalls, Is.EqualTo(3));
+            Assert.That(retryFactoryCalls, Is.EqualTo(2));
             Assert.That(form.CurrentRows.Select(row => row.Consequence), Does.Not.Contain(retryFailure));
             Assert.That(failedRetryHook, Is.Not.Null);
             Assert.That(failedRetryHook!.Started, Is.False);
@@ -8365,7 +8417,7 @@ public class ResidentFirstRunSetupLaunchTests
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
             Assert.That(queuedWork, Has.Count.EqualTo(1));
             queuedWork.Dequeue().Invoke();
-            Assert.That(retryFactoryCalls, Is.EqualTo(4));
+            Assert.That(retryFactoryCalls, Is.EqualTo(3));
         }
         finally
         {

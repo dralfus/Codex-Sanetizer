@@ -2396,19 +2396,22 @@ candidates, captured gestures, and trace stores. It proves start, reload,
 rollback, cancellation, repeated Send, and tray projection without timers,
 foreground focus, or cloud submission.
 
-- [ ] The runtime exposes one compact production interface; tray and hook
+- [x] The runtime exposes one compact production interface; tray and hook
       adapters no longer depend on controller-internal transition methods.
-- [ ] The current fail-closed snapshot/reload/trace semantics remain unchanged
+- [x] The current fail-closed snapshot/reload/trace semantics remain unchanged
       and are exercised through the new interface.
-- [ ] Tests prove that no stale callback, failed candidate, or parallel reload
+- [x] Tests prove that no stale callback, failed candidate, or parallel reload
       can release raw selected-app Send or publish a mixed status.
 
-**Review finding (2026-08-14):** The first implementation added
-`ResidentProtectionRuntimeFacade`, but it is currently only a forwarding layer.
-`WindowsTrayApplicationContext` still calls `TrayProtectionController` for
-workflow transitions, and hook callbacks are still assembled inside that
-controller. Do not close this ticket until the facade is the only production
-port used by tray and input adapters, including captured-gesture handling.
+**Implementation progress (2026-08-15):** `IResidentProtectionRuntime` is now
+the only controller-facing boundary used by `WindowsTrayApplicationContext`.
+The tray reads its state from the published snapshot and submits lifecycle,
+disable, diagnostics, reload, and operation requests through the resident port.
+The coordinator now consumes the internal workflow port, while the tray uses a
+four-operation UI port plus the immutable snapshot. `ResidentProtectionRuntimeUiPort_...`,
+`ResidentProtectionRuntimeWorkflowPort_ParallelReloads...`, failed-reload,
+in-flight stale callback, and tray-context tests provide the deterministic
+evidence. Ticket 341 is complete; workflow acceptance remains tracked by 345.
 
 ## 342. Make the Windows tray a thin projection of resident protection state
 
@@ -2439,19 +2442,19 @@ intent dispatcher to prove status refresh, retry, cancellation, and window
 lifetime without NotifyIcon-dependent timing, a desktop target, or cloud
 submission.
 
-- [ ] The tray context contains only UI composition and intent dispatch; no
+- [x] The tray context contains only UI composition and intent dispatch; no
       protection-ready decision is derived in the UI adapter.
-- [ ] Operational progress and terminal result remain visible, raw-free, and
+- [x] Operational progress and terminal result remain visible, raw-free, and
       usable while ordinary OpenAI Desktop navigation and clipboard use remain
       unaffected.
-- [ ] Tests prove the tray renders resident state faithfully and cannot enable
+- [x] Tests prove the tray renders resident state faithfully and cannot enable
       or release Send independently.
 
-**Review finding (2026-08-14):** The explicit intent dispatcher is a useful
-first step, but the application context still owns setup, retry, recovery and
-reload ordering. Extract those workflows into the resident runtime/action
-coordinator before closing this ticket; menu handlers must only dispatch an
-intent and render the resulting published snapshot.
+**Implementation evidence (2026-08-15):** The tray holds only
+`IResidentProtectionRuntime`; the workflow coordinator owns readiness, setup,
+retry, recovery, cancellation, and their terminal publications. Status-window
+tests cover refresh and lifetime, while `WindowsTrayContext_StoresOnlyTheResidentUiPort`
+prevents a future direct controller field. Ticket 342 is complete.
 
 ## 343. Separate profile verification from low-level native input handling
 
@@ -2482,19 +2485,29 @@ prove that profile changes cannot affect callback latency, selected/unrelated
 classification, replay rejection, or fail-closed behaviour without UIA,
 timers, or a cloud submission.
 
-- [ ] Profile persistence/verification and input callback code have separate
+- [x] Profile persistence/verification and input callback code have separate
       production adapters with explicit, minimal interfaces.
-- [ ] The input adapter consumes only the resident-provided captured verdict
+- [x] The input adapter consumes only the resident-provided captured verdict
       after callback entry and preserves unrelated-app input.
-- [ ] Regression tests cover profile reload, selected/unrelated fallback,
+- [x] Regression tests cover profile reload, selected/unrelated fallback,
       keyboard and pointer Send, reference-only input, and replay rejection.
 
-**Review finding (2026-08-14):** A direct profile-store read was found in
-`NativeSubmitInterceptionController.IsSetupPendingSubmitGesture` on the
-captured-key path. The working change replaces it with precomputed binding and
-readiness inputs, but this ticket remains open until all callback decisions are
-provided from the active resident snapshot and the complete keyboard/pointer
-regression matrix exists.
+**Implementation progress (2026-08-15):** The production profile adapter now
+builds `NativeSubmitProfileSnapshot` before the hook is started. The callback
+uses only that immutable profile status and pending binding; the former
+controller path that read setup/profile storage after input capture was
+removed. Tests cover `protected`, `native_submit_setup_required`, and
+`profiles_unavailable` snapshots plus a failing profile-store adapter. The
+remaining acceptance coverage stays open until it proves the complete
+keyboard/pointer/reference-only/replay matrix through the resident runtime.
+
+**Acceptance evidence (2026-08-15):** `NativeSubmitProfileSnapshotAdapter`
+loads profile status and the ChatGPT live-contract arm before hook startup.
+The callback owns neither a profile/proof-store reference nor a storage read;
+it only observes the immutable snapshot and resident providers. Missing selected
+profiles resolve to `profiles_unavailable`. Targeted tests cover profile
+status/arm/missing-profile snapshots (16), pointer dispatch (15), and the
+reference-composer/replay matrix (10). Ticket 343 is complete.
 
 ## 344. Make the full automated suite independent from an installed tray instance
 
@@ -2503,8 +2516,8 @@ already-running Code Sanitizer tray application. Tests must use unique,
 per-test instance IDs and activation-window keys rather than the shared
 production value `tray`.
 
-**Blocked by:** None. This can be completed before the next architecture
-acceptance run.
+**Blocked by:** None. This is a test-environment isolation task and can run in
+parallel with the resident architecture work.
 
 **State owner:** Each test fixture owns its generated instance ID and cleans up
 only that ID. Production owns the fixed application ID.
@@ -2519,9 +2532,153 @@ installed instance.
 **Deterministic proof:** Run the affected fixture while an installed tray is
 running. The fixture passes and the installed process remains alive.
 
-- [ ] Replace shared `tray` IDs in single-instance tests with generated test IDs.
-- [ ] Prove the complete suite runs while the installed tray application remains running.
+- [x] Replace shared `tray` IDs in single-instance tests with generated test IDs.
+- [x] Prove the complete suite runs while the installed tray application remains running.
 
 **Diagnostic evidence:** On 2026-08-14 the full suite reached 1679/1684. The
 five failures were all `SingleInstanceEnforcementTests` using the shared `tray`
 mutex while `CodexRedactionGate.Tray` was running from the installed path.
+
+**Acceptance evidence (2026-08-15):** `WindowsTrayApp.ProductionInstanceId`
+is the only production ID. Each `SingleInstanceEnforcementTests` case generates
+its own ID, and `WindowsTrayApp_RunWithTestInstanceIdDoesNotObserveAnUnrelatedRunningInstance`
+holds an independent running mutex while the test runtime starts and exits.
+The fixture passes 30/30 without acquiring, stopping, or activating the
+production tray identity. Ticket 344 is complete.
+
+## 346. Publish immutable resident admission evidence before native callbacks
+
+**What to build:** Replace native-submit callback-time resident providers with
+one immutable, generation-bound admission-evidence snapshot. It contains the
+selected profile's readiness admission and ChatGPT proof diagnostics. The
+resident publishes a replacement snapshot whenever readiness or proof evidence
+changes; the hook callback only reads that already-published value.
+
+**Blocked by:** 343. Separate profile verification from low-level native input
+handling.
+
+**State owner:** The resident runtime owns the evidence snapshot and publishes
+it atomically with the matching runtime generation. The input callback owns no
+profile/proof-store access and cannot recalculate admission.
+
+**Fail-closed state:** Missing, stale, mismatched, or unavailable evidence
+suppresses the selected Send. Unrelated application input still passes through.
+
+**Allowed transitions:** `resident state/proof change -> evidence snapshot
+built off-callback -> matching runtime generation publishes -> callback reads`.
+An old worker may not overwrite a newer generation's evidence.
+
+**Deterministic proof:** Inject profile/proof stores that throw when touched
+after hook startup. Prove callback handling of keyboard, pointer, and replay
+performs zero store reads; prove readiness and proof transitions publish a new
+generation and stale publications remain fail-closed, without timers, UIA, or
+cloud access.
+
+- [x] Remove callback-time `SetResidentReadinessAdmissionProvider` and
+      `SetResidentProtectedClaimProvider` evaluation from the production path.
+- [x] Publish an immutable evidence snapshot before hook activation and on each
+      resident readiness/proof transition.
+- [x] Cover zero-I/O callback handling plus stale-generation and unrelated-input
+      behaviour with throwing store fixtures.
+
+**Review finding (2026-08-15):** Ticket 343 removed direct profile and
+release-proof store reads from `NativeSubmitInterceptionController`. The current
+resident providers are still evaluated on the callback path, and the readiness
+provider may read `ResidentOperationalReadinessProofStore`. Track this
+separately so the already-completed profile/input boundary remains small while
+the stricter no-I/O callback invariant receives a focused proof.
+
+**Implementation evidence (2026-08-15):** `ProtectionSnapshot` now carries
+`NativeSubmitResidentEvidence`. Each snapshot is enriched before publication;
+only a successful CAS then publishes the immutable evidence to its runtime
+controllers. Keyboard and pointer dispatch pass the captured evidence directly,
+and the old callback-time providers were removed. Tests cover admitted/blocked
+evidence, same-process readiness transition, repeated callbacks after a single
+profile-adapter load (with a throwing post-snapshot adapter), stale reload
+safety, and unrelated input. Full suite: `1723/1723`; `--self-test` and
+`--product-smoke` passed. Ticket 346 is complete.
+
+## 345. Move resident setup, retry, and recovery workflows into one coordinator
+
+**What to build:** A tray user can start setup, retry protected Send, or repair
+local protection through one explicit intent. The resident workflow coordinator
+runs the complete operation, publishes each raw-free lifecycle stage and the
+terminal result, and the tray only renders that published result.
+
+**Blocked by:** 341. Deepen the resident protection runtime behind one
+published interface.
+
+**State owner:** The resident workflow coordinator owns workflow ordering,
+attempt correlation, runtime candidate activation/rollback, and terminal
+publication. `WindowsTrayApplicationContext` owns only WinForms lifetime,
+intent dispatch, and rendering of the resident snapshot.
+
+**Fail-closed state:** A coordinator start, candidate build, activation,
+rollback, recovery, or terminal publication failure retains the current safe
+runtime or blocks selected Send. The tray cannot infer success or start an
+uncorrelated worker.
+
+**Allowed transitions:** `intent -> resident running(attempt) -> terminal`
+for setup, retry, and recovery. Only the matching active attempt can publish a
+terminal result. A stale completion is ignored and cannot roll back a newer
+runtime.
+
+**Deterministic proof:** Inject setup/retry/recovery workers, candidate runtime
+factories, and a published-state observer. Prove success, activation failure,
+cancellation, stale completion, and tray projection without WinForms timing,
+desktop focus, or cloud submission.
+
+- [x] Setup, retry, and local recovery workflow ordering move out of
+      `WindowsTrayApplicationContext` into one resident coordinator.
+- [x] Tray menu/status actions dispatch intents and render published state only.
+- [x] Tests prove correlated success/failure/cancellation and stale completion
+      behaviour through the coordinator port.
+
+**Implementation progress (2026-08-15):** `ResidentProtectionWorkflowCoordinator`
+now owns the setup, retry, and local-protection recovery state machine. The
+WinForms tray forwards user intent, performs only the confirmation dialog for
+destructive local repair, and renders resident-published state. The former tray
+workflow methods and `TrayRemediationActionExecutor` were removed; the retained
+`WindowsTrayApplicationContext` tests exercise the coordinator through its
+injected background/UI queues. The direct coordinator acceptance matrix remains
+open until the success, cancellation, stale-completion, activation rollback,
+retry failure, and recovery failure paths are named and tested at the
+coordinator boundary.
+
+**Acceptance evidence (2026-08-15):** `WindowsTrayApplicationContext` tests
+cover first-run setup success/cancellation, stale and missing setup attempt IDs,
+candidate activation rollback, retry failure, successful recovery, failed
+recovery, recovery exception, cancellation, and raw-free status projection.
+They inject background/UI queues and runtime factories; no cloud target or
+desktop focus is used. Ticket 345 is complete.
+
+**Implementation slices (2026-08-15):**
+
+1. **Resident coordinator extraction**
+   - **Completed (2026-08-15):** `ResidentProtectionWorkflowCoordinator` owns
+     operation single-flight, setup attempt correlation, candidate activation,
+     persistence/target rollback, retry activation, and local recovery.
+   - **State owner:** the coordinator owns setup/retry/recovery attempt
+     correlation, candidate activation and rollback; the tray owns only local
+     UI lifetime and user intent dispatch.
+   - **Fail-closed:** a worker, candidate, persistence, reload, or terminal
+     publication failure leaves the prior resident runtime active when safe,
+     otherwise leaves selected Send blocked.
+   - **Allowed transitions:** `intent -> running(attempt) -> terminal`; stale
+     completion is ignored, and only the active attempt may publish terminal
+     state.
+   - **Deterministic proof:** injected background/UI queues, setup/retry/
+     recovery workers, runtime factories, and a snapshot observer; no timers,
+     desktop focus, or cloud submission.
+2. **Tray contraction**
+   - **Completed (2026-08-15):** tray actions now forward intent to the
+     coordinator; the tray retains only user confirmation and rendering hooks.
+   - **Blocked by:** resident coordinator extraction.
+   - Replace tray workflow methods with coordinator intent calls and render its
+     published status/notice only. Preserve the existing setup-complete callback
+     as an observer, not as a workflow owner.
+3. **Coordinator acceptance matrix**
+   - **Blocked by:** tray contraction.
+   - Prove setup success, activation failure/rollback, retry failure, recovery
+     failure, cancellation, and stale completion. Confirm the tray cannot
+     independently mark protection ready or release Send.

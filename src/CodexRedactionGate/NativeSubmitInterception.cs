@@ -706,6 +706,19 @@ public sealed class NativeSubmitEmergencyState
     }
 }
 
+public sealed record NativeSubmitResidentEvidence(
+    bool ReadinessAdmitted,
+    ChatGptProtectedClaimResult ChatGptClaim)
+{
+    public static NativeSubmitResidentEvidence NotRequired { get; } = new(
+        ReadinessAdmitted: true,
+        new ChatGptProtectedClaimResult(
+            OsInteractionStatusIds.Protected,
+            "not_applicable",
+            "not_applicable",
+            "not_applicable"));
+}
+
 public sealed class NativeSubmitInterceptionController
 {
     private readonly SubmitBindingProfile _profile;
@@ -713,46 +726,17 @@ public sealed class NativeSubmitInterceptionController
     private readonly NativeSubmitEnterprisePolicy _policy;
     private readonly Func<DateTimeOffset> _clock;
     private readonly Func<TextSurfaceDiscoveryResult>? _activeSurfaceDiscovery;
-    private Func<ChatGptProtectedClaimResult>? _residentProtectedClaimProvider;
-    private Func<bool>? _residentReadinessAdmissionProvider;
     private int _liveContractCapturePending;
-    private readonly IFirstRunSetupController? _firstRunSetupController;
-    private readonly DefaultStorageLayout? _setupLayout;
+    private readonly NativeSubmitProfileSnapshot _profileSnapshot;
+    private NativeSubmitResidentEvidence _residentEvidence = NativeSubmitResidentEvidence.NotRequired;
 
     internal SubmitBindingProfile Profile => _profile;
+    internal NativeSubmitProfileSnapshot ProfileSnapshot => _profileSnapshot;
 
-    public bool IsSetupRequired(DefaultStorageLayout layout, string? profileId = null)
+    internal void SetResidentEvidence(NativeSubmitResidentEvidence evidence)
     {
-        return GetSetupReadinessStatus(layout, profileId) != OsInteractionStatusIds.Protected;
-    }
-
-    internal string GetSetupReadinessStatus(DefaultStorageLayout layout, string? profileId = null)
-    {
-        ArgumentNullException.ThrowIfNull(layout);
-
-        if (_firstRunSetupController is null)
-        {
-            return _profile.IsSetupComplete
-                ? OsInteractionStatusIds.Protected
-                : OsInteractionStatusIds.NativeSubmitSetupRequired;
-        }
-
-        try
-        {
-            var setupResult = _firstRunSetupController.GetSetupStatus(layout, profileId ?? _profile.ProfileId);
-            if (string.Equals(setupResult.Code, "profiles_load_failed", StringComparison.Ordinal))
-            {
-                return OsInteractionStatusIds.ProfilesUnavailable;
-            }
-
-            return !setupResult.Succeeded || setupResult.State.Required
-                ? OsInteractionStatusIds.NativeSubmitSetupRequired
-                : OsInteractionStatusIds.Protected;
-        }
-        catch (Exception)
-        {
-            return OsInteractionStatusIds.ProfilesUnavailable;
-        }
+        ArgumentNullException.ThrowIfNull(evidence);
+        Volatile.Write(ref _residentEvidence, evidence);
     }
 
     public NativeSubmitInterceptionController(
@@ -761,27 +745,14 @@ public sealed class NativeSubmitInterceptionController
         NativeSubmitEnterprisePolicy? policy = null,
         Func<DateTimeOffset>? clock = null,
         Func<TextSurfaceDiscoveryResult>? activeSurfaceDiscovery = null,
-        IFirstRunSetupController? firstRunSetupController = null,
-        DefaultStorageLayout? setupLayout = null)
+        NativeSubmitProfileSnapshot? profileSnapshot = null)
     {
         _profile = profile ?? throw new ArgumentNullException(nameof(profile));
         _emergencyState = emergencyState ?? throw new ArgumentNullException(nameof(emergencyState));
         _policy = policy ?? NativeSubmitEnterprisePolicy.ConsumerDefault;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _activeSurfaceDiscovery = activeSurfaceDiscovery;
-        _firstRunSetupController = firstRunSetupController;
-        _setupLayout = setupLayout;
-    }
-
-    internal void SetResidentProtectedClaimProvider(
-        Func<ChatGptProtectedClaimResult>? provider)
-    {
-        _residentProtectedClaimProvider = provider;
-    }
-
-    internal void SetResidentReadinessAdmissionProvider(Func<bool>? provider)
-    {
-        _residentReadinessAdmissionProvider = provider;
+        _profileSnapshot = profileSnapshot ?? NativeSubmitProfileSnapshot.FromProfile(_profile);
     }
 
     internal bool ConsumeLiveContractCapture()
@@ -798,7 +769,8 @@ public sealed class NativeSubmitInterceptionController
         TextSurfaceDescriptor activeSurface,
         Func<OsInteractionResult>? submitFlow = null,
         bool hookHealthy = true,
-        TextSurfaceDiscoveryResult? activeSurfaceDiscovery = null)
+        TextSurfaceDiscoveryResult? activeSurfaceDiscovery = null,
+        NativeSubmitResidentEvidence? residentEvidence = null)
     {
         ArgumentNullException.ThrowIfNull(activeSurface);
 
@@ -876,13 +848,15 @@ public sealed class NativeSubmitInterceptionController
             _profile.SubmitBinding.ToNativeKeyGesture(),
             submitFlow,
             hookHealthy,
-            activeSurfaceDiscovery);
+            activeSurfaceDiscovery,
+            residentEvidence);
     }
 
     public NativeSubmitInterceptionResult HandleIdentifiedSendControl(
         TextSurfaceDiscoveryResult composerDiscovery,
         Func<OsInteractionResult>? submitFlow = null,
-        bool hookHealthy = true)
+        bool hookHealthy = true,
+        NativeSubmitResidentEvidence? residentEvidence = null)
     {
         ArgumentNullException.ThrowIfNull(composerDiscovery);
         var diagnostics = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -910,14 +884,20 @@ public sealed class NativeSubmitInterceptionController
                 });
         }
 
-        return HandleButtonClick(composerDiscovery.Surface, submitFlow, hookHealthy, composerDiscovery);
+        return HandleButtonClick(
+            composerDiscovery.Surface,
+            submitFlow,
+            hookHealthy,
+            composerDiscovery,
+            residentEvidence);
     }
 
     public NativeSubmitInterceptionResult HandleGesture(
         NativeKeyGesture gesture,
         Func<OsInteractionResult>? submitFlow = null,
         bool hookHealthy = true,
-        TextSurfaceDiscoveryResult? activeSurfaceDiscovery = null)
+        TextSurfaceDiscoveryResult? activeSurfaceDiscovery = null,
+        NativeSubmitResidentEvidence? residentEvidence = null)
     {
         ArgumentNullException.ThrowIfNull(gesture);
         var diagnostics = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -949,10 +929,9 @@ public sealed class NativeSubmitInterceptionController
             return PassThrough(diagnostics);
         }
 
-        // A binding change is persisted before it is verified. Consult the store
-        // on the guarded path so the old in-memory binding cannot become a raw
-        // submission bypass while the tray is waiting to reload its runtime.
-        var setupCandidateGesture = IsProfileSetupRequired()
+        // A pending binding is supplied in the resident snapshot before this
+        // callback runs, so a newly selected Send key cannot bypass setup.
+        var setupCandidateGesture = _profileSnapshot.SetupStatus != OsInteractionStatusIds.Protected
             && IsSetupPendingSubmitGesture(gesture);
         if (_profile.NewlineBinding?.Matches(gesture) == true && !setupCandidateGesture)
         {
@@ -987,8 +966,8 @@ public sealed class NativeSubmitInterceptionController
             return PassThrough(diagnostics);
         }
 
-        if (_residentReadinessAdmissionProvider is not null
-            && !_residentReadinessAdmissionProvider())
+        var evidence = residentEvidence ?? Volatile.Read(ref _residentEvidence);
+        if (!evidence.ReadinessAdmitted)
         {
             diagnostics["fail_closed_reason"] = "resident_readiness_unproven";
             return new NativeSubmitInterceptionResult(
@@ -1002,7 +981,7 @@ public sealed class NativeSubmitInterceptionController
         // Resident admission is already fail-closed on local readiness and the
         // selected target above. Release/CI proof is recorded here as a
         // diagnostic, but must not become a second runtime admission gate.
-        RecordChatGptProtectedClaimDiagnostics(diagnostics);
+        RecordChatGptProtectedClaimDiagnostics(diagnostics, evidence);
 
         var enforcement = EvaluateEnterpriseEnforcement(hookHealthy);
         if (enforcement is not null)
@@ -1055,22 +1034,16 @@ public sealed class NativeSubmitInterceptionController
     }
 
     private void RecordChatGptProtectedClaimDiagnostics(
-        Dictionary<string, string> diagnostics)
+        Dictionary<string, string> diagnostics,
+        NativeSubmitResidentEvidence evidence)
     {
-        if (_setupLayout is null
-            || !string.Equals(_profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
+        if (!string.Equals(_profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
             || !_profile.IsProtected)
         {
             return;
         }
 
-        var claim = _residentProtectedClaimProvider is null
-            ? new ChatGptProtectedClaimResult(
-                ChatGptProtectedClaimEvaluator.DegradedStatus,
-                "unavailable",
-                "unavailable",
-                "resident_snapshot_unavailable")
-            : _residentProtectedClaimProvider();
+        var claim = evidence.ChatGptClaim;
         diagnostics["protected_claim_status"] = claim.Status;
         diagnostics["reference_acceptance_status"] = claim.ReferenceStatus;
         diagnostics["live_contract_status"] = claim.LiveContractStatus;
@@ -1083,11 +1056,7 @@ public sealed class NativeSubmitInterceptionController
 
         diagnostics["release_evidence_status"] = "not_current";
 
-        if (_residentProtectedClaimProvider is not null
-            && ChatGptAcceptanceProofStore.IsLiveContractArmed(
-                _setupLayout,
-                _profile,
-                BuildVersion.Current)
+        if (_profileSnapshot.LiveContractCaptureArmed
             && Interlocked.CompareExchange(ref _liveContractCapturePending, 1, 0) == 0)
         {
             diagnostics["live_contract_capture"] = "armed_reserved";
@@ -1313,52 +1282,19 @@ public sealed class NativeSubmitInterceptionController
     private NativeSubmitInterceptionResult? SuppressSelectedSubmitIfSetupRequired(
         Dictionary<string, string> diagnostics)
     {
-        if (_firstRunSetupController is null)
+        if (_profileSnapshot.SetupStatus == OsInteractionStatusIds.Protected)
         {
             return null;
         }
 
-        var setupLayout = _setupLayout ?? DefaultStorageLayout.CreateDefault();
-        FirstRunSetupResult setupResult;
-        try
-        {
-            setupResult = _firstRunSetupController.GetSetupStatus(setupLayout, _profile.ProfileId);
-        }
-        catch (Exception)
-        {
-            diagnostics["setup_required"] = "true";
-            diagnostics["setup_status_error"] = "true";
-            return new NativeSubmitInterceptionResult(
-                OsInteractionStatusIds.NativeSubmitSetupRequired,
-                SuppressOriginalInput: true,
-                Applied: false,
-                Submitted: false,
-                Diagnostics: diagnostics);
-        }
-
-        if (string.Equals(setupResult.Code, "profiles_load_failed", StringComparison.Ordinal))
+        if (_profileSnapshot.SetupStatus == OsInteractionStatusIds.ProfilesUnavailable)
         {
             diagnostics["profile_settings_recovery"] = "required";
             return new NativeSubmitInterceptionResult(
-                OsInteractionStatusIds.ProfilesUnavailable,
-                SuppressOriginalInput: true,
-                Applied: false,
-                Submitted: false,
-                Diagnostics: diagnostics);
-        }
-
-        if (setupResult.Succeeded && !setupResult.State.Required)
-        {
-            return null;
-        }
-
-        if (!setupResult.State.UnprotectedProfileIds.Contains(_profile.ProfileId, StringComparer.Ordinal))
-        {
-            return null;
+                OsInteractionStatusIds.ProfilesUnavailable, true, false, false, diagnostics);
         }
 
         diagnostics["setup_required"] = "true";
-        diagnostics["unprotected_profiles"] = string.Join(",", setupResult.State.UnprotectedProfileIds);
         return new NativeSubmitInterceptionResult(
             OsInteractionStatusIds.NativeSubmitSetupRequired,
             SuppressOriginalInput: true,
@@ -1385,47 +1321,9 @@ public sealed class NativeSubmitInterceptionController
             return true;
         }
 
-        if (_firstRunSetupController is null)
-        {
-            return IsSetupCandidateGesture(gesture);
-        }
-
-        try
-        {
-            var setupLayout = _setupLayout ?? DefaultStorageLayout.CreateDefault();
-            var storedProfile = SubmitBindingProfileStore.Load(setupLayout).Profiles
-                .FirstOrDefault(profile => string.Equals(
-                    profile.ProfileId,
-                    _profile.ProfileId,
-                    StringComparison.Ordinal));
-            return storedProfile?.SubmitBinding?.Matches(gesture) == true
-                || (storedProfile?.SubmitBinding is null && IsSetupCandidateGesture(gesture));
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
-        {
-            // The previous verified Send key remains guarded above. Retain the
-            // conservative default while a pending profile cannot be read.
-            return IsSetupCandidateGesture(gesture);
-        }
-    }
-
-    private bool IsProfileSetupRequired()
-    {
-        if (_firstRunSetupController is null)
-        {
-            return !_profile.IsSetupComplete;
-        }
-
-        var setupLayout = _setupLayout ?? DefaultStorageLayout.CreateDefault();
-        try
-        {
-            var result = _firstRunSetupController.GetSetupStatus(setupLayout, _profile.ProfileId);
-            return !result.Succeeded || result.State.Required;
-        }
-        catch (Exception)
-        {
-            return true;
-        }
+        var pendingBinding = _profileSnapshot.PendingSubmitBinding;
+        return pendingBinding?.Matches(gesture) == true
+            || (pendingBinding is null && IsSetupCandidateGesture(gesture));
     }
 
     private static IReadOnlyDictionary<string, string> Merge(
@@ -2699,8 +2597,10 @@ public static class NativeSubmitProductSmokeRunner
                 profile,
                 new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
                 activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateSurface("codex-desktop", "setup-smoke")),
-                firstRunSetupController: new FirstRunSetupController(),
-                setupLayout: layout);
+                profileSnapshot: new NativeSubmitProfileSnapshot(
+                    profile.ProfileId,
+                    OsInteractionStatusIds.NativeSubmitSetupRequired,
+                    profile.SubmitBinding));
             var result = controller.HandleGesture(new NativeKeyGesture("Enter"));
             return result.Status == OsInteractionStatusIds.NativeSubmitSetupRequired
                 && result.SuppressOriginalInput

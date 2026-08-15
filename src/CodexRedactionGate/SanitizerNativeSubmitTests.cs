@@ -577,6 +577,122 @@ public partial class SanitizerTests
         Assert.That(result.Diagnostics["active_surface_gate"], Is.EqualTo("selected_profile"));
     }
 
+    [TestCase(OsInteractionStatusIds.Protected, OsInteractionStatusIds.NativeSubmitGuarded)]
+    [TestCase(OsInteractionStatusIds.NativeSubmitSetupRequired, OsInteractionStatusIds.NativeSubmitSetupRequired)]
+    [TestCase(OsInteractionStatusIds.ProfilesUnavailable, OsInteractionStatusIds.ProfilesUnavailable)]
+    public void NativeSubmitInterception_UsesCapturedProfileSnapshotForAllSetupStatuses(
+        string snapshotStatus,
+        string expectedStatus)
+    {
+        var profile = CreateProtectedProfile();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                profile.ProfileId,
+                snapshotStatus,
+                profile.SubmitBinding));
+
+        var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+
+        Assert.That(result.Status, Is.EqualTo(expectedStatus));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+        if (snapshotStatus == OsInteractionStatusIds.ProfilesUnavailable)
+        {
+            Assert.That(result.Diagnostics["profile_settings_recovery"], Is.EqualTo("required"));
+        }
+    }
+
+    [TestCase(true, OsInteractionStatusIds.Protected)]
+    [TestCase(false, OsInteractionStatusIds.ProfilesUnavailable)]
+    public void NativeSubmitProfileSnapshotAdapter_BuildsRuntimeStatusBeforeInputCapture(
+        bool storageSucceeded,
+        string expectedStatus)
+    {
+        var profile = CreateProtectedProfile();
+        var adapter = new FixedSubmitBindingProfileAdapter(
+            new SubmitBindingProfileStoreResult(
+                storageSucceeded,
+                storageSucceeded ? "loaded" : "profiles_load_failed",
+                storageSucceeded ? new[] { profile } : Array.Empty<SubmitBindingProfile>()));
+        var layout = DefaultStorageLayout.Create(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+
+        var snapshot = NativeSubmitProfileSnapshotAdapter.Load(adapter, layout, profile);
+
+        Assert.That(snapshot.SetupStatus, Is.EqualTo(expectedStatus));
+        Assert.That(snapshot.PendingSubmitBinding, Is.EqualTo(profile.SubmitBinding));
+        Assert.That(adapter.LoadCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void NativeSubmitProfileSnapshotAdapter_CapturesLiveContractArmBeforeInputCapture()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-profile-snapshot-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(directory);
+            var profile = CreateVerifiedChatGptProfile();
+            Assert.That(
+                ChatGptAcceptanceProofStore.ArmLiveContract(layout, profile),
+                Is.True);
+            var adapter = new FixedSubmitBindingProfileAdapter(
+                new SubmitBindingProfileStoreResult(true, "loaded", new[] { profile }));
+
+            var snapshot = NativeSubmitProfileSnapshotAdapter.Load(adapter, layout, profile);
+
+            Assert.That(snapshot.LiveContractCaptureArmed, Is.True);
+            Assert.That(adapter.LoadCalls, Is.EqualTo(1));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void NativeSubmitProfileSnapshotAdapter_MissingSelectedProfileFailsClosed()
+    {
+        var profile = CreateProtectedProfile();
+        var unrelatedProfile = CreateVerifiedChatGptProfile();
+        var loaded = new SubmitBindingProfileStoreResult(
+            true,
+            "loaded",
+            new[] { unrelatedProfile });
+        var layout = DefaultStorageLayout.Create(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+
+        var snapshot = NativeSubmitProfileSnapshotAdapter.FromLoadResult(loaded, profile, layout);
+
+        Assert.That(snapshot.ProfileId, Is.EqualTo(profile.ProfileId));
+        Assert.That(snapshot.SetupStatus, Is.EqualTo(OsInteractionStatusIds.ProfilesUnavailable));
+        Assert.That(snapshot.PendingSubmitBinding, Is.EqualTo(profile.SubmitBinding));
+    }
+
+    [Test]
+    public void NativeSubmitInterception_ReusesPublishedEvidenceWithoutReadingTheProfileAdapter()
+    {
+        var profile = CreateProtectedProfile();
+        var adapter = new FixedSubmitBindingProfileAdapter(
+            new SubmitBindingProfileStoreResult(true, "loaded", new[] { profile }));
+        var layout = DefaultStorageLayout.Create(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var profileSnapshot = NativeSubmitProfileSnapshotAdapter.Load(adapter, layout, profile);
+        adapter.ThrowAfterFirstLoad = true;
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)),
+            profileSnapshot: profileSnapshot);
+        var evidence = NativeSubmitResidentEvidence.NotRequired;
+
+        _ = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true), residentEvidence: evidence);
+        _ = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true), residentEvidence: evidence);
+
+        Assert.That(adapter.LoadCalls, Is.EqualTo(1));
+    }
+
     [Test]
     public void NativeSubmitInterception_SetupRequiredSuppressesOnlySelectedSubmitBinding()
     {
@@ -586,7 +702,10 @@ public partial class SanitizerTests
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: setup);
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                profile.ProfileId,
+                OsInteractionStatusIds.NativeSubmitSetupRequired,
+                profile.SubmitBinding));
 
         var unrelated = controller.HandleGesture(new NativeKeyGesture("A", Ctrl: true));
         var newline = controller.HandleGesture(new NativeKeyGesture("Enter", Shift: true));
@@ -610,7 +729,10 @@ public partial class SanitizerTests
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop")),
-            firstRunSetupController: setup);
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                profile.ProfileId,
+                OsInteractionStatusIds.NativeSubmitSetupRequired,
+                profile.SubmitBinding));
 
         var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
 
@@ -2390,7 +2512,10 @@ public partial class SanitizerTests
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: FixedFirstRunSetupController.FailedFor("codex-desktop"));
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                profile.ProfileId,
+                OsInteractionStatusIds.ProfilesUnavailable,
+                profile.SubmitBinding));
 
         var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
 
@@ -3057,7 +3182,10 @@ public partial class SanitizerTests
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: setup);
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                profile.ProfileId,
+                OsInteractionStatusIds.NativeSubmitSetupRequired,
+                profile.SubmitBinding));
 
         // Unrelated keys should pass through without setup-required suppression
         var unrelatedKey = controller.HandleGesture(new NativeKeyGesture("A"));
@@ -3149,17 +3277,17 @@ public partial class SanitizerTests
             // Get status from setup controller directly
             var setupStatus = setupController.GetSetupStatus(layout);
 
-            // Create native submit controller with same setup controller
+            // The resident runtime publishes the setup snapshot before the
+            // input callback is installed.
+            var pendingProfile = FirstRunSetupController.CreateDefaultSetupProfile("codex-desktop")!;
             var controller = new NativeSubmitInterceptionController(
-                CreateProtectedProfile(),
+                pendingProfile,
                 new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-                firstRunSetupController: setupController);
+                profileSnapshot: NativeSubmitProfileSnapshot.FromProfile(pendingProfile));
 
-            // Verify tray uses same setup state
-            var trayUsesSharedState = setupController.IsSetupComplete(layout) == controller.IsSetupRequired(layout);
-
-            // If setup is required, IsSetupRequired should return true
-            Assert.That(setupStatus.State.Required, Is.EqualTo(controller.IsSetupRequired(layout)));
+            var snapshotRequiresSetup = controller.ProfileSnapshot.SetupStatus
+                != OsInteractionStatusIds.Protected;
+            Assert.That(setupStatus.State.Required, Is.EqualTo(snapshotRequiresSetup));
         }
         finally
         {
@@ -3182,13 +3310,19 @@ public partial class SanitizerTests
             codexProfile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: setup);
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                codexProfile.ProfileId,
+                OsInteractionStatusIds.NativeSubmitSetupRequired,
+                codexProfile.SubmitBinding));
 
         var chatgptController = new NativeSubmitInterceptionController(
             chatgptProfile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery,
-            firstRunSetupController: setup);
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                chatgptProfile.ProfileId,
+                OsInteractionStatusIds.NativeSubmitSetupRequired,
+                chatgptProfile.SubmitBinding));
 
         // Codex (matching profile) should be suppressed
         var codexSubmit = codexController.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
@@ -3591,7 +3725,10 @@ public class HandleButtonClickTests : SanitizerTests
                 TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")))),
             profile,
             () => submitCalls++,
-            firstRunSetupController: FixedFirstRunSetupController.FailedFor("codex-desktop"));
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                profile.ProfileId,
+                OsInteractionStatusIds.ProfilesUnavailable,
+                profile.SubmitBinding));
 
         Assert.That(tray.Start(), Is.True);
         Assert.That(tray.State.SetupRequired, Is.False);
@@ -4235,7 +4372,10 @@ public class HandleButtonClickTests : SanitizerTests
             activeSurfaceResult: TextSurfaceDiscoveryResult.Failure(
                 OsInteractionStatusIds.NotComposer,
                 new Dictionary<string, string> { ["profile_id"] = "codex-desktop" }),
-            firstRunSetupController: new ThrowingSetupStatusController());
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                profile.ProfileId,
+                OsInteractionStatusIds.NativeSubmitSetupRequired,
+                profile.SubmitBinding));
 
         Assert.That(tray.Start(), Is.True);
         hook.Trigger(new NativeKeyGesture(key, TargetWindow: new IntPtr(77), TargetProcessId: 7));
@@ -4412,13 +4552,16 @@ public class HandleButtonClickTests : SanitizerTests
             CreateProtectedProfile(),
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: new ThrowingSetupStatusController());
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                "codex-desktop",
+                OsInteractionStatusIds.NativeSubmitSetupRequired,
+                SubmitKeyBinding.Parse("Ctrl+Enter").Binding));
 
         var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
 
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitSetupRequired));
         Assert.That(result.SuppressOriginalInput, Is.True);
-        Assert.That(result.Diagnostics["setup_status_error"], Is.EqualTo("true"));
+        Assert.That(result.Diagnostics["setup_required"], Is.EqualTo("true"));
     }
 
     [Test]
@@ -4558,7 +4701,7 @@ public class HandleButtonClickTests : SanitizerTests
         string activeProfileId = "codex-desktop",
         TextSurfaceDiscoveryResult? activeSurfaceResult = null,
         Func<IntPtr, string?>? selectedWindowProfileResolver = null,
-        IFirstRunSetupController? firstRunSetupController = null,
+        NativeSubmitProfileSnapshot? profileSnapshot = null,
         Action<string>? protectedSendStageObserver = null,
         Action? beforeProtectedSendTracePublishForTesting = null)
     {
@@ -4567,7 +4710,7 @@ public class HandleButtonClickTests : SanitizerTests
             new NativeSubmitInterceptionController(
                 profile,
                 new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-                firstRunSetupController: firstRunSetupController),
+                profileSnapshot: profileSnapshot),
             () =>
             {
                 onSubmit();
@@ -4622,8 +4765,10 @@ public class HandleButtonClickTests : SanitizerTests
                 oldProfile,
                 new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
                 activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-                firstRunSetupController: new FirstRunSetupController(),
-                setupLayout: layout);
+                profileSnapshot: new NativeSubmitProfileSnapshot(
+                    oldProfile.ProfileId,
+                    OsInteractionStatusIds.NativeSubmitSetupRequired,
+                    changedProfile.SubmitBinding));
 
             // Ctrl+Enter was the old newline key but is the newly selected Send
             // key. It must remain blocked until the new pair is verified and
@@ -4668,8 +4813,10 @@ public class HandleButtonClickTests : SanitizerTests
                     oldProfile,
                     new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
                     activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-                    firstRunSetupController: new FirstRunSetupController(),
-                    setupLayout: layout),
+                    profileSnapshot: new NativeSubmitProfileSnapshot(
+                        oldProfile.ProfileId,
+                        OsInteractionStatusIds.NativeSubmitSetupRequired,
+                        pendingProfile.SubmitBinding)),
                 () =>
                 {
                     oldSubmitCalls++;
@@ -4706,8 +4853,7 @@ public class HandleButtonClickTests : SanitizerTests
                     verifiedProfile,
                     new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
                     activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-                    firstRunSetupController: new FirstRunSetupController(),
-                    setupLayout: layout),
+                    profileSnapshot: NativeSubmitProfileSnapshot.FromProfile(verifiedProfile)),
                 () =>
                 {
                     verifiedSubmitCalls++;
@@ -5102,6 +5248,231 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
+    public void ResidentProtectionRuntimeFacade_PublishesWholeSnapshotAndKeepsPriorRuntimeWhenReloadFails()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var failedHook = new FakeNativeSubmitHookHost { StartResult = false };
+        var profile = CreateProtectedProfile();
+        var controller = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => CreateSubmittedResult(profile.ProfileId),
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var runtime = new ResidentProtectionRuntimeFacade(controller);
+        var publishedGenerations = new List<long>();
+        runtime.SnapshotChanged += (_, _) => publishedGenerations.Add(runtime.Snapshot.Generation);
+        var failedCandidate = NativeSubmitRuntime.CreateTest(
+            failedHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+
+        Assert.That(runtime.Start(), Is.True);
+        var before = runtime.Snapshot;
+
+        Assert.That(runtime.Reload(new NativeSubmitRuntimeSet(failedHook, new[] { failedCandidate })), Is.False);
+
+        Assert.That(runtime.Snapshot.Generation, Is.EqualTo(before.Generation));
+        Assert.That(runtime.Snapshot.State, Is.EqualTo(before.State));
+        Assert.That(oldHook.Started, Is.True);
+        Assert.That(publishedGenerations, Is.Not.Empty);
+    }
+
+    [Test]
+    public void ResidentProtectionRuntimeUiPort_DoesNotExposeReloadOrWorkflowTransitions()
+    {
+        var operations = typeof(IResidentProtectionRuntime)
+            .GetMethods()
+            .Where(method => !method.IsSpecialName)
+            .Select(method => method.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.That(operations, Is.EqualTo(new[]
+        {
+            "RefreshDiagnostics",
+            "Start",
+            "Stop",
+            "TryDisableProtection"
+        }));
+        Assert.That(typeof(IResidentProtectionRuntime).GetProperty("Snapshot"), Is.Not.Null);
+        Assert.That(typeof(IResidentProtectionRuntime).GetMethod("Reload"), Is.Null);
+        Assert.That(typeof(IResidentProtectionRuntime).GetMethod("StartOperationalAction"), Is.Null);
+        Assert.That(typeof(IResidentProtectionRuntime).GetMethod("PublishSetupVerificationProgress"), Is.Null);
+    }
+
+    [Test]
+    public void ResidentProtectionRuntimeWorkflowPort_ParallelReloadsPublishOnlyCompleteSnapshots()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var firstHook = new FakeNativeSubmitHookHost();
+        var secondHook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var controller = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => CreateSubmittedResult(profile.ProfileId),
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        IResidentProtectionWorkflowRuntime runtime = new ResidentProtectionRuntimeFacade(controller);
+        using var firstHookStarted = new ManualResetEventSlim(false);
+        using var releaseFirstHook = new ManualResetEventSlim(false);
+        firstHook.OnStarted = _ =>
+        {
+            firstHookStarted.Set();
+            releaseFirstHook.Wait();
+        };
+
+        var firstCandidate = NativeSubmitRuntime.CreateTest(
+            firstHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var secondCandidate = NativeSubmitRuntime.CreateTest(
+            secondHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var firstResult = false;
+        var secondResult = false;
+
+        Assert.That(runtime.Start(), Is.True);
+        var first = new Thread(() => firstResult = runtime.Reload(new NativeSubmitRuntimeSet(firstHook, new[] { firstCandidate })));
+        var second = new Thread(() => secondResult = runtime.Reload(new NativeSubmitRuntimeSet(secondHook, new[] { secondCandidate })));
+        first.Start();
+        Assert.That(firstHookStarted.Wait(TimeSpan.FromSeconds(2)), Is.True);
+        second.Start();
+        releaseFirstHook.Set();
+        Assert.That(first.Join(TimeSpan.FromSeconds(2)), Is.True);
+        Assert.That(second.Join(TimeSpan.FromSeconds(2)), Is.True);
+
+        Assert.That(firstResult, Is.True);
+        Assert.That(secondResult, Is.True);
+        Assert.That(runtime.Snapshot.Generation, Is.EqualTo(2));
+        Assert.That(runtime.Snapshot.RuntimeSet!.HookHost, Is.SameAs(secondHook));
+        Assert.That(runtime.Snapshot.State.NativeSubmitEnabled, Is.True);
+        Assert.That(runtime.Snapshot.State.ComposerProtected, Is.True);
+        Assert.That(runtime.Snapshot.State.ProtectedSendBinding, Is.EqualTo(profile.SubmitBinding!.DisplayText));
+    }
+
+    [Test]
+    public void ResidentProtectionRuntimeFacade_PublishesLifecycleAndRecoveryCommandsThroughSnapshot()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(directory);
+            var profile = CreateProtectedProfile();
+            var controller = TrayProtectionController.CreateTest(
+                new FakeTrayHotkeyHost(),
+                () => throw new InvalidOperationException("Manual scan should not run."),
+                new FakeNativeSubmitHookHost(),
+                new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () => CreateSubmittedResult(profile.ProfileId),
+                profile,
+                storageLayout: layout);
+            var runtime = new ResidentProtectionRuntimeFacade(controller);
+
+            var started = runtime.StartOperationalAction(
+                "local_recovery",
+                "starting",
+                userInputRequired: false,
+                nextAction: "wait_for_result");
+            Assert.That(started.Started, Is.True);
+            Assert.That(runtime.PublishOperationalActionStage(
+                "reloading",
+                userInputRequired: false,
+                nextAction: "wait_for_result",
+                started.AttemptId), Is.True);
+            runtime.PublishLocalProtectionStatus(LocalProtectionRecovery.ReloadingCode);
+
+            Assert.That(runtime.State.EffectiveOperationalAction.Stage, Is.EqualTo("reloading"));
+            Assert.That(runtime.State.LocalProtectionStatus, Is.EqualTo(LocalProtectionRecovery.ReloadingCode));
+
+            Assert.That(runtime.CompleteOperationalAction("succeeded", expectedAttemptId: started.AttemptId), Is.True);
+            Assert.That(runtime.State.EffectiveOperationalAction.Status, Is.EqualTo("succeeded"));
+
+            runtime.RefreshProjectFileProtectionStatus();
+            runtime.RefreshNativeSubmitHookDiagnostics();
+            var disabled = runtime.TryDisableProtection("test", confirmed: true);
+
+            Assert.That(disabled.Succeeded, Is.True);
+            Assert.That(runtime.State.Enabled, Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void TrayProtectionIntentDispatcher_DispatchesOnlyExplicitlyRegisteredIntent()
+    {
+        var dispatched = 0;
+        var dispatcher = new TrayProtectionIntentDispatcher(
+            new Dictionary<TrayProtectionIntent, Action>
+            {
+                [TrayProtectionIntent.SetupPromptProtection] = () => dispatched++
+            });
+
+        Assert.That(dispatcher.TryDispatch(TrayProtectionIntent.SetupPromptProtection), Is.True);
+        Assert.That(dispatcher.TryDispatch(TrayProtectionIntent.Exit), Is.False);
+        Assert.That(dispatched, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void WindowsTrayContext_StoresOnlyTheResidentUiPort()
+    {
+        var runtimeField = typeof(WindowsTrayApplicationContext).GetField(
+            "_residentRuntime",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var controllerFields = typeof(WindowsTrayApplicationContext)
+            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .Where(field => field.FieldType == typeof(TrayProtectionController))
+            .ToArray();
+
+        Assert.That(runtimeField, Is.Not.Null);
+        Assert.That(runtimeField!.FieldType, Is.EqualTo(typeof(IResidentProtectionRuntime)));
+        Assert.That(controllerFields, Is.Empty);
+    }
+
+    [Test]
+    public void NativeSubmitInputAdapter_DispatchesCapturedGestureWithoutProfileStorage()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var classified = 0;
+        var adapter = NativeSubmitInputAdapter.Instance;
+
+        var started = adapter.Start(
+            hook,
+            _ =>
+            {
+                classified++;
+                return new NativeSubmitInterceptionResult(
+                    OsInteractionStatusIds.NativeSubmitPassThrough,
+                    SuppressOriginalInput: false,
+                    Applied: false,
+                    Submitted: false,
+                    Diagnostics: new Dictionary<string, string>());
+            },
+            (_, _) => Assert.Fail("Pass-through input must not execute a protected Send."),
+            _ => false,
+            classifyPointer: null,
+            onSuppressedPointerSubmit: null,
+            shouldSuppressPointerFailure: null);
+
+        Assert.That(started, Is.True);
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(classified, Is.EqualTo(1));
+    }
+
+    [Test]
     public void TrayProtectionController_ReloadResidentRuntimeSwapsApplyOnlyAndNativeSubmitTogether()
     {
         var oldHook = new FakeNativeSubmitHookHost();
@@ -5296,8 +5667,7 @@ public class HandleButtonClickTests : SanitizerTests
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: null);
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
 
         var activeSurface = TestSurfaceFactory.CreateTestSurface(
             "codex-desktop",
@@ -5325,8 +5695,7 @@ public class HandleButtonClickTests : SanitizerTests
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: null);
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
 
         var activeSurface = TestSurfaceFactory.CreateTestSurface(
             "codex-desktop",
@@ -5347,8 +5716,7 @@ public class HandleButtonClickTests : SanitizerTests
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: null);
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
 
         var activeSurface = new TextSurfaceDescriptor(
             "native-submit-test:other-app",
@@ -5385,7 +5753,10 @@ public class HandleButtonClickTests : SanitizerTests
             unprotectedProfile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: null);
+            profileSnapshot: new NativeSubmitProfileSnapshot(
+                unprotectedProfile.ProfileId,
+                OsInteractionStatusIds.Protected,
+                unprotectedProfile.SubmitBinding));
 
         var activeSurface = TestSurfaceFactory.CreateTestSurface("codex-desktop");
 
@@ -5412,8 +5783,7 @@ public class HandleButtonClickTests : SanitizerTests
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: null);
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
 
         var activeSurface = TestSurfaceFactory.CreateTestSurface("codex-desktop");
 
@@ -5433,8 +5803,7 @@ public class HandleButtonClickTests : SanitizerTests
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery,
-            firstRunSetupController: null);
+            activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery);
 
         var activeSurface = TestSurfaceFactory.CreateTestSurface("chatgpt-desktop");
 
@@ -5462,8 +5831,7 @@ public class HandleButtonClickTests : SanitizerTests
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: null);
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
 
         var activeSurface = TestSurfaceFactory.CreateTestSurface("codex-desktop");
 
@@ -5492,8 +5860,7 @@ public class HandleButtonClickTests : SanitizerTests
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")),
-            firstRunSetupController: null);
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("codex-desktop")));
 
         // Try to trigger the submit gesture (Enter matching SubmitBinding)
         var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: false));
@@ -6061,4 +6428,70 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.CancellationPassed, Is.True);
         Assert.That(report.RepeatedCleanupPassed, Is.True);
     }
+
+    private sealed class FixedSubmitBindingProfileAdapter : ISubmitBindingProfileAdapter
+    {
+        private readonly SubmitBindingProfileStoreResult _loadResult;
+
+        public FixedSubmitBindingProfileAdapter(SubmitBindingProfileStoreResult loadResult)
+        {
+            _loadResult = loadResult;
+        }
+
+        public int LoadCalls { get; private set; }
+
+        public bool ThrowAfterFirstLoad { get; set; }
+
+        public SubmitBindingProfileStoreResult Load(DefaultStorageLayout layout)
+        {
+            if (ThrowAfterFirstLoad && LoadCalls > 0)
+            {
+                throw new InvalidOperationException("profile_adapter_read_after_snapshot");
+            }
+
+            LoadCalls++;
+            return _loadResult;
+        }
+
+        public SubmitBindingProfileStoreResult Save(
+            DefaultStorageLayout layout,
+            IReadOnlyList<SubmitBindingProfile> profiles) => _loadResult;
+
+        public SubmitBindingProfileStoreResult Upsert(
+            DefaultStorageLayout layout,
+            SubmitBindingProfile profile) => _loadResult;
+    }
+}
+
+internal sealed class FixedSubmitBindingProfileAdapter : ISubmitBindingProfileAdapter
+{
+    private readonly SubmitBindingProfileStoreResult _loadResult;
+
+    public FixedSubmitBindingProfileAdapter(SubmitBindingProfileStoreResult loadResult)
+    {
+        _loadResult = loadResult;
+    }
+
+    public int LoadCalls { get; private set; }
+
+    public bool ThrowAfterFirstLoad { get; set; }
+
+    public SubmitBindingProfileStoreResult Load(DefaultStorageLayout layout)
+    {
+        if (ThrowAfterFirstLoad && LoadCalls > 0)
+        {
+            throw new InvalidOperationException("profile_adapter_read_after_snapshot");
+        }
+
+        LoadCalls++;
+        return _loadResult;
+    }
+
+    public SubmitBindingProfileStoreResult Save(
+        DefaultStorageLayout layout,
+        IReadOnlyList<SubmitBindingProfile> profiles) => _loadResult;
+
+    public SubmitBindingProfileStoreResult Upsert(
+        DefaultStorageLayout layout,
+        SubmitBindingProfile profile) => _loadResult;
 }

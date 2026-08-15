@@ -36,6 +36,8 @@ internal sealed class WindowsExistingTrayInstanceActivator : IExistingTrayInstan
 
 public static class WindowsTrayApp
 {
+    internal const string ProductionInstanceId = "tray";
+
     public static int Run(ISanitizer sanitizer)
     {
         return Run(sanitizer, DefaultStorageLayout.CreateDefault(), useGlobalMutex: false);
@@ -72,11 +74,13 @@ public static class WindowsTrayApp
         Action<SecondInstanceNotification>? secondInstanceNotificationPresenter = null,
         string localProtectionStatus = LocalProtectionRecovery.ReadyCode,
         Func<ResidentProtectionRuntime>? recoveredRuntimeFactory = null,
-        IExistingTrayInstanceActivator? existingInstanceActivator = null)
+        IExistingTrayInstanceActivator? existingInstanceActivator = null,
+        string instanceId = ProductionInstanceId)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(runMessageLoop);
+        ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
 
         if (!OperatingSystem.IsWindows())
         {
@@ -91,9 +95,9 @@ public static class WindowsTrayApp
         var activator = existingInstanceActivator ?? WindowsExistingTrayInstanceActivator.Instance;
 
         // Single instance enforcement - second launch should activate existing instance and exit
-        if (SingleInstanceEnforcement.IsAnotherInstanceRunning("tray", useGlobalMutex))
+        if (SingleInstanceEnforcement.IsAnotherInstanceRunning(instanceId, useGlobalMutex))
         {
-            var activationSucceeded = activator.TryActivate("tray", useGlobalMutex);
+            var activationSucceeded = activator.TryActivate(instanceId, useGlobalMutex);
             NotifyBlockedSecondInstance(
                 secondInstanceNotificationSettings,
                 activationSucceeded,
@@ -101,10 +105,10 @@ public static class WindowsTrayApp
             return 0; // Exit cleanly - existing instance will handle everything
         }
 
-        using var enforcement = new SingleInstanceEnforcement("tray", useGlobalMutex);
+        using var enforcement = new SingleInstanceEnforcement(instanceId, useGlobalMutex);
         if (!enforcement.IsFirstInstance)
         {
-            var activationSucceeded = activator.TryActivate("tray", useGlobalMutex);
+            var activationSucceeded = activator.TryActivate(instanceId, useGlobalMutex);
             NotifyBlockedSecondInstance(
                 secondInstanceNotificationSettings,
                 activationSucceeded,
@@ -124,7 +128,8 @@ public static class WindowsTrayApp
             () => CreateNativeSubmitRuntimeSet(sanitizer, layout),
             localProtectionStatus: localProtectionStatus,
             recoveredRuntimeFactory: recoveredRuntimeFactory ?? (() => CreateResidentProtectionRuntime(sanitizer, layout)),
-            candidateNativeSubmitRuntimeFactory: profiles => CreateNativeSubmitRuntimeSet(sanitizer, layout, profiles));
+            candidateNativeSubmitRuntimeFactory: profiles => CreateNativeSubmitRuntimeSet(sanitizer, layout, profiles),
+            instanceId: instanceId);
         runMessageLoop(context);
         return 0;
     }
@@ -265,12 +270,15 @@ public static class WindowsTrayApp
     internal static NativeSubmitRuntimeSet? CreateNativeSubmitRuntimeSet(
         ISanitizer sanitizer,
         DefaultStorageLayout layout,
-        IReadOnlyList<SubmitBindingProfile>? profilesOverride = null)
+        IReadOnlyList<SubmitBindingProfile>? profilesOverride = null,
+        ISubmitBindingProfileAdapter? profileAdapter = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
 
-        var profiles = profilesOverride ?? ResolveNativeProfilesForProtection(layout);
+        var adapter = profileAdapter ?? LocalSubmitBindingProfileAdapter.Instance;
+        var loadedProfiles = profilesOverride is null ? adapter.Load(layout) : null;
+        var profiles = profilesOverride ?? ResolveNativeProfilesForProtection(loadedProfiles!.Profiles);
         if (profiles.Count == 0)
         {
             return null;
@@ -281,12 +289,14 @@ public static class WindowsTrayApp
         var confirmationOverlay = new WindowsConfirmationOverlay();
         var runtimes = profiles.Select(nativeProfile =>
         {
+            var profileSnapshot = loadedProfiles is null
+                ? NativeSubmitProfileSnapshot.FromProfile(nativeProfile)
+                : NativeSubmitProfileSnapshotAdapter.FromLoadResult(loadedProfiles, nativeProfile, layout);
             var controller = new NativeSubmitInterceptionController(
                 nativeProfile,
                 new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
                 activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
-                firstRunSetupController: new FirstRunSetupController(),
-                setupLayout: layout);
+                profileSnapshot: profileSnapshot);
             OsInteractionResult RunConfirmAndSend(
                 NativeSubmitTargetIdentity? target,
                 Func<string, string, bool>? traceStage,
@@ -330,18 +340,30 @@ public static class WindowsTrayApp
             confirmationOverlay.CancelActiveConfirmation);
     }
 
-    internal static SubmitBindingProfile? ResolveNativeProfileForProtection(DefaultStorageLayout layout)
+    internal static SubmitBindingProfile? ResolveNativeProfileForProtection(
+        DefaultStorageLayout layout,
+        ISubmitBindingProfileAdapter? profileAdapter = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        return ResolveNativeProfilesForProtection(layout).FirstOrDefault();
+        return ResolveNativeProfilesForProtection(layout, profileAdapter).FirstOrDefault();
     }
 
-    internal static IReadOnlyList<SubmitBindingProfile> ResolveNativeProfilesForProtection(DefaultStorageLayout layout)
+    internal static IReadOnlyList<SubmitBindingProfile> ResolveNativeProfilesForProtection(
+        DefaultStorageLayout layout,
+        ISubmitBindingProfileAdapter? profileAdapter = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
 
-        var profiles = SubmitBindingProfileStore.Load(layout).Profiles;
+        var profiles = (profileAdapter ?? LocalSubmitBindingProfileAdapter.Instance).Load(layout).Profiles;
+        return ResolveNativeProfilesForProtection(profiles);
+    }
+
+    private static IReadOnlyList<SubmitBindingProfile> ResolveNativeProfilesForProtection(
+        IReadOnlyList<SubmitBindingProfile> profiles)
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+
         if (profiles.Count == 0)
         {
             return new[]
@@ -383,135 +405,9 @@ internal sealed class UnavailableTrayHotkeyHost : ITrayHotkeyHost
     }
 }
 
-internal sealed class TrayRemediationActionExecutor
-{
-    private readonly Action<Action> _backgroundWorkQueue;
-    private readonly Action<Action> _uiDispatcher;
-    private int _inProgress;
-
-    public TrayRemediationActionExecutor(
-        Action<Action> backgroundWorkQueue,
-        Action<Action> uiDispatcher)
-    {
-        _backgroundWorkQueue = backgroundWorkQueue ?? throw new ArgumentNullException(nameof(backgroundWorkQueue));
-        _uiDispatcher = uiDispatcher ?? throw new ArgumentNullException(nameof(uiDispatcher));
-    }
-
-    public bool TryRun<T>(
-        Func<T> backgroundWork,
-        Action<T> completeOnUi,
-        Action<Exception> captureWorkerFailure,
-        Action<T> onUiDispatcherUnavailable)
-    {
-        ArgumentNullException.ThrowIfNull(backgroundWork);
-        ArgumentNullException.ThrowIfNull(completeOnUi);
-        ArgumentNullException.ThrowIfNull(captureWorkerFailure);
-        ArgumentNullException.ThrowIfNull(onUiDispatcherUnavailable);
-
-        if (Interlocked.Exchange(ref _inProgress, 1) != 0)
-        {
-            return false;
-        }
-
-        try
-        {
-            _backgroundWorkQueue(() => RunBackgroundWork(
-                backgroundWork,
-                completeOnUi,
-                captureWorkerFailure,
-                onUiDispatcherUnavailable));
-        }
-        catch (Exception exception)
-        {
-            try
-            {
-                captureWorkerFailure(exception);
-            }
-            finally
-            {
-                Release();
-            }
-        }
-
-        return true;
-    }
-
-    private void RunBackgroundWork<T>(
-        Func<T> backgroundWork,
-        Action<T> completeOnUi,
-        Action<Exception> captureWorkerFailure,
-        Action<T> onUiDispatcherUnavailable)
-    {
-        T result;
-        try
-        {
-            result = backgroundWork();
-        }
-        catch (Exception exception)
-        {
-            try
-            {
-                captureWorkerFailure(exception);
-            }
-            finally
-            {
-                Release();
-            }
-
-            return;
-        }
-
-        try
-        {
-            _uiDispatcher(() =>
-            {
-                try
-                {
-                    completeOnUi(result);
-                }
-                catch (Exception exception)
-                {
-                    captureWorkerFailure(exception);
-                }
-                finally
-                {
-                    Release();
-                }
-            });
-        }
-        catch (Exception exception)
-        {
-            try
-            {
-                onUiDispatcherUnavailable(result);
-            }
-            catch (Exception cleanupException)
-            {
-                captureWorkerFailure(cleanupException);
-            }
-            finally
-            {
-                try
-                {
-                    captureWorkerFailure(exception);
-                }
-                finally
-                {
-                    Release();
-                }
-            }
-        }
-    }
-
-    private void Release()
-    {
-        Volatile.Write(ref _inProgress, 0);
-    }
-}
-
 internal sealed class WindowsTrayApplicationContext : ApplicationContext
 {
-    private readonly TrayProtectionController _controller;
+    private readonly IResidentProtectionRuntime _residentRuntime;
     private readonly ITrayLocalCommandLauncher _commandLauncher;
     private readonly ITrayProtectionDisableConfirmation _disableConfirmation;
     private readonly DefaultStorageLayout _layout;
@@ -533,12 +429,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly Func<LocalProtectionRecoveryResult> _localProtectionRecovery;
     private readonly Func<bool> _recoveryConfirmation;
     private readonly Action<string, MessageBoxIcon> _recoveryMessagePresenter;
-    private readonly Action<Action> _backgroundWorkQueue;
     private readonly Action<Action> _uiDispatcher;
-    private readonly TrayRemediationActionExecutor _remediationActionExecutor;
+    private readonly TrayProtectionIntentDispatcher _intentDispatcher;
+    private readonly ResidentProtectionWorkflowCoordinator _residentWorkflowCoordinator;
+    private readonly string _instanceId;
     private LocalProtectionStatusForm? _localProtectionStatusForm;
-    private int _firstRunSetupScheduled;
-    private int _localReadinessScheduled;
 
     internal bool IsTrayIconVisible => _notifyIcon.Visible;
 
@@ -552,7 +447,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     internal LocalProtectionStatusForm? LocalProtectionStatusForm => _localProtectionStatusForm;
 
-    internal bool IsNativeSubmitHookReady => _controller.IsNativeSubmitHookReady;
+    internal bool IsNativeSubmitHookReady => _residentRuntime.Snapshot.HookReady;
 
     public WindowsTrayApplicationContext(TrayProtectionController controller)
         : this(controller, DefaultStorageLayout.CreateDefault(), new WindowsTrayLocalCommandLauncher())
@@ -591,9 +486,13 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         Func<LocalProtectionRecoveryResult>? localProtectionRecovery = null,
         Func<bool>? recoveryConfirmation = null,
         Action<string, MessageBoxIcon>? recoveryMessagePresenter = null,
-        Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?>? candidateNativeSubmitRuntimeFactory = null)
+        Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?>? candidateNativeSubmitRuntimeFactory = null,
+        string instanceId = WindowsTrayApp.ProductionInstanceId)
     {
-        _controller = controller ?? throw new ArgumentNullException(nameof(controller));
+        var workflowRuntime = new ResidentProtectionRuntimeFacade(
+            controller ?? throw new ArgumentNullException(nameof(controller)));
+        _residentRuntime = workflowRuntime;
+        _instanceId = string.IsNullOrWhiteSpace(instanceId) ? throw new ArgumentException("Instance ID is required.", nameof(instanceId)) : instanceId;
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
         _commandLauncher = commandLauncher ?? throw new ArgumentNullException(nameof(commandLauncher));
         _disableConfirmation = disableConfirmation ?? throw new ArgumentNullException(nameof(disableConfirmation));
@@ -607,7 +506,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 _layout,
                 profiles));
         _firstRunSetupControllerFactory = firstRunSetupControllerFactory
-            ?? (() => new FirstRunSetupController(_controller.PublishSetupVerificationProgress));
+            ?? (() => new FirstRunSetupController(workflowRuntime.PublishSetupVerificationProgress));
         _firstRunSetupCompleted = firstRunSetupCompleted;
         _recoveredRuntimeFactory = recoveredRuntimeFactory ?? (() =>
             WindowsTrayApp.CreateResidentProtectionRuntime(Sanitizer.CreateProduction(_layout), _layout));
@@ -616,7 +515,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _recoveryMessagePresenter = recoveryMessagePresenter ?? ShowLocalProtectionRecoveryMessage;
         if (!string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
-            _controller.PublishLocalProtectionStatus(localProtectionStatus);
+            workflowRuntime.PublishLocalProtectionStatus(localProtectionStatus);
         }
 
         _activationWindow = new Form
@@ -630,20 +529,55 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             StartPosition = FormStartPosition.Manual
         };
         _activationWindow.Show();
-        SingleInstanceEnforcement.RegisterActivationWindow("tray", _activationWindow.Handle);
-        _backgroundWorkQueue = backgroundWorkQueue ?? (work => ThreadPool.QueueUserWorkItem(_ => work()));
-        _uiDispatcher = uiDispatcher ?? (work => _activationWindow.BeginInvoke(new MethodInvoker(work)));
-        _remediationActionExecutor = new TrayRemediationActionExecutor(_backgroundWorkQueue, _uiDispatcher);
+        SingleInstanceEnforcement.RegisterActivationWindow(_instanceId, _activationWindow.Handle);
+        var resolvedBackgroundWorkQueue = backgroundWorkQueue ?? (work => ThreadPool.QueueUserWorkItem(_ => work()));
+        var resolvedUiDispatcher = uiDispatcher ?? (work => _activationWindow.BeginInvoke(new MethodInvoker(work)));
+        _uiDispatcher = resolvedUiDispatcher;
+        _residentWorkflowCoordinator = new ResidentProtectionWorkflowCoordinator(
+            workflowRuntime,
+            _layout,
+            _firstRunSetupControllerFactory,
+            _candidateNativeSubmitRuntimeFactory,
+            () => _nativeSubmitRuntimeFactory?.Invoke(),
+            _recoveredRuntimeFactory,
+            _localProtectionRecovery,
+            resolvedBackgroundWorkQueue,
+            resolvedUiDispatcher,
+            (exception, component, code) => _crashDiagnostics.Capture(exception, component, code));
+        _residentWorkflowCoordinator.SetupCompleted += result =>
+        {
+            try
+            {
+                _firstRunSetupCompleted?.Invoke(result);
+            }
+            catch (Exception exception)
+            {
+                _crashDiagnostics.Capture(exception, "first_run_setup", "completion_callback_failed");
+            }
+        };
+        _residentWorkflowCoordinator.Notice += (message, isFailure) =>
+            _recoveryMessagePresenter(message, isFailure ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        _intentDispatcher = new TrayProtectionIntentDispatcher(
+            new Dictionary<TrayProtectionIntent, Action>
+            {
+                [TrayProtectionIntent.ToggleProtection] = ToggleProtection,
+                [TrayProtectionIntent.OpenProtectionStatus] = OpenLocalProtectionStatus,
+                [TrayProtectionIntent.OpenLocalRestore] = OpenLocalRestore,
+                [TrayProtectionIntent.OpenSensitiveTerms] = OpenDictionaryManagement,
+                [TrayProtectionIntent.SetupPromptProtection] = VerifyProfilesFromTray,
+                [TrayProtectionIntent.RepairLocalProtection] = RepairLocalProtection,
+                [TrayProtectionIntent.Exit] = Exit
+            });
 
-        _statusItem = new ToolStripMenuItem("Protection status", null, (_, _) => OpenLocalProtectionStatus());
+        _statusItem = new ToolStripMenuItem("Protection status", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenProtectionStatus));
         _versionItem = new ToolStripMenuItem(TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion)) { Enabled = false };
         _emergencyBypassItem = new ToolStripMenuItem(
             $"Emergency bypass: {NativeSubmitEmergencyState.BypassDisplayText}") { Enabled = false };
-        _toggleItem = new ToolStripMenuItem("Stop protection", null, (_, _) => ToggleProtection());
-        _repairLocalProtectionItem = new ToolStripMenuItem("Repair local protection", null, (_, _) => RepairLocalProtection())
+        _toggleItem = new ToolStripMenuItem("Stop protection", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.ToggleProtection));
+        _repairLocalProtectionItem = new ToolStripMenuItem("Repair local protection", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.RepairLocalProtection))
         {
             Visible = string.Equals(
-                _controller.State.LocalProtectionStatus,
+                _residentRuntime.Snapshot.State.LocalProtectionStatus,
                 LocalProtectionRecovery.RecoveryRequiredCode,
                 StringComparison.Ordinal)
         };
@@ -654,13 +588,13 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         menu.Items.Add(_emergencyBypassItem);
         menu.Items.Add(_toggleItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Open protection status", null, (_, _) => OpenLocalProtectionStatus()));
-        menu.Items.Add(new ToolStripMenuItem("Open local restore", null, (_, _) => OpenLocalRestore()));
-        menu.Items.Add(new ToolStripMenuItem("Open sensitive terms", null, (_, _) => OpenDictionaryManagement()));
-        menu.Items.Add(new ToolStripMenuItem("Set up prompt protection", null, (_, _) => VerifyProfilesFromTray()));
+        menu.Items.Add(new ToolStripMenuItem("Open protection status", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenProtectionStatus)));
+        menu.Items.Add(new ToolStripMenuItem("Open local restore", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenLocalRestore)));
+        menu.Items.Add(new ToolStripMenuItem("Open sensitive terms", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenSensitiveTerms)));
+        menu.Items.Add(new ToolStripMenuItem("Set up prompt protection", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.SetupPromptProtection)));
         menu.Items.Add(_repairLocalProtectionItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => Exit()));
+        menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.Exit)));
 
         _notifyIcon = new NotifyIcon
         {
@@ -669,9 +603,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             Visible = true
         };
 
-        _controller.StateChanged += (_, _) => RefreshStatusOnUiThread();
-        _controller.EnableResidentReadinessAdmission();
-        var started = _controller.Start();
+        _residentRuntime.SnapshotChanged += (_, _) => RefreshStatusOnUiThread();
+        var started = _residentWorkflowCoordinator.StartResident();
         RefreshStatus();
         if (!started)
         {
@@ -688,420 +621,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void ScheduleFirstRunSetupIfRequired()
     {
-        if (Interlocked.Exchange(ref _firstRunSetupScheduled, 1) != 0)
-        {
-            return;
-        }
-
-        try
-        {
-            var started = _controller.StartOperationalAction(
-                "first_run_setup",
-                "starting",
-                userInputRequired: false,
-                nextAction: "focus_message_composer");
-            if (!started.Started)
-            {
-                Interlocked.Exchange(ref _firstRunSetupScheduled, 0);
-                RefreshStatus();
-                return;
-            }
-
-            _activationWindow.BeginInvoke(new MethodInvoker(() =>
-                ThreadPool.QueueUserWorkItem(_ => RunFirstRunSetupWorker(started.AttemptId))));
-        }
-        catch (InvalidOperationException)
-        {
-            // The application is already closing; the setup gate stays fail-closed.
-            var action = _controller.OperationalAction;
-            _controller.CompleteOperationalAction("startup_failed", "retry_setup", action.AttemptId);
-            Interlocked.Exchange(ref _firstRunSetupScheduled, 0);
-        }
-    }
-
-    private void RunFirstRunSetupWorker(long attemptId)
-    {
-        _controller.PublishOperationalActionStage(
-            "awaiting_user_focus",
-            userInputRequired: true,
-            nextAction: "focus_message_composer",
-            expectedAttemptId: attemptId);
-        var result = FirstRunSetupBackgroundRunner.Run(
-            _layout,
-            _firstRunSetupControllerFactory,
-            exception => LocalCrashDiagnostics.CaptureDefault(exception, "first_run_setup", "setup_failed"));
-
-        if (!_activationWindow.IsDisposed)
-        {
-            try
-            {
-                _activationWindow.BeginInvoke(new MethodInvoker(() => CompleteFirstRunSetup(result, attemptId)));
-            }
-            catch (InvalidOperationException)
-            {
-                // The application is already closing; no runtime reload is needed.
-            }
-        }
-    }
-
-    private void CompleteFirstRunSetup(FirstRunSetupResult? result, long operationalAttemptId = 0)
-    {
-        if (operationalAttemptId > 0
-            && !_controller.IsCurrentOperationalActionAttempt(operationalAttemptId))
-        {
-            return;
-        }
-
-        if (result?.Succeeded == true && !result.State.Required)
-        {
-            var setupAttemptId = SetupVerificationAttemptId(result);
-            var requiresAttemptId = result.PendingProfiles is not null;
-            if ((requiresAttemptId && setupAttemptId <= 0)
-                || (setupAttemptId > 0 && !_controller.IsCurrentSetupVerificationAttempt(setupAttemptId)))
-            {
-                return;
-            }
-
-            _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-                "activating_protection",
-                "wait_for_verification",
-                result.Diagnostics.TryGetValue("profile_id", out var profileId) ? profileId : null,
-                _controller.State.ProtectedSendBinding,
-                SetupVerificationAttemptId(result)));
-            NativeSubmitRuntimeSet? candidateRuntimeSet = null;
-            try
-            {
-                if (!ActivatePendingTarget(result))
-                {
-                    throw new InvalidOperationException("active_target_activation_failed");
-                }
-                candidateRuntimeSet = result.PendingProfiles is { } candidateProfiles
-                    ? _candidateNativeSubmitRuntimeFactory(candidateProfiles)
-                    : _nativeSubmitRuntimeFactory?.Invoke();
-                if (candidateRuntimeSet is null || !_controller.ReloadNativeSubmit(candidateRuntimeSet))
-                {
-                    candidateRuntimeSet?.HookHost.Stop();
-                    RestorePreviousSetupProfiles(result);
-                    RestorePreviousSetupTarget(result);
-                    _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-                        "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
-                    ShowSetupFailure(
-                        "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.");
-                }
-                else if (result.PendingProfiles is not null && !IsCurrentSetupAttempt(result))
-                {
-                    if (!ReferenceEquals(
-                            _controller.GetCurrentSnapshot().RuntimeSet,
-                            candidateRuntimeSet))
-                    {
-                        candidateRuntimeSet.HookHost.Stop();
-                    }
-
-                    // A stale completion cannot roll back a runtime published by
-                    // another setup attempt. Keep the current gate active and
-                    // require a fresh verification instead.
-                    _controller.PublishPromptProtectionRetryFailure();
-                    RestorePreviousSetupTarget(result);
-                    _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-                        "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
-                }
-                else if (CommitActivatedProfiles(result, result.PendingProfiles))
-                {
-                    _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-                        "protected",
-                        "none",
-                        result.Diagnostics.TryGetValue("profile_id", out var activatedProfileId) ? activatedProfileId : null,
-                        _controller.State.ProtectedSendBinding,
-                        SetupVerificationAttemptId(result)));
-                }
-            }
-            catch (Exception exception)
-            {
-                LocalCrashDiagnostics.CaptureDefault(exception, "first_run_setup", "runtime_reload_failed");
-                var candidatePublished = candidateRuntimeSet is not null
-                    && ReferenceEquals(_controller.GetCurrentSnapshot().RuntimeSet, candidateRuntimeSet);
-                if (candidatePublished)
-                {
-                    RollbackActivatedSetup(result);
-                }
-                else
-                {
-                    candidateRuntimeSet?.HookHost.Stop();
-                    RestorePreviousSetupProfiles(result);
-                    RestorePreviousSetupTarget(result);
-                }
-                _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-                    "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
-                ShowSetupFailure(
-                    "Setup was verified, but protected Send could not be activated. The existing Send gate remains fail-closed. Open profile verification from the tray to retry.");
-            }
-        }
-        else if (result is null || result.Code != "setup_cancelled")
-        {
-            _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-                result?.Code == "focused_surface_unverified" ? "unsupported_surface" : "verification_failed",
-                "retry_setup", AttemptId: SetupVerificationAttemptId(result)));
-            ShowSetupFailure(
-                "Setup could not be completed. Protected Send remains blocked until verification succeeds. Open profile verification from the tray to retry.");
-        }
-        else
-        {
-            _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-                "setup_cancelled", "retry_setup", AttemptId: SetupVerificationAttemptId(result)));
-        }
-
-        if (_controller.OperationalAction.Status == "running")
-        {
-            var setupSucceeded = result?.Succeeded == true
-                && !result.State.Required
-                && (result.Code == "setup_complete"
-                    || _controller.State.SetupVerificationStatus == "protected");
-            _controller.CompleteOperationalAction(
-                setupSucceeded ? "succeeded" : result?.Code == "setup_cancelled" ? "cancelled" : "setup_failed",
-                setupSucceeded ? "none" : "retry_setup",
-                operationalAttemptId);
-
-            if (setupSucceeded)
-            {
-                ScheduleLocalReadinessIfRequired();
-            }
-        }
-
-        RefreshStatus();
-        try
-        {
-            _firstRunSetupCompleted?.Invoke(result);
-        }
-        catch (Exception exception)
-        {
-            _crashDiagnostics.Capture(exception, "first_run_setup", "completion_callback_failed");
-        }
-    }
-
-    private void ScheduleLocalReadinessIfRequired()
-    {
-        if (string.Equals(_controller.State.LocalReadinessStatus, "passed", StringComparison.Ordinal)
-            || Interlocked.Exchange(ref _localReadinessScheduled, 1) != 0)
-        {
-            return;
-        }
-
-        var started = _controller.StartOperationalAction(
-            "local_readiness",
-            "starting",
-            userInputRequired: false,
-            nextAction: "wait_for_result");
-        if (!started.Started)
-        {
-            Interlocked.Exchange(ref _localReadinessScheduled, 0);
-            return;
-        }
-
-        try
-        {
-            _backgroundWorkQueue(() => RunLocalReadinessWorker(started.AttemptId));
-        }
-        catch (Exception exception)
-        {
-            _crashDiagnostics.Capture(exception, "local_readiness", "worker_start_failed");
-            _controller.CompleteOperationalAction("worker_start_failed", "retry_local_readiness", started.AttemptId);
-            Interlocked.Exchange(ref _localReadinessScheduled, 0);
-        }
-    }
-
-    private void RunLocalReadinessWorker(long attemptId)
-    {
-        _controller.PublishOperationalActionStage(
-            "check_local_prerequisites",
-            userInputRequired: false,
-            nextAction: "wait_for_result",
-            expectedAttemptId: attemptId);
-        LocalReadinessResult result;
-        try
-        {
-            result = LocalReadinessWorkflow.Run(_layout);
-        }
-        catch (Exception exception)
-        {
-            _crashDiagnostics.Capture(exception, "local_readiness", "check_failed");
-            result = new LocalReadinessResult(
-                false,
-                "local_readiness_check_failed",
-                Array.Empty<ReadinessItem>());
-        }
-
-        if (!_controller.CompleteOperationalAction(
-                result.Succeeded ? "succeeded" : result.Code,
-                result.Succeeded ? "none" : "retry_local_readiness",
-                attemptId))
-        {
-            Interlocked.Exchange(ref _localReadinessScheduled, 0);
-            return;
-        }
-        if (result.Succeeded)
-        {
-            _controller.TryRecordResidentReadinessProof(attemptId);
-        }
-        _controller.RefreshOperationalActionState();
-        Interlocked.Exchange(ref _localReadinessScheduled, 0);
-        TryDispatchToUi(RefreshStatusSafely);
-    }
-
-    private void RunLocalReadinessFromTray()
-    {
-        Interlocked.Exchange(ref _localReadinessScheduled, 0);
-        ScheduleLocalReadinessIfRequired();
-    }
-
-    private void TryDispatchToUi(Action action)
-    {
-        try
-        {
-            _uiDispatcher(action);
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or ObjectDisposedException)
-        {
-            // The resident state and raw-free journal are already published.
-        }
-    }
-
-    private bool CommitActivatedProfiles(
-        FirstRunSetupResult result,
-        IReadOnlyList<SubmitBindingProfile>? pendingProfiles)
-    {
-        try
-        {
-            if (pendingProfiles is not null && !IsCurrentSetupAttempt(result))
-            {
-                _controller.PublishPromptProtectionRetryFailure();
-                return false;
-            }
-
-            if (pendingProfiles is not null)
-            {
-                var saveResult = SubmitBindingProfileStore.Save(_layout, pendingProfiles);
-                if (!saveResult.Succeeded)
-                {
-                    throw new InvalidOperationException("profile_commit_failed");
-                }
-            }
-
-            if (ResolveResultProfileId(result) is not { } profileId
-                || !FirstRunSetupController.MarkSetupComplete(_layout, profileId))
-            {
-                throw new InvalidOperationException("active_target_commit_failed");
-            }
-            return true;
-        }
-        catch (Exception exception)
-        {
-            RollbackActivatedSetup(result);
-            _crashDiagnostics.Capture(exception, "first_run_setup", "profile_commit_failed");
-            _controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-                "activation_failed", "restart_protection", AttemptId: SetupVerificationAttemptId(result)));
-            return false;
-        }
-    }
-
-    private void ShowSetupFailure(string message)
-    {
-        _recoveryMessagePresenter(message, MessageBoxIcon.Warning);
-    }
-
-    private void RollbackActivatedSetup(FirstRunSetupResult result)
-    {
-        var profilesRestored = RestorePreviousSetupProfiles(result);
-        var targetRestored = RestorePreviousSetupTarget(result);
-
-        NativeSubmitRuntimeSet? rollbackRuntime = null;
-        try
-        {
-            rollbackRuntime = _nativeSubmitRuntimeFactory?.Invoke();
-        }
-        catch (Exception exception)
-        {
-            _crashDiagnostics.Capture(exception, "first_run_setup", "runtime_rollback_create_failed");
-        }
-
-        var rollbackSucceeded = profilesRestored
-            && targetRestored
-            && rollbackRuntime is not null
-            && _controller.ReloadNativeSubmit(rollbackRuntime);
-        if (!rollbackSucceeded)
-        {
-            // Keep the currently published guarded runtime in place. Stopping it here
-            // would remove the selected-app gate and could allow the original Send
-            // through while setup recovery is unresolved.
-            _controller.PublishPromptProtectionRetryFailure();
-        }
-    }
-
-    private static long SetupVerificationAttemptId(FirstRunSetupResult? result)
-    {
-        return result?.Diagnostics.TryGetValue("setup_attempt_id", out var text) == true
-            && long.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value)
-            ? value
-            : 0;
-    }
-
-    private bool IsCurrentSetupAttempt(FirstRunSetupResult result)
-    {
-        var attemptId = SetupVerificationAttemptId(result);
-        return attemptId > 0 && _controller.IsCurrentSetupVerificationAttempt(attemptId);
-    }
-
-    private bool RestorePreviousSetupProfiles(FirstRunSetupResult result)
-    {
-        if (result.PreviousProfiles is not { } previousProfiles)
-        {
-            return true;
-        }
-
-        try
-        {
-            var saveResult = SubmitBindingProfileStore.Save(_layout, previousProfiles);
-            if (!saveResult.Succeeded)
-            {
-                _crashDiagnostics.Capture(
-                    new InvalidOperationException("profile_rollback_failed"),
-                    "first_run_setup",
-                    "profile_rollback_failed");
-            }
-
-            return saveResult.Succeeded;
-        }
-        catch (Exception exception)
-        {
-            _crashDiagnostics.Capture(exception, "first_run_setup", "profile_rollback_failed");
-            return false;
-        }
-    }
-
-    private bool ActivatePendingTarget(FirstRunSetupResult result)
-    {
-        if (result.PendingProfiles is null)
-        {
-            return true;
-        }
-
-        var profileId = ResolveResultProfileId(result);
-        return profileId is not null && ActivePromptProtectionTargetStore.Save(_layout, profileId).Succeeded;
-    }
-
-    private static string? ResolveResultProfileId(FirstRunSetupResult result)
-    {
-        return result.Diagnostics.TryGetValue("profile_id", out var diagnosticProfileId)
-            ? diagnosticProfileId
-            : result.PendingProfiles?.Count == 1 && result.PendingProfiles[0] is { } pendingProfile
-                ? pendingProfile.ProfileId
-                : null;
-    }
-
-    private bool RestorePreviousSetupTarget(FirstRunSetupResult result)
-    {
-        return result.PreviousActiveTargetProfileId is { } profileId
-            ? ActivePromptProtectionTargetStore.Save(_layout, profileId).Succeeded
-            : ActivePromptProtectionTargetStore.Clear(_layout);
+        _residentWorkflowCoordinator.StartInitialSetup();
     }
 
     protected override void Dispose(bool disposing)
@@ -1109,7 +629,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         if (disposing)
         {
             StopProtectionAndHideIcon();
-            SingleInstanceEnforcement.ClearActivationWindow("tray");
+            SingleInstanceEnforcement.ClearActivationWindow(_instanceId);
             _activationWindow.Dispose();
             _localProtectionStatusForm?.Dispose();
             _notifyIcon.Dispose();
@@ -1118,16 +638,21 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         base.Dispose(disposing);
     }
 
+    private void DispatchTrayIntent(TrayProtectionIntent intent)
+    {
+        _intentDispatcher.TryDispatch(intent);
+    }
+
     private void ToggleProtection()
     {
-        if (_controller.State.Enabled)
+        if (_residentRuntime.Snapshot.State.Enabled)
         {
-            if (!_disableConfirmation.Confirm("stop protection", _controller.State))
+            if (!_disableConfirmation.Confirm("stop protection", _residentRuntime.Snapshot.State))
             {
                 return;
             }
 
-            var result = _controller.TryDisableProtection("stop_protection", confirmed: true);
+            var result = _residentRuntime.TryDisableProtection("stop_protection", confirmed: true);
             if (!result.Succeeded)
             {
                 ShowDisableRejected(result);
@@ -1135,14 +660,14 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
         else
         {
-            _controller.Start();
+            _residentWorkflowCoordinator.StartResident();
         }
     }
 
     internal void RefreshStatus()
     {
-        _controller.RefreshOperationalActionState();
-        var state = _controller.State;
+        _residentWorkflowCoordinator.RefreshOperationalState();
+        var state = _residentRuntime.Snapshot.State;
         var localProtectionStatus = LocalProtectionRecovery.ToSafeStatusCode(state.LocalProtectionStatus);
         _versionItem.Text = TrayMenuContent.FormatBuildVersionMenuItem(_buildVersion);
         if (!string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
@@ -1367,13 +892,12 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     internal void RefreshProjectFileProtectionStatus()
     {
-        _controller.RefreshProjectFileProtectionStatus();
+        _residentRuntime.RefreshDiagnostics();
     }
 
     private LocalProtectionStatusView CreateLocalProtectionStatusView()
     {
-        _controller.RefreshNativeSubmitHookDiagnostics();
-        var state = _controller.State;
+        var state = _residentRuntime.Snapshot.State;
         return LocalProtectionStatusView.Create(state);
     }
 
@@ -1385,7 +909,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 VerifyProfilesFromTray();
                 break;
             case LocalProtectionStatusAction.RunLocalReadiness:
-                RunLocalReadinessFromTray();
+                _residentWorkflowCoordinator.StartLocalReadiness();
                 break;
             case LocalProtectionStatusAction.RetryPromptProtection:
                 RetryPromptProtectionFromTray();
@@ -1397,7 +921,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 OpenProfileSettings();
                 break;
             case LocalProtectionStatusAction.CancelOperationalAction:
-                _controller.CancelOperationalAction();
+                _residentWorkflowCoordinator.CancelCurrentOperation();
                 RefreshStatus();
                 break;
             case LocalProtectionStatusAction.RetryOperationalAction:
@@ -1408,14 +932,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void RetryOperationalActionFromTray()
     {
-        var actionKind = _controller.OperationalAction.ActionKind;
-        if (string.Equals(actionKind, "local_readiness", StringComparison.Ordinal))
-        {
-            RunLocalReadinessFromTray();
-            return;
-        }
-
-        VerifyProfilesFromTray();
+        _residentWorkflowCoordinator.RetryCurrentOperation();
     }
 
     private void OpenProfileSettings()
@@ -1441,131 +958,12 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void VerifyProfilesFromTray()
     {
-        var operationalAttemptId = _controller.OperationalAction.AttemptId;
-        if (_controller.OperationalAction.Status != "running")
-        {
-            var started = _controller.StartOperationalAction(
-                "first_run_setup",
-                "starting",
-                userInputRequired: false,
-                nextAction: "focus_message_composer");
-            if (!started.Started)
-            {
-                RefreshStatus();
-                return;
-            }
-            operationalAttemptId = started.AttemptId;
-        }
-        if (!_controller.PublishOperationalActionStage(
-                "awaiting_user_focus",
-                userInputRequired: true,
-                nextAction: "focus_message_composer",
-                expectedAttemptId: operationalAttemptId))
-        {
-            RefreshStatus();
-            return;
-        }
-
-        _remediationActionExecutor.TryRun(
-            () =>
-            {
-                var setupController = _firstRunSetupControllerFactory();
-                try
-                {
-                    return setupController is IFocusedProfileSetupController focusedSetupController
-                        ? focusedSetupController.ConfigureFocusedProfile(_layout)
-                        : setupController.EnsureSetup(_layout);
-                }
-                catch (Exception exception)
-                {
-                    _crashDiagnostics.Capture(exception, "tray_profile_verification", "verification_failed");
-                    return new FirstRunSetupResult(
-                        Succeeded: false,
-                        Code: "setup_failed",
-                        State: new FirstRunSetupState(true, new[] { "focused_supported_app" }, "failed", false, false),
-                        Diagnostics: new Dictionary<string, string>());
-                }
-            },
-            result => CompleteFirstRunSetup(result, operationalAttemptId),
-            exception => PublishRemediationFailure(exception, "tray_profile_verification", "worker_failed"),
-            _ => PublishPromptProtectionRetryFailure());
+        _residentWorkflowCoordinator.StartFocusedSetup();
     }
 
     private void RetryPromptProtectionFromTray()
     {
-        _remediationActionExecutor.TryRun(
-            () =>
-            {
-                _controller.PublishPromptProtectionRetryStarted();
-                return CreatePromptProtectionRetryRuntime();
-            },
-            CompletePromptProtectionRetry,
-            exception => PublishRemediationFailure(exception, "tray_prompt_protection_retry", "worker_failed"),
-            runtimeSet =>
-            {
-                StopUnactivatedRuntime(runtimeSet);
-                PublishPromptProtectionRetryFailure();
-            });
-    }
-
-    private NativeSubmitRuntimeSet? CreatePromptProtectionRetryRuntime()
-    {
-        try
-        {
-            return _nativeSubmitRuntimeFactory?.Invoke();
-        }
-        catch (Exception exception)
-        {
-            _crashDiagnostics.Capture(exception, "tray_prompt_protection_retry", "runtime_create_failed");
-            return null;
-        }
-    }
-
-    private void CompletePromptProtectionRetry(NativeSubmitRuntimeSet? runtimeSet)
-    {
-        var retrySucceeded = false;
-        try
-        {
-            retrySucceeded = runtimeSet is not null && _controller.ReloadNativeSubmit(runtimeSet);
-        }
-        catch (Exception exception)
-        {
-            StopUnactivatedRuntime(runtimeSet);
-            _crashDiagnostics.Capture(exception, "tray_prompt_protection_retry", "runtime_activate_failed");
-        }
-
-        if (!retrySucceeded)
-        {
-            _controller.PublishPromptProtectionRetryFailure();
-        }
-        else
-        {
-            _controller.PublishPromptProtectionRetrySucceeded();
-        }
-
-        RefreshStatus();
-    }
-
-    private static void StopUnactivatedRuntime(NativeSubmitRuntimeSet? runtimeSet)
-    {
-        if (runtimeSet is null)
-        {
-            return;
-        }
-
-        runtimeSet.HookHost.Stop();
-        runtimeSet.Dispose();
-    }
-
-    private void PublishRemediationFailure(Exception exception, string component, string code)
-    {
-        _crashDiagnostics.Capture(exception, component, code);
-        PublishPromptProtectionRetryFailure();
-    }
-
-    private void PublishPromptProtectionRetryFailure()
-    {
-        _controller.PublishPromptProtectionRetryFailure();
+        _residentWorkflowCoordinator.RetryPromptProtection();
     }
 
     private void RepairLocalProtection()
@@ -1580,54 +978,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     internal void RepairLocalProtectionConfirmed()
     {
-        _controller.PublishLocalProtectionStatus(LocalProtectionRecovery.ReloadingCode);
-        var localRecoveryCompleted = false;
-        try
-        {
-            var result = _localProtectionRecovery();
-            if (!result.Succeeded)
-            {
-                _controller.PublishLocalProtectionStatus(LocalProtectionRecovery.RecoveryRequiredCode);
-                _recoveryMessagePresenter(
-                    "Local protection repair could not be completed. Protected Send remains blocked.",
-                    MessageBoxIcon.Error);
-                return;
-            }
-
-            localRecoveryCompleted = true;
-            var runtime = _recoveredRuntimeFactory();
-            if (runtime.NativeSubmitRuntimeSet is null
-                || !_controller.ReloadResidentRuntime(runtime)
-                || (!_controller.State.Enabled && !_controller.Start())
-                || !_controller.TryPublishLocalProtectionReady())
-            {
-                _controller.PublishLocalProtectionStatus(LocalProtectionRecovery.RuntimeDegradedCode);
-                _recoveryMessagePresenter(
-                    "Local protection was repaired, but protected Send could not be reactivated. It remains blocked.",
-                    MessageBoxIcon.Warning);
-                return;
-            }
-
-            _nativeSubmitRuntimeFactory = () =>
-                _recoveredRuntimeFactory().NativeSubmitRuntimeSet;
-            var protectedSendActive = _controller.State.NativeSubmitEnabled
-                && _controller.State.ComposerProtected;
-            _recoveryMessagePresenter(
-                protectedSendActive
-                    ? "Local protection was repaired and protected Send is active again."
-                    : "Local protection was repaired. Protected Send remains blocked until profile verification succeeds.",
-                protectedSendActive ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
-        }
-        catch (Exception exception)
-        {
-            _crashDiagnostics.Capture(exception, "local_protection_recovery", "runtime_reload_failed");
-            _controller.PublishLocalProtectionStatus(localRecoveryCompleted
-                ? LocalProtectionRecovery.RuntimeDegradedCode
-                : LocalProtectionRecovery.RecoveryRequiredCode);
-            _recoveryMessagePresenter(
-                "Local protection was repaired, but protected Send could not be reactivated. It remains blocked.",
-                MessageBoxIcon.Warning);
-        }
+        _residentWorkflowCoordinator.RepairLocalProtection();
     }
 
     private static bool ConfirmLocalProtectionRepair()
@@ -1709,20 +1060,20 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private void ShowStartupFailure()
     {
         _notifyIcon.BalloonTipTitle = "Codex Redaction Gate - Protection disabled";
-        _notifyIcon.BalloonTipText = TrayStatusFormatter.FormatStartupError(_controller.State);
+        _notifyIcon.BalloonTipText = TrayStatusFormatter.FormatStartupError(_residentRuntime.Snapshot.State);
         _notifyIcon.BalloonTipIcon = ToolTipIcon.Error;
         _notifyIcon.ShowBalloonTip(5000);
     }
 
     private void Exit()
     {
-        if (_controller.State.Enabled
-            && !_disableConfirmation.Confirm("exit Code Sanitizer", _controller.State))
+        if (_residentRuntime.Snapshot.State.Enabled
+            && !_disableConfirmation.Confirm("exit Code Sanitizer", _residentRuntime.Snapshot.State))
         {
             return;
         }
 
-        var result = _controller.TryDisableProtection("exit", confirmed: true);
+        var result = _residentRuntime.TryDisableProtection("exit", confirmed: true);
         if (!result.Succeeded)
         {
             ShowDisableRejected(result);
@@ -1736,7 +1087,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void StopProtectionAndHideIcon()
     {
-        _controller.Stop();
+        _residentRuntime.Stop();
         _notifyIcon.Visible = false;
     }
 

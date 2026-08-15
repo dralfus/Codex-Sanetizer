@@ -20,7 +20,8 @@ internal sealed record ProtectionSnapshot(
     NativeSubmitRuntimeSet? RuntimeSet,
     bool HookReady,
     ISendControlDiscovery? SendControlDiscovery,
-    Func<TextSurfaceDiscoveryResult> ActiveSurfaceDiscovery);
+    Func<TextSurfaceDiscoveryResult> ActiveSurfaceDiscovery,
+    NativeSubmitResidentEvidence? ResidentEvidence = null);
 
 internal sealed record NativeSubmitExecutionContext(
     ProtectionSnapshot Snapshot,
@@ -109,6 +110,7 @@ internal sealed class TrayProtectionController
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
     private readonly Action<string>? _protectedSendStageObserver;
     private readonly Action? _beforeProtectedSendTracePublishForTesting;
+    private readonly INativeSubmitInputAdapter _nativeSubmitInputAdapter;
     private Action<ProtectedSendTraceEntry>? _protectedSendTracePublishedForTesting;
     private IDisposable? _residentRuntimeOwner;
     private readonly ConcurrentDictionary<CapturedTargetProfileKey, string> _capturedTargetProfiles = new();
@@ -140,7 +142,8 @@ internal sealed class TrayProtectionController
         Action<string>? protectedSendStageObserver = null,
         IDisposable? residentRuntimeOwner = null,
         IDisposable? nativeSubmitRuntimeOwner = null,
-        Action? beforeProtectedSendTracePublishForTesting = null)
+        Action? beforeProtectedSendTracePublishForTesting = null,
+        INativeSubmitInputAdapter? nativeSubmitInputAdapter = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
@@ -152,6 +155,7 @@ internal sealed class TrayProtectionController
         _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
         _protectedSendStageObserver = protectedSendStageObserver;
         _beforeProtectedSendTracePublishForTesting = beforeProtectedSendTracePublishForTesting;
+        _nativeSubmitInputAdapter = nativeSubmitInputAdapter ?? NativeSubmitInputAdapter.Instance;
         _residentRuntimeOwner = residentRuntimeOwner;
         var surfaceDiscovery = activeSurfaceDiscovery ?? (() => TextSurfaceDiscoveryResult.Failure(
             OsInteractionStatusIds.NotComposer,
@@ -169,13 +173,6 @@ internal sealed class TrayProtectionController
             surfaceDiscovery);
         _snapshotInitialized = true;
         _operationalActionLifecycle.StateChanged += (_, _) => PublishOperationalActionState();
-        if (nativeSubmitController is not null && resolvedProfile is not null)
-        {
-            nativeSubmitController.SetResidentProtectedClaimProvider(
-                () => ReadResidentChatGptClaim(resolvedProfile));
-        }
-
-        WireResidentProtectedClaimProviders(runtimes);
     }
 
     // Explicit test seam for controller tests that do not construct the Windows orchestrator.
@@ -277,7 +274,7 @@ internal sealed class TrayProtectionController
     internal void EnableResidentReadinessAdmission()
     {
         _residentReadinessAdmissionEnabled = true;
-        WireResidentProtectedClaimProviders(ReadSnapshot().RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>());
+        PublishOperationalActionState();
     }
 
     internal OperationalActionStartResult StartOperationalAction(
@@ -1139,7 +1136,6 @@ internal sealed class TrayProtectionController
                 runtimeSet.HookHost,
                 runtimes,
                 runtimeSet.ResourceOwner);
-            WireResidentProtectedClaimProviders(candidateRuntimeSet.Runtimes);
             var setupReadiness = ReadSelectedProfileSetupReadiness(candidateRuntimeSet);
             var setupRequired = setupReadiness.SetupRequired;
             var state = CreateState(
@@ -1261,35 +1257,20 @@ internal sealed class TrayProtectionController
 
     private bool StartNativeSubmitHook(NativeSubmitRuntimeSet runtimeSet)
     {
-        WireResidentProtectedClaimProviders(runtimeSet.Runtimes);
         if (runtimeSet.Runtimes.Any(runtime => !HasRequiredResidentTraceRunner(runtime)))
         {
             return false;
         }
 
-        var keyboardStarted = runtimeSet.HookHost.Start(
+        var hasPointerDiscovery = ReadSnapshot().SendControlDiscovery is not null;
+        return _nativeSubmitInputAdapter.Start(
+            runtimeSet.HookHost,
             gesture => ClassifyNativeGesture(runtimeSet, gesture),
             (gesture, classification) => RunNativeSubmitOnce(runtimeSet, gesture, classification),
-            gesture => ShouldSuppressKeyboardClassificationFailure(runtimeSet, gesture));
-        if (!keyboardStarted)
-        {
-            return false;
-        }
-
-        if (runtimeSet.HookHost is INativeSubmitPointerHookHost pointerHook
-            && ReadSnapshot().SendControlDiscovery is not null)
-        {
-            if (!pointerHook.StartPointer(
-                gesture => ClassifySendControl(runtimeSet, gesture),
-                (gesture, classification) => RunNativeSendControlOnce(runtimeSet, gesture, classification),
-                gesture => ShouldSuppressPointerClassificationFailure(runtimeSet, gesture)))
-            {
-                StopAndDisposeRuntime(runtimeSet);
-                return false;
-            }
-        }
-
-        return true;
+            gesture => ShouldSuppressKeyboardClassificationFailure(runtimeSet, gesture),
+            hasPointerDiscovery ? gesture => ClassifySendControl(runtimeSet, gesture) : null,
+            hasPointerDiscovery ? (gesture, classification) => RunNativeSendControlOnce(runtimeSet, gesture, classification) : null,
+            hasPointerDiscovery ? gesture => ShouldSuppressPointerClassificationFailure(runtimeSet, gesture) : null);
     }
 
     private NativeSubmitInterceptionResult ClassifySendControl(
@@ -1316,7 +1297,9 @@ internal sealed class TrayProtectionController
                 => target is null
                     ? TraceUnavailablePointerSubmit(runtime.Profile.ProfileId)
                     : IsLocalProtectionReady(snapshot)
-                    ? runtime.Controller.HandleIdentifiedSendControl(discovery.ComposerDiscovery)
+                    ? runtime.Controller.HandleIdentifiedSendControl(
+                        discovery.ComposerDiscovery,
+                        residentEvidence: snapshot.ResidentEvidence ?? NativeSubmitResidentEvidence.NotRequired)
                     : SuppressLocalProtectionRecoverySubmit(runtime.Profile.ProfileId),
             SendControlClassification.SelectedClientUncertain
                 => SuppressUncertainSelectedSend(SelectedClientProfileId(discovery.ComposerDiscovery, runtime)),
@@ -2561,17 +2544,24 @@ internal sealed class TrayProtectionController
             ProjectFileStatus: projectFileStatus);
     }
 
-    private void WireResidentProtectedClaimProviders(IReadOnlyList<NativeSubmitRuntime> runtimes)
+    private NativeSubmitResidentEvidence CreateResidentEvidence(ProtectionSnapshot snapshot)
     {
-        foreach (var runtime in runtimes)
-        {
-            runtime.Controller.SetResidentProtectedClaimProvider(
-                () => ReadResidentChatGptClaim(runtime.Profile));
-            runtime.Controller.SetResidentReadinessAdmissionProvider(
-                _residentReadinessAdmissionEnabled
-                    ? IsResidentReadinessAdmitted
-                    : null);
-        }
+        var readinessAdmitted = !_residentReadinessAdmissionEnabled
+            || (snapshot.State.NativeSubmitEnabled
+                && snapshot.State.ComposerProtected
+                && snapshot.State.ReadinessStatus == OsInteractionStatusIds.Protected);
+        var claim = readinessAdmitted
+            ? new ChatGptProtectedClaimResult(
+                snapshot.State.ProtectedClaimStatus,
+                snapshot.State.ReferenceAcceptanceStatus,
+                snapshot.State.LiveContractStatus,
+                "resident_snapshot")
+            : new ChatGptProtectedClaimResult(
+                ChatGptProtectedClaimEvaluator.DegradedStatus,
+                "not_applicable",
+                "not_applicable",
+                "resident_readiness_unproven");
+        return new NativeSubmitResidentEvidence(readinessAdmitted, claim);
     }
 
     private bool IsResidentReadinessAdmitted()
@@ -2591,53 +2581,6 @@ internal sealed class TrayProtectionController
             && proof.Proof.AttemptId == action.AttemptId
             && proof.Proof.CorrelationId == action.CorrelationId
             && proof.Proof.BuildVersion == BuildVersion.Current;
-    }
-
-    private ChatGptProtectedClaimResult ReadResidentChatGptClaim(SubmitBindingProfile profile)
-    {
-        if (_residentReadinessAdmissionEnabled && !IsResidentReadinessAdmitted())
-        {
-            return new ChatGptProtectedClaimResult(
-                ChatGptProtectedClaimEvaluator.DegradedStatus,
-                "not_applicable",
-                "not_applicable",
-                "resident_readiness_unproven");
-        }
-
-        var snapshot = ReadSnapshot();
-        var currentProfile = snapshot.RuntimeSet?.Runtimes
-            .FirstOrDefault(runtime => string.Equals(
-                runtime.Profile.ProfileId,
-                profile.ProfileId,
-                StringComparison.Ordinal))
-            ?.Profile;
-        if (currentProfile is null
-            || !string.Equals(
-                currentProfile.CompatibilityEvidence?.VerificationId,
-                profile.CompatibilityEvidence?.VerificationId,
-                StringComparison.Ordinal)
-            || !string.Equals(
-                currentProfile.SubmitBinding?.DisplayText,
-                profile.SubmitBinding?.DisplayText,
-                StringComparison.Ordinal)
-            || !string.Equals(
-                currentProfile.NewlineBinding?.DisplayText,
-                profile.NewlineBinding?.DisplayText,
-                StringComparison.Ordinal))
-        {
-            return new ChatGptProtectedClaimResult(
-                ChatGptProtectedClaimEvaluator.DegradedStatus,
-                "mismatch",
-                "mismatch",
-                "resident_profile_mismatch");
-        }
-
-        var state = snapshot.State;
-        return new ChatGptProtectedClaimResult(
-            state.ProtectedClaimStatus,
-            state.ReferenceAcceptanceStatus,
-            state.LiveContractStatus,
-            "resident_snapshot");
     }
 
     private bool EnterprisePolicyBlocksDisable()
@@ -2784,8 +2727,12 @@ internal sealed class TrayProtectionController
                 ? PassThroughPointer()
                 : runtimeSet.Runtimes.FirstOrDefault()?.Controller.HandleGesture(
                     gesture,
-                    activeSurfaceDiscovery: knownDiscovery) ?? PassThroughPointer())
-            : runtime.Controller.HandleGesture(gesture, activeSurfaceDiscovery: knownDiscovery);
+                    activeSurfaceDiscovery: knownDiscovery,
+                    residentEvidence: snapshot.ResidentEvidence ?? NativeSubmitResidentEvidence.NotRequired) ?? PassThroughPointer())
+            : runtime.Controller.HandleGesture(
+                gesture,
+                activeSurfaceDiscovery: knownDiscovery,
+                residentEvidence: snapshot.ResidentEvidence ?? NativeSubmitResidentEvidence.NotRequired);
         return RememberSnapshot(
             snapshot,
             runtimeSet,
@@ -2828,7 +2775,9 @@ internal sealed class TrayProtectionController
         return focusedControl.Classification switch
         {
             SendControlClassification.IdentifiedSend when runtime is not null
-                => runtime.Controller.HandleIdentifiedSendControl(focusedControl.ComposerDiscovery),
+                => runtime.Controller.HandleIdentifiedSendControl(
+                    focusedControl.ComposerDiscovery,
+                    residentEvidence: snapshot.ResidentEvidence ?? NativeSubmitResidentEvidence.NotRequired),
             SendControlClassification.SelectedClientUncertain when runtime is not null
                 => SuppressUncertainSelectedSend(runtime.Profile.ProfileId),
             SendControlClassification.NonSendControl => PassThroughPointer(),
@@ -2968,9 +2917,7 @@ internal sealed class TrayProtectionController
         var setupRequired = false;
         foreach (var runtime in runtimeSet.Runtimes)
         {
-            var status = runtime.Controller.GetSetupReadinessStatus(
-                _storageLayout,
-                runtime.Profile.ProfileId);
+            var status = runtime.Controller.ProfileSnapshot.SetupStatus;
             if (status == OsInteractionStatusIds.ProfilesUnavailable)
             {
                 return new SetupReadiness(
@@ -2999,7 +2946,9 @@ internal sealed class TrayProtectionController
 
     private void PublishSnapshot(ProtectionSnapshot snapshot)
     {
-        Volatile.Write(ref _currentSnapshot, snapshot);
+        var published = WithResidentEvidence(snapshot);
+        Volatile.Write(ref _currentSnapshot, published);
+        PublishResidentEvidence(published);
         NotifyStateChanged();
     }
 
@@ -3016,9 +2965,30 @@ internal sealed class TrayProtectionController
 
     private bool TryReplaceSnapshotIfCurrent(ProtectionSnapshot expected, ProtectionSnapshot replacement)
     {
-        return ReferenceEquals(
-            Interlocked.CompareExchange(ref _currentSnapshot, replacement, expected),
-            expected);
+        var published = WithResidentEvidence(replacement);
+        if (!ReferenceEquals(
+                Interlocked.CompareExchange(ref _currentSnapshot, published, expected),
+                expected))
+        {
+            return false;
+        }
+
+        PublishResidentEvidence(published);
+        return true;
+    }
+
+    private ProtectionSnapshot WithResidentEvidence(ProtectionSnapshot snapshot)
+    {
+        return snapshot with { ResidentEvidence = CreateResidentEvidence(snapshot) };
+    }
+
+    private static void PublishResidentEvidence(ProtectionSnapshot snapshot)
+    {
+        var evidence = snapshot.ResidentEvidence ?? NativeSubmitResidentEvidence.NotRequired;
+        foreach (var runtime in snapshot.RuntimeSet?.Runtimes ?? Array.Empty<NativeSubmitRuntime>())
+        {
+            runtime.Controller.SetResidentEvidence(evidence);
+        }
     }
 
     private void NotifyStateChanged()
@@ -3333,6 +3303,170 @@ internal sealed record ResidentProtectionRuntime(
     Func<OsInteractionResult> ApplyOnlyRunner,
     NativeSubmitRuntimeSet? NativeSubmitRuntimeSet,
     IDisposable? ApplyOnlyResourceOwner = null);
+
+/// <summary>
+/// The resident protection boundary consumed by Windows-facing adapters.
+/// It publishes the controller's immutable snapshot instead of exposing its
+/// reload and hook-transition internals to callers.
+/// </summary>
+internal interface IResidentProtectionRuntime
+{
+    event EventHandler? SnapshotChanged;
+
+    ProtectionSnapshot Snapshot { get; }
+
+    TrayProtectionState State { get; }
+
+    OperationalActionState OperationalAction { get; }
+
+    bool IsNativeSubmitHookReady { get; }
+
+    bool Start();
+
+    void Stop();
+
+    ProtectionDisableResult TryDisableProtection(string action, bool confirmed);
+
+    void RefreshDiagnostics();
+}
+
+/// <summary>
+/// Internal workflow port. Only resident coordinators use these transition
+/// primitives; WinForms code is deliberately limited to IResidentProtectionRuntime.
+/// </summary>
+internal interface IResidentProtectionWorkflowRuntime : IResidentProtectionRuntime
+{
+
+    bool Reload(NativeSubmitRuntimeSet candidateRuntimeSet);
+
+    bool Reload(ResidentProtectionRuntime candidateRuntime);
+
+    void EnableResidentReadinessAdmission();
+
+    OperationalActionStartResult StartOperationalAction(string actionKind, string stage, bool userInputRequired, string nextAction);
+
+    bool PublishOperationalActionStage(string stage, bool userInputRequired, string nextAction, long expectedAttemptId = 0);
+
+    bool CompleteOperationalAction(string outcomeCode, string nextAction = "none", long expectedAttemptId = 0);
+
+    bool CancelOperationalAction(string outcomeCode = "cancelled", long expectedAttemptId = 0);
+
+    bool IsCurrentOperationalActionAttempt(long attemptId);
+
+    void RefreshOperationalActionState();
+
+    bool TryRecordResidentReadinessProof(long expectedAttemptId);
+
+    void PublishSetupVerificationProgress(PromptProtectionSetupProgress progress);
+
+    bool IsCurrentSetupVerificationAttempt(long attemptId);
+
+    void PublishPromptProtectionRetryStarted();
+
+    void PublishPromptProtectionRetrySucceeded();
+
+    void PublishPromptProtectionRetryFailure();
+
+    void PublishLocalProtectionStatus(string localProtectionStatus);
+
+    bool TryPublishLocalProtectionReady();
+}
+
+internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkflowRuntime
+{
+    private readonly TrayProtectionController _controller;
+
+    public ResidentProtectionRuntimeFacade(TrayProtectionController controller)
+    {
+        _controller = controller ?? throw new ArgumentNullException(nameof(controller));
+        _controller.StateChanged += OnControllerStateChanged;
+    }
+
+    public event EventHandler? SnapshotChanged;
+
+    public ProtectionSnapshot Snapshot => _controller.GetCurrentSnapshot();
+
+    public TrayProtectionState State => Snapshot.State;
+
+    public OperationalActionState OperationalAction => _controller.OperationalAction;
+
+    public bool IsNativeSubmitHookReady => _controller.IsNativeSubmitHookReady;
+
+    public bool Start() => _controller.Start();
+
+    public void Stop() => _controller.Stop();
+
+    public ProtectionDisableResult TryDisableProtection(string action, bool confirmed) =>
+        _controller.TryDisableProtection(action, confirmed);
+
+    public void RefreshDiagnostics()
+    {
+        _controller.RefreshProjectFileProtectionStatus();
+        _controller.RefreshNativeSubmitHookDiagnostics();
+    }
+
+    public void RefreshProjectFileProtectionStatus() => _controller.RefreshProjectFileProtectionStatus();
+
+    public void RefreshNativeSubmitHookDiagnostics() => _controller.RefreshNativeSubmitHookDiagnostics();
+
+    public bool Reload(NativeSubmitRuntimeSet candidateRuntimeSet)
+    {
+        ArgumentNullException.ThrowIfNull(candidateRuntimeSet);
+        return _controller.ReloadNativeSubmit(candidateRuntimeSet);
+    }
+
+    public bool Reload(ResidentProtectionRuntime candidateRuntime)
+    {
+        ArgumentNullException.ThrowIfNull(candidateRuntime);
+        return _controller.ReloadResidentRuntime(candidateRuntime);
+    }
+
+    public void EnableResidentReadinessAdmission() => _controller.EnableResidentReadinessAdmission();
+
+    public OperationalActionStartResult StartOperationalAction(
+        string actionKind, string stage, bool userInputRequired, string nextAction) =>
+        _controller.StartOperationalAction(actionKind, stage, userInputRequired, nextAction);
+
+    public bool PublishOperationalActionStage(
+        string stage, bool userInputRequired, string nextAction, long expectedAttemptId = 0) =>
+        _controller.PublishOperationalActionStage(stage, userInputRequired, nextAction, expectedAttemptId);
+
+    public bool CompleteOperationalAction(string outcomeCode, string nextAction = "none", long expectedAttemptId = 0) =>
+        _controller.CompleteOperationalAction(outcomeCode, nextAction, expectedAttemptId);
+
+    public bool CancelOperationalAction(string outcomeCode = "cancelled", long expectedAttemptId = 0) =>
+        _controller.CancelOperationalAction(outcomeCode, expectedAttemptId);
+
+    public bool IsCurrentOperationalActionAttempt(long attemptId) =>
+        _controller.IsCurrentOperationalActionAttempt(attemptId);
+
+    public void RefreshOperationalActionState() => _controller.RefreshOperationalActionState();
+
+    public bool TryRecordResidentReadinessProof(long expectedAttemptId) =>
+        _controller.TryRecordResidentReadinessProof(expectedAttemptId);
+
+    public void PublishSetupVerificationProgress(PromptProtectionSetupProgress progress) =>
+        _controller.PublishSetupVerificationProgress(progress);
+
+    public bool IsCurrentSetupVerificationAttempt(long attemptId) =>
+        _controller.IsCurrentSetupVerificationAttempt(attemptId);
+
+    public void PublishPromptProtectionRetryStarted() => _controller.PublishPromptProtectionRetryStarted();
+
+    public void PublishPromptProtectionRetrySucceeded() => _controller.PublishPromptProtectionRetrySucceeded();
+
+    public void PublishPromptProtectionRetryFailure() => _controller.PublishPromptProtectionRetryFailure();
+
+    public void PublishLocalProtectionStatus(string localProtectionStatus) =>
+        _controller.PublishLocalProtectionStatus(localProtectionStatus);
+
+    public bool TryPublishLocalProtectionReady() => _controller.TryPublishLocalProtectionReady();
+
+    private void OnControllerStateChanged(object? sender, EventArgs eventArgs)
+    {
+        SnapshotChanged?.Invoke(this, eventArgs);
+    }
+}
 
 internal static class TrayStatusFormatter
 {

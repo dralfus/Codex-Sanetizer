@@ -313,6 +313,8 @@ You can set the version explicitly:
 
 The Inno installer launches `CodexRedactionGate.Tray.exe` after setup and can register the same tray executable in HKCU autostart. During upgrades, if Code Sanitizer is already running, setup shows an explicit warning that resident protection must stop temporarily, then stops `CodexRedactionGate.Tray.exe` before replacing files and starts it again after setup. Release builds are self-contained for `win-x64`, so the installed application does not require `dotnet` to be available in `PATH`.
 
+The build also performs an installer-version smoke check: the `ProductVersion` embedded in the generated setup EXE must exactly match `BuildVersion`. A successful build prints `installer_version_smoke=passed`.
+
 ## Local Data
 
 Default local data root:

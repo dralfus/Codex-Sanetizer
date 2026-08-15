@@ -74,5 +74,13 @@ if (-not (Test-Path $installerPath)) {
     throw "Expected installer was not created: $installerPath"
 }
 
+$installerProductVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($installerPath).ProductVersion
+if ([string]::IsNullOrWhiteSpace($installerProductVersion) -or
+    -not [string]::Equals($installerProductVersion.Trim(), $BuildVersion.Trim(), [System.StringComparison]::Ordinal)) {
+    throw "Installer version smoke failed. Expected '$BuildVersion', got '$installerProductVersion'."
+}
+
 Write-Host "installer_output=$installerOutput"
 Write-Host "installer_path=$installerPath"
+Write-Host "installer_product_version=$installerProductVersion"
+Write-Host "installer_version_smoke=passed"

@@ -201,13 +201,20 @@ public sealed class ChatGptProtectedClaimTests
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => discovery,
-            setupLayout: layout);
-        controller.SetResidentReadinessAdmissionProvider(() => true);
+            activeSurfaceDiscovery: () => discovery);
+        var evidence = new NativeSubmitResidentEvidence(
+            ReadinessAdmitted: true,
+            new ChatGptProtectedClaimResult(
+                ChatGptProtectedClaimEvaluator.DegradedStatus,
+                "unavailable",
+                "unavailable",
+                "resident_snapshot_unavailable"));
 
         try
         {
-            var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+            var result = controller.HandleGesture(
+                new NativeKeyGesture("Enter", Ctrl: true),
+                residentEvidence: evidence);
 
             Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
             Assert.That(result.SuppressOriginalInput, Is.True);
@@ -225,6 +232,38 @@ public sealed class ChatGptProtectedClaimTests
         }
     }
 
+    [TestCase(false, OsInteractionStatusIds.FailedClosed)]
+    [TestCase(true, OsInteractionStatusIds.NativeSubmitGuarded)]
+    public void NativeSubmitInterception_UsesCapturedResidentEvidenceForAdmission(
+        bool readinessAdmitted,
+        string expectedStatus)
+    {
+        var discovery = CreateDiscovery();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Ctrl+Enter",
+            "Enter",
+            discovery);
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+            activeSurfaceDiscovery: () => discovery);
+        var evidence = new NativeSubmitResidentEvidence(
+            readinessAdmitted,
+            new ChatGptProtectedClaimResult(
+                ChatGptProtectedClaimEvaluator.DegradedStatus,
+                "not_applicable",
+                "not_applicable",
+                "resident_snapshot"));
+
+        var result = controller.HandleGesture(
+            new NativeKeyGesture("Enter", Ctrl: true),
+            residentEvidence: evidence);
+
+        Assert.That(result.Status, Is.EqualTo(expectedStatus));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+    }
+
     [Test]
     public void MissingResidentReadinessStillBlocksChatGptSendWithoutReleaseProofs()
     {
@@ -239,13 +278,16 @@ public sealed class ChatGptProtectedClaimTests
         var controller = new NativeSubmitInterceptionController(
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
-            activeSurfaceDiscovery: () => discovery,
-            setupLayout: layout);
-        controller.SetResidentReadinessAdmissionProvider(() => false);
+            activeSurfaceDiscovery: () => discovery);
+        var evidence = new NativeSubmitResidentEvidence(
+            ReadinessAdmitted: false,
+            NativeSubmitResidentEvidence.NotRequired.ChatGptClaim);
 
         try
         {
-            var result = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+            var result = controller.HandleGesture(
+                new NativeKeyGesture("Enter", Ctrl: true),
+                residentEvidence: evidence);
 
             Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
             Assert.That(result.SuppressOriginalInput, Is.True);
@@ -376,7 +418,10 @@ public sealed class ChatGptProtectedClaimTests
             profile,
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
             activeSurfaceDiscovery: () => discovery,
-            setupLayout: layout);
+            profileSnapshot: NativeSubmitProfileSnapshot.FromProfile(profile) with
+            {
+                LiveContractCaptureArmed = true
+            });
 
         try
         {
@@ -389,10 +434,17 @@ public sealed class ChatGptProtectedClaimTests
                     terminalStatus: "passed"),
                 Is.True);
             Assert.That(ChatGptAcceptanceProofStore.ArmLiveContract(layout, profile), Is.True);
-            controller.SetResidentProtectedClaimProvider(
-                () => ChatGptProtectedClaimEvaluator.Evaluate(profile, layout));
+            var evidence = new NativeSubmitResidentEvidence(
+                ReadinessAdmitted: true,
+                new ChatGptProtectedClaimResult(
+                ChatGptProtectedClaimEvaluator.DegradedStatus,
+                "passed",
+                "armed",
+                "resident_snapshot"));
 
-            var first = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+            var first = controller.HandleGesture(
+                new NativeKeyGesture("Enter", Ctrl: true),
+                residentEvidence: evidence);
 
             Assert.That(first.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
             Assert.That(first.Diagnostics["live_contract_capture"], Is.EqualTo("armed_reserved"));
@@ -406,7 +458,9 @@ public sealed class ChatGptProtectedClaimTests
             Assert.That(claimAfterFailure.ReferenceStatus, Is.EqualTo("passed"));
             Assert.That(claimAfterFailure.LiveContractStatus, Is.EqualTo("armed"));
 
-            var retry = controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
+            var retry = controller.HandleGesture(
+                new NativeKeyGesture("Enter", Ctrl: true),
+                residentEvidence: evidence);
 
             Assert.That(retry.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
             Assert.That(retry.Diagnostics["live_contract_capture"], Is.EqualTo("armed_reserved"));
