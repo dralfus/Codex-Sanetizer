@@ -506,7 +506,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 _layout,
                 profiles));
         _firstRunSetupControllerFactory = firstRunSetupControllerFactory
-            ?? (() => new FirstRunSetupController(workflowRuntime.PublishSetupVerificationProgress));
+            ?? (() => new FirstRunSetupController(progress =>
+                workflowRuntime.Publish(ResidentWorkflowPublication.Setup(progress))));
         _firstRunSetupCompleted = firstRunSetupCompleted;
         _recoveredRuntimeFactory = recoveredRuntimeFactory ?? (() =>
             WindowsTrayApp.CreateResidentProtectionRuntime(Sanitizer.CreateProduction(_layout), _layout));
@@ -515,7 +516,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _recoveryMessagePresenter = recoveryMessagePresenter ?? ShowLocalProtectionRecoveryMessage;
         if (!string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
-            workflowRuntime.PublishLocalProtectionStatus(localProtectionStatus);
+            workflowRuntime.Publish(ResidentWorkflowPublication.LocalProtection(localProtectionStatus));
         }
 
         _activationWindow = new Form

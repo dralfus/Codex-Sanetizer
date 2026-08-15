@@ -2121,6 +2121,29 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void OsInteractionOrchestrator_PublishesReplayTraceBeforeSubmitSideEffect()
+    {
+        var events = new List<string>();
+        var surface = new ProductFlowTextSurface("Connect to 192.168.10.25")
+        {
+            EventLog = events
+        };
+        var orchestrator = CreateProductFlowOrchestrator(surface, ConfirmationDecisionContract.Confirm);
+
+        var result = orchestrator.RunOnce(
+            OsInteractionRunOptions.ConfirmAndSend,
+            (stage, _) =>
+            {
+                events.Add(stage);
+                return true;
+            });
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Submitted));
+        Assert.That(events.IndexOf("send_injected"), Is.GreaterThanOrEqualTo(0));
+        Assert.That(events.IndexOf("send_injected"), Is.LessThan(events.IndexOf("submit")));
+    }
+
+    [Test]
     public void OsInteractionOrchestrator_StopsBeforeSubmitWhenResidentOperationIsStaleAtReplayBoundary()
     {
         var surface = new ProductFlowTextSurface("Connect to 192.168.10.25");
@@ -5078,6 +5101,8 @@ public partial class SanitizerTests
 
         public int SubmitCount { get; private set; }
 
+        public List<string>? EventLog { get; init; }
+
         public TextSurfaceDiscoveryResult DiscoverActiveSurface()
         {
             DiscoveryCount++;
@@ -5144,6 +5169,7 @@ public partial class SanitizerTests
 
         public SubmitActionResult Submit(TextSurfaceDescriptor surface)
         {
+            EventLog?.Add("submit");
             SubmitCount++;
             return new SubmitActionResult(
                 true,

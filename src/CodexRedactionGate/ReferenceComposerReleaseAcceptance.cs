@@ -261,7 +261,7 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
             "target_matched",
             "composer_read",
             "sanitized",
-            "overlay_created",
+            "overlay_decision",
             "overlay_foreground_confirmed",
             "cancelled",
             "terminal_blocked"

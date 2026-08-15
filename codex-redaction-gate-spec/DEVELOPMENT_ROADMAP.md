@@ -42,6 +42,8 @@ flowchart TD
     R343["[x] 343\nРазделить profile и input adapters"]
     T344["[x] 344\nИзолировать suite от установленного tray"]
     R346["[x] 346\nImmutable admission evidence\nдо native callback"]
+    A347["[x] 347\nCompact resident workflow interface\nTrayProtection разгружен"]
+    A348["[x] 348\nDeep protected Send operation\nNativeSubmitInterception разгружен"]
     R314["[~] 314\nБезопасный первый mouse Send"]
     Keyboard["Клавиатурная prompt-защита\nповторная release-приёмка"]
     R323["[x] 323\nOpaque compatibility fingerprints"]
@@ -56,12 +58,18 @@ flowchart TD
     R341 --> R343
     R343 --> R346
     R346 --> R314
+    R341 --> A347
+    R342 --> A347
+    R345 --> A347
+    R346 --> A347
+    A347 --> A348
     T344 -. "нужен для честной\nполной проверки" .-> Keyboard
     R342 --> Keyboard
     R346 --> Keyboard
     R314 -. "mouse Send остаётся отключён\nдо завершения" .-> Keyboard
     Keyboard --> R323
     R323 --> R324
+    A348 -. "до расширения\nfile ingress" .-> Ingress
     R324 --> Ingress
     Ingress --> Files
 ```
@@ -76,14 +84,30 @@ flowchart TD
 | 2 | **345** `[x]` | Coordinator владеет setup, retry, local recovery и readiness; acceptance-матрица покрывает success, cancellation, stale candidate, rollback и recovery failure. | 341 |
 | 3 | **342** `[x]` | Tray хранит только UI-порт, отображает published state и отправляет явные intents. | 345 |
 | 4 | **343** `[x]` | Profile verification/storage отделены от low-level keyboard/pointer input adapter; status и live-contract arm собираются до запуска hook. | 341 |
-| параллельно | **344** `[x]` | Полный automated suite изолирован от установленного tray через уникальные per-test instance IDs; `1725/1725` прошли при запущенном installed tray. | Нет |
+| параллельно | **344** `[x]` | Полный automated suite изолирован от установленного tray через уникальные per-test instance IDs; `1726/1726` прошли при запущенном installed tray. | Нет |
 | 5 | **346** `[x]` | Resident публикует immutable admission evidence до callback; callback не вызывает provider и не выполняет I/O. | 343 |
 
 **Контрольная точка после этапа 1:** автоматические проверки уже пройдены:
-`1725/1725`, `--self-test` и `--product-smoke`; установленный tray оставался
+`1733/1733`, `--self-test` и `--product-smoke`; установленный tray оставался
 запущенным во время полного suite. До ручной приёмки и перехода к mouse Send
 необходимо пересобрать installer и выполнить одну ограниченную ручную проверку
 **клавиатурной** отправки в выбранном OpenAI Desktop composer.
+
+### Этап 1.5. Углубить уже построенный resident путь
+
+Этот этап не меняет модель защиты и не добавляет новый способ отправки. Он
+уменьшает количество мест, где могут появиться смешанные решения о состоянии,
+перед началом file-ingress работ.
+
+| Очерёдность | Тикет | Результат | Зависимости |
+|---:|---|---|---|
+| 1 | **347** `[x]` | Один компактный resident workflow interface владеет lifecycle, readiness, candidate activation/rollback и terminal publication; tray остаётся проекцией snapshot. | 341, 342, 345, 346 |
+| 2 | **348** `[x]` | Correlated protected Send operation владеет stage ordering, target revalidation, overlay, write, replay и raw-free terminal trace; Windows adapters не принимают самостоятельных submit/replay решений. | 347, 323, 324, 346 |
+
+**Gate этапа 1.5:** до начала `283`/`286` и нового file-ingress кода должны быть
+зелёными полный automated suite, `--self-test`, `--product-smoke` и
+детерминированная reference-composer матрица. `314` остаётся отдельной задачей
+для mouse Send и не является условием запуска 347/348.
 
 ### Этап 2. Закрыть оставшиеся точечные риски prompt-защиты
 
@@ -114,10 +138,10 @@ flowchart TD
 1. Пересобрать installer и провести одну ограниченную ручную приёмку
    клавиатурного protected Send.
 2. Если mouse Send входит в объём этой приёмки, сначала завершить `314`.
-3. `323 -> 324` завершены; `314` сознательно оставить открытой до отдельного
-   этапа добавления mouse Send.
-4. После решения по mouse Send начинать исследование внешней интеграционной
-   возможности для `283`.
+3. Выполнить архитектурное закрепление `347 -> 348`; `314` сознательно
+   оставить открытой до отдельного этапа добавления mouse Send.
+4. После прохождения gate этапа 1.5 начинать исследование внешней
+   интеграционной возможности для `283`.
 
 ## Границы, которые нельзя размывать
 

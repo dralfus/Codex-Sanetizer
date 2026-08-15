@@ -425,6 +425,16 @@ public sealed class OsInteractionOrchestrator
                 ("verification_status", verificationCapture.Status)));
         }
 
+        if (!TryTrace(traceStage, "send_injected", "submit_requested"))
+        {
+            replayLease?.Dispose();
+            return Finish(OsInteractionStatusIds.FailedClosed, replaySurface, result, model, true, false, Merge(
+                diagnostics,
+                replace.Diagnostics,
+                ("write_status", replace.Status),
+                ("trace_status", "send_injected_unavailable")));
+        }
+
         SubmitActionResult submit;
         try
         {
@@ -446,17 +456,6 @@ public sealed class OsInteractionOrchestrator
                 submit.Diagnostics,
                 ("write_status", replace.Status),
                 ("submit_status", submit.Status)));
-        }
-
-        if (!TryTrace(traceStage, "send_injected", "submit_requested"))
-        {
-            return Finish(OsInteractionStatusIds.FailedClosed, replaySurface, result, model, true, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                submit.Diagnostics,
-                ("write_status", replace.Status),
-                ("submit_status", submit.Status),
-                ("trace_status", "send_injected_unavailable")));
         }
 
         return Finish(OsInteractionStatusIds.Submitted, replaySurface, result, model, true, true, Merge(

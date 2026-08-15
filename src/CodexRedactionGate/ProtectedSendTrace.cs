@@ -27,11 +27,13 @@ internal enum ProtectedSendTraceStage
     TargetMatched,
     ComposerRead,
     Sanitized,
+    OverlayDecision,
     OverlayCreated,
     OverlayForegroundConfirmed,
     Approved,
     Cancelled,
     TextWritten,
+    Replayed,
     SendInjected,
     SentSafely,
     TerminalBlocked
@@ -148,11 +150,13 @@ internal readonly record struct ProtectedSendTraceTransition(
             [ProtectedSendTraceStage.TargetMatched] = "target_matched",
             [ProtectedSendTraceStage.ComposerRead] = "composer_read",
             [ProtectedSendTraceStage.Sanitized] = "sanitized",
+            [ProtectedSendTraceStage.OverlayDecision] = "overlay_decision",
             [ProtectedSendTraceStage.OverlayCreated] = "overlay_created",
             [ProtectedSendTraceStage.OverlayForegroundConfirmed] = "overlay_foreground_confirmed",
             [ProtectedSendTraceStage.Approved] = "approved",
             [ProtectedSendTraceStage.Cancelled] = "cancelled",
             [ProtectedSendTraceStage.TextWritten] = "text_written",
+            [ProtectedSendTraceStage.Replayed] = "replayed",
             [ProtectedSendTraceStage.SendInjected] = "send_injected",
             [ProtectedSendTraceStage.SentSafely] = "sent_safely",
             [ProtectedSendTraceStage.TerminalBlocked] = "terminal_blocked"
@@ -205,11 +209,13 @@ internal readonly record struct ProtectedSendTraceTransition(
             ProtectedSendTraceStage.TargetMatched => resultCode == "target_verified",
             ProtectedSendTraceStage.ComposerRead => resultCode == "capture_verified",
             ProtectedSendTraceStage.Sanitized => resultCode == "sanitization_verified",
+            ProtectedSendTraceStage.OverlayDecision => resultCode is "confirmation_requested" or OsInteractionStatusIds.DryRunAllow,
             ProtectedSendTraceStage.OverlayCreated => resultCode == "confirmation_requested",
             ProtectedSendTraceStage.OverlayForegroundConfirmed => resultCode == "foreground_verified",
             ProtectedSendTraceStage.Approved => resultCode == "user_approved",
             ProtectedSendTraceStage.Cancelled => resultCode == "user_cancelled",
             ProtectedSendTraceStage.TextWritten => resultCode == "write_verified",
+            ProtectedSendTraceStage.Replayed => resultCode == "submit_requested",
             ProtectedSendTraceStage.SendInjected => resultCode == "submit_requested",
             ProtectedSendTraceStage.SentSafely => resultCode == OsInteractionStatusIds.Submitted,
             ProtectedSendTraceStage.TerminalBlocked => IsBlockedResultCode(resultCode),
@@ -337,12 +343,24 @@ internal static class ProtectedSendTrace
             ProtectedSendTraceStage.SendDetected => next is ProtectedSendTraceStage.TargetMatched or ProtectedSendTraceStage.TerminalBlocked,
             ProtectedSendTraceStage.TargetMatched => next is ProtectedSendTraceStage.ComposerRead or ProtectedSendTraceStage.TerminalBlocked,
             ProtectedSendTraceStage.ComposerRead => next is ProtectedSendTraceStage.Sanitized or ProtectedSendTraceStage.TerminalBlocked,
-            ProtectedSendTraceStage.Sanitized => next is ProtectedSendTraceStage.OverlayCreated or ProtectedSendTraceStage.SendInjected or ProtectedSendTraceStage.TerminalBlocked,
+            ProtectedSendTraceStage.Sanitized => next is ProtectedSendTraceStage.OverlayDecision
+                or ProtectedSendTraceStage.OverlayCreated
+                or ProtectedSendTraceStage.Replayed
+                or ProtectedSendTraceStage.SendInjected
+                or ProtectedSendTraceStage.TerminalBlocked,
+            ProtectedSendTraceStage.OverlayDecision => next is ProtectedSendTraceStage.OverlayForegroundConfirmed
+                or ProtectedSendTraceStage.Approved
+                or ProtectedSendTraceStage.Cancelled
+                or ProtectedSendTraceStage.Replayed
+                or ProtectedSendTraceStage.TerminalBlocked,
             ProtectedSendTraceStage.OverlayCreated => next is ProtectedSendTraceStage.OverlayForegroundConfirmed or ProtectedSendTraceStage.TerminalBlocked,
             ProtectedSendTraceStage.OverlayForegroundConfirmed => next is ProtectedSendTraceStage.Approved or ProtectedSendTraceStage.Cancelled or ProtectedSendTraceStage.TerminalBlocked,
             ProtectedSendTraceStage.Cancelled => next is ProtectedSendTraceStage.TerminalBlocked,
             ProtectedSendTraceStage.Approved => next is ProtectedSendTraceStage.TextWritten or ProtectedSendTraceStage.SendInjected or ProtectedSendTraceStage.TerminalBlocked,
-            ProtectedSendTraceStage.TextWritten => next is ProtectedSendTraceStage.SendInjected or ProtectedSendTraceStage.TerminalBlocked,
+            ProtectedSendTraceStage.TextWritten => next is ProtectedSendTraceStage.Replayed
+                or ProtectedSendTraceStage.SendInjected
+                or ProtectedSendTraceStage.TerminalBlocked,
+            ProtectedSendTraceStage.Replayed => next is ProtectedSendTraceStage.SentSafely or ProtectedSendTraceStage.TerminalBlocked,
             ProtectedSendTraceStage.SendInjected => next is ProtectedSendTraceStage.SentSafely or ProtectedSendTraceStage.TerminalBlocked,
             _ => false
         };
@@ -412,6 +430,16 @@ internal static class ProtectedSendTrace
                     "target_matched",
                     "composer_read",
                     "sanitized",
+                    "overlay_decision",
+                    "replayed",
+                    "sent_safely"
+                })
+            || stages.SequenceEqual(new[]
+                {
+                    "send_detected",
+                    "target_matched",
+                    "composer_read",
+                    "sanitized",
                     "send_injected",
                     "sent_safely"
                 })
@@ -426,6 +454,19 @@ internal static class ProtectedSendTrace
                     "approved",
                     "text_written",
                     "send_injected",
+                    "sent_safely"
+                })
+            || stages.SequenceEqual(new[]
+                {
+                    "send_detected",
+                    "target_matched",
+                    "composer_read",
+                    "sanitized",
+                    "overlay_decision",
+                    "overlay_foreground_confirmed",
+                    "approved",
+                    "text_written",
+                    "replayed",
                     "sent_safely"
                 });
     }

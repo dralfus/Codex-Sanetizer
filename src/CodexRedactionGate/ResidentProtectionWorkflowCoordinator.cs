@@ -11,7 +11,7 @@ namespace CodexRedactionGate;
 /// </summary>
 internal sealed class ResidentProtectionWorkflowCoordinator
 {
-    private readonly IResidentProtectionWorkflowRuntime _runtime;
+    private readonly IResidentProtectionWorkflowPort _runtime;
     private readonly DefaultStorageLayout _layout;
     private readonly Func<IFirstRunSetupController> _setupControllerFactory;
     private readonly Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?> _candidateRuntimeFactory;
@@ -25,7 +25,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
     private int _workflowInProgress;
 
     public ResidentProtectionWorkflowCoordinator(
-        IResidentProtectionWorkflowRuntime runtime,
+        IResidentProtectionWorkflowPort runtime,
         DefaultStorageLayout layout,
         Func<IFirstRunSetupController> setupControllerFactory,
         Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?> candidateRuntimeFactory,
@@ -58,9 +58,13 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         return _runtime.Start();
     }
 
-    public void RefreshOperationalState() => _runtime.RefreshOperationalActionState();
+    public void RefreshOperationalState() => _runtime.RefreshOperationalState();
 
-    public void CancelCurrentOperation() => _runtime.CancelOperationalAction();
+    public void CancelCurrentOperation()
+    {
+        var attemptId = _runtime.OperationalAction.AttemptId;
+        _runtime.Publish(ResidentWorkflowPublication.Cancelled(), attemptId);
+    }
 
     public void RetryCurrentOperation()
     {
@@ -80,7 +84,8 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             return;
         }
 
-        var started = _runtime.StartOperationalAction("local_readiness", "starting", false, "wait_for_result");
+        var started = _runtime.StartAction(new ResidentWorkflowActionRequest(
+            "local_readiness", "starting", false, "wait_for_result"));
         if (!started.Started)
         {
             return;
@@ -92,7 +97,9 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             exception =>
             {
                 _captureFailure(exception, "local_readiness", "check_failed");
-                _runtime.CompleteOperationalAction("local_readiness_check_failed", "retry_local_readiness", started.AttemptId);
+                _runtime.Publish(
+                    ResidentWorkflowPublication.Completed("local_readiness_check_failed", "retry_local_readiness"),
+                    started.AttemptId);
             });
     }
 
@@ -143,7 +150,17 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             return;
         }
 
-        _runtime.PublishPromptProtectionRetryStarted();
+        var started = _runtime.StartAction(new ResidentWorkflowActionRequest(
+            "prompt_protection_retry", "starting", false, "wait_for_result"));
+        if (!started.Started
+            || !_runtime.Publish(
+                ResidentWorkflowPublication.RetryStarted(started.AttemptId),
+                started.AttemptId))
+        {
+            Interlocked.Exchange(ref _workflowInProgress, 0);
+            return;
+        }
+
         Queue(
             () =>
             {
@@ -162,7 +179,8 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                 var activated = false;
                 try
                 {
-                    activated = runtimeSet is not null && _runtime.Reload(runtimeSet);
+                    activated = runtimeSet is not null
+                        && _runtime.Reload(runtimeSet, started.AttemptId);
                 }
                 catch (Exception exception)
                 {
@@ -172,11 +190,17 @@ internal sealed class ResidentProtectionWorkflowCoordinator
 
                 if (activated)
                 {
-                    _runtime.PublishPromptProtectionRetrySucceeded();
+                    _runtime.Publish(ResidentWorkflowPublication.RetrySucceeded(started.AttemptId), started.AttemptId);
+                    _runtime.Publish(
+                        ResidentWorkflowPublication.Completed("succeeded", "none"),
+                        started.AttemptId);
                 }
                 else
                 {
-                    _runtime.PublishPromptProtectionRetryFailure();
+                    _runtime.Publish(ResidentWorkflowPublication.RetryFailed(started.AttemptId), started.AttemptId);
+                    _runtime.Publish(
+                        ResidentWorkflowPublication.Completed("failed", "retry_protection"),
+                        started.AttemptId);
                 }
 
                 Interlocked.Exchange(ref _workflowInProgress, 0);
@@ -184,7 +208,10 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             exception =>
             {
                 _captureFailure(exception, "tray_prompt_protection_retry", "worker_failed");
-                _runtime.PublishPromptProtectionRetryFailure();
+                _runtime.Publish(ResidentWorkflowPublication.RetryFailed(started.AttemptId), started.AttemptId);
+                _runtime.Publish(
+                    ResidentWorkflowPublication.Completed("failed", "retry_protection"),
+                    started.AttemptId);
                 Interlocked.Exchange(ref _workflowInProgress, 0);
             });
     }
@@ -196,15 +223,34 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             return;
         }
 
-        _runtime.PublishLocalProtectionStatus(LocalProtectionRecovery.ReloadingCode);
+        var started = _runtime.StartAction(new ResidentWorkflowActionRequest(
+            "local_protection_recovery", "starting", false, "wait_for_result"));
+        if (!started.Started
+            || !_runtime.Publish(
+                ResidentWorkflowPublication.LocalProtection(
+                    LocalProtectionRecovery.ReloadingCode,
+                    started.AttemptId),
+                started.AttemptId))
+        {
+            Interlocked.Exchange(ref _workflowInProgress, 0);
+            return;
+        }
+
         try
         {
-            CompleteRecovery(_localProtectionRecovery());
+            CompleteRecovery(_localProtectionRecovery(), started.AttemptId);
         }
         catch (Exception exception)
         {
             _captureFailure(exception, "local_protection_recovery", "worker_failed");
-            _runtime.PublishLocalProtectionStatus(LocalProtectionRecovery.RecoveryRequiredCode);
+            _runtime.Publish(
+                ResidentWorkflowPublication.LocalProtection(
+                    LocalProtectionRecovery.RecoveryRequiredCode,
+                    started.AttemptId),
+                started.AttemptId);
+            _runtime.Publish(
+                ResidentWorkflowPublication.Completed("failed", "repair_local_protection"),
+                started.AttemptId);
             Notice?.Invoke("Local protection repair could not be completed. Protected Send remains blocked.", true);
             Interlocked.Exchange(ref _workflowInProgress, 0);
         }
@@ -220,9 +266,11 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         var action = _runtime.OperationalAction;
         var attemptId = action.Status == "running"
             ? action.AttemptId
-            : _runtime.StartOperationalAction("first_run_setup", "starting", false, "focus_message_composer").AttemptId;
-        if (attemptId <= 0 || !_runtime.PublishOperationalActionStage(
-                "awaiting_user_focus", true, "focus_message_composer", attemptId))
+            : _runtime.StartAction(new ResidentWorkflowActionRequest(
+                "first_run_setup", "starting", false, "focus_message_composer")).AttemptId;
+        if (attemptId <= 0 || !_runtime.Publish(
+                ResidentWorkflowPublication.ForStage("awaiting_user_focus", true, "focus_message_composer"),
+                attemptId))
         {
             if (resetScheduled)
             {
@@ -249,7 +297,9 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             exception =>
             {
                 _captureFailure(exception, "first_run_setup", "worker_failed");
-                _runtime.CompleteOperationalAction("setup_failed", "retry_setup", attemptId);
+                _runtime.Publish(
+                    ResidentWorkflowPublication.Completed("setup_failed", "retry_setup"),
+                    attemptId);
                 if (resetScheduled)
                 {
                     Interlocked.Exchange(ref _setupScheduled, 0);
@@ -261,7 +311,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
 
     private void CompleteSetup(FirstRunSetupResult? result, long operationalAttemptId)
     {
-        if (!_runtime.IsCurrentOperationalActionAttempt(operationalAttemptId))
+        if (!_runtime.IsCurrent(ResidentWorkflowAttempt.Operational(operationalAttemptId)))
         {
             return;
         }
@@ -270,7 +320,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         var activationFailed = false;
         var setupAttemptId = SetupAttemptId(result);
         if (result?.PendingProfiles is not null
-            && (setupAttemptId <= 0 || !_runtime.IsCurrentSetupVerificationAttempt(setupAttemptId)))
+            && (setupAttemptId <= 0 || !_runtime.IsCurrent(ResidentWorkflowAttempt.SetupVerification(setupAttemptId))))
         {
             // A partial or stale verification result cannot name the resident
             // attempt it belongs to. Ignore it without activating a candidate,
@@ -281,11 +331,11 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         if (result?.Succeeded == true && !result.State.Required)
         {
             if ((result.PendingProfiles is null || setupAttemptId > 0)
-                && (setupAttemptId <= 0 || _runtime.IsCurrentSetupVerificationAttempt(setupAttemptId)))
+                && (setupAttemptId <= 0 || _runtime.IsCurrent(ResidentWorkflowAttempt.SetupVerification(setupAttemptId))))
             {
-                _runtime.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                _runtime.Publish(ResidentWorkflowPublication.Setup(new PromptProtectionSetupProgress(
                     "activating_protection", "wait_for_verification", ProfileId(result),
-                    _runtime.State.ProtectedSendBinding, setupAttemptId));
+                    _runtime.State.ProtectedSendBinding, setupAttemptId)));
                 NativeSubmitRuntimeSet? candidate = null;
                 try
                 {
@@ -297,12 +347,13 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                     candidate = result.PendingProfiles is { } profiles
                         ? _candidateRuntimeFactory(profiles)
                         : _retryRuntimeFactory();
-                    var candidateActivated = candidate is not null && _runtime.Reload(candidate);
+                    var candidateActivated = candidate is not null
+                        && _runtime.Reload(candidate, operationalAttemptId);
                     if (candidateActivated && CommitProfiles(result))
                     {
-                        _runtime.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                        _runtime.Publish(ResidentWorkflowPublication.Setup(new PromptProtectionSetupProgress(
                             "protected", "none", ProfileId(result),
-                            _runtime.State.ProtectedSendBinding, setupAttemptId));
+                            _runtime.State.ProtectedSendBinding, setupAttemptId)));
                         success = true;
                     }
                     else
@@ -313,8 +364,8 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                             StopUnactivatedRuntime(candidate);
                         }
 
-                        RollbackProfiles(result);
-                        ReloadPreviousRuntimeAfterSetupRollback();
+                        RollbackProfiles(result, operationalAttemptId);
+                        ReloadPreviousRuntimeAfterSetupRollback(operationalAttemptId);
                     }
                 }
                 catch (Exception exception)
@@ -322,8 +373,8 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                     activationFailed = true;
                     _captureFailure(exception, "first_run_setup", "runtime_reload_failed");
                     StopUnactivatedRuntime(candidate);
-                    RollbackProfiles(result);
-                    ReloadPreviousRuntimeAfterSetupRollback();
+                    RollbackProfiles(result, operationalAttemptId);
+                    ReloadPreviousRuntimeAfterSetupRollback(operationalAttemptId);
                 }
             }
         }
@@ -333,8 +384,8 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             var status = result?.Code == "setup_cancelled"
                 ? "setup_cancelled"
                 : activationFailed ? "activation_failed" : "verification_failed";
-            _runtime.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-                status, "retry_setup", AttemptId: SetupAttemptId(result)));
+            _runtime.Publish(ResidentWorkflowPublication.Setup(new PromptProtectionSetupProgress(
+                status, "retry_setup", AttemptId: SetupAttemptId(result))));
             PublishNotice(
                 result?.Code == "setup_cancelled"
                     ? "Prompt setup was cancelled. Protected Send remains blocked."
@@ -342,16 +393,22 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                 result?.Code != "setup_cancelled");
         }
 
-        _runtime.CompleteOperationalAction(success ? "succeeded" : result?.Code == "setup_cancelled" ? "cancelled" : "setup_failed",
-            success ? "none" : "retry_setup", operationalAttemptId);
+        _runtime.Publish(
+            result?.Code == "setup_cancelled"
+                ? ResidentWorkflowPublication.Cancelled()
+                : ResidentWorkflowPublication.Completed(
+                    success ? "succeeded" : "setup_failed",
+                    success ? "none" : "retry_setup"),
+            operationalAttemptId);
         SetupCompleted?.Invoke(result);
     }
 
     private void CompleteLocalReadiness(LocalReadinessResult result, long attemptId)
     {
-        if (!_runtime.CompleteOperationalAction(
-                result.Succeeded ? "succeeded" : result.Code,
-                result.Succeeded ? "none" : "retry_local_readiness",
+        if (!_runtime.Publish(
+                ResidentWorkflowPublication.Completed(
+                    result.Succeeded ? "succeeded" : result.Code,
+                    result.Succeeded ? "none" : "retry_local_readiness"),
                 attemptId))
         {
             return;
@@ -359,10 +416,10 @@ internal sealed class ResidentProtectionWorkflowCoordinator
 
         if (result.Succeeded)
         {
-            _runtime.TryRecordResidentReadinessProof(attemptId);
+            _runtime.Publish(ResidentWorkflowPublication.ReadinessProof(), attemptId);
         }
 
-        _runtime.RefreshOperationalActionState();
+        _runtime.RefreshOperationalState();
     }
 
     private bool CommitProfiles(FirstRunSetupResult result)
@@ -370,7 +427,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         try
         {
             if (result.PendingProfiles is not null
-                && !_runtime.IsCurrentSetupVerificationAttempt(SetupAttemptId(result)))
+                && !_runtime.IsCurrent(ResidentWorkflowAttempt.SetupVerification(SetupAttemptId(result))))
             {
                 return false;
             }
@@ -395,7 +452,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         }
     }
 
-    private void RollbackProfiles(FirstRunSetupResult result)
+    private void RollbackProfiles(FirstRunSetupResult result, long operationalAttemptId)
     {
         if (result.PreviousProfiles is { } profiles)
         {
@@ -411,48 +468,74 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             ActivePromptProtectionTargetStore.Clear(_layout);
         }
 
-        _runtime.PublishPromptProtectionRetryFailure();
+        _runtime.Publish(
+            ResidentWorkflowPublication.RetryFailed(operationalAttemptId),
+            operationalAttemptId);
     }
 
-    private void ReloadPreviousRuntimeAfterSetupRollback()
+    private void ReloadPreviousRuntimeAfterSetupRollback(long operationalAttemptId)
     {
         try
         {
             var rollback = _retryRuntimeFactory();
-            if (rollback is null || !_runtime.Reload(rollback))
+            if (rollback is null || !_runtime.Reload(rollback, operationalAttemptId))
             {
                 StopUnactivatedRuntime(rollback);
-                _runtime.PublishPromptProtectionRetryFailure();
+                _runtime.Publish(
+                    ResidentWorkflowPublication.RetryFailed(operationalAttemptId),
+                    operationalAttemptId);
             }
         }
         catch (Exception exception)
         {
             _captureFailure(exception, "first_run_setup", "runtime_rollback_create_failed");
-            _runtime.PublishPromptProtectionRetryFailure();
+            _runtime.Publish(
+                ResidentWorkflowPublication.RetryFailed(operationalAttemptId),
+                operationalAttemptId);
         }
     }
 
-    private void CompleteRecovery(LocalProtectionRecoveryResult result)
+    private void CompleteRecovery(LocalProtectionRecoveryResult result, long attemptId)
     {
         try
         {
             if (!result.Succeeded)
             {
-                _runtime.PublishLocalProtectionStatus(LocalProtectionRecovery.RecoveryRequiredCode);
+                _runtime.Publish(
+                    ResidentWorkflowPublication.LocalProtection(
+                        LocalProtectionRecovery.RecoveryRequiredCode,
+                        attemptId),
+                    attemptId);
+                _runtime.Publish(
+                    ResidentWorkflowPublication.Completed("failed", "repair_local_protection"),
+                    attemptId);
                 Notice?.Invoke("Local protection repair could not be completed. Protected Send remains blocked.", true);
                 return;
             }
 
             var runtime = _recoveredRuntimeFactory();
             if (runtime.NativeSubmitRuntimeSet is null
-                || !_runtime.Reload(runtime)
+                || !_runtime.Reload(runtime, attemptId)
                 || (!_runtime.State.Enabled && !_runtime.Start())
-                || !_runtime.TryPublishLocalProtectionReady())
+                || !_runtime.Publish(
+                    ResidentWorkflowPublication.LocalReady(attemptId),
+                    attemptId))
             {
-                _runtime.PublishLocalProtectionStatus(LocalProtectionRecovery.RuntimeDegradedCode);
+                _runtime.Publish(
+                    ResidentWorkflowPublication.LocalProtection(
+                        LocalProtectionRecovery.RuntimeDegradedCode,
+                        attemptId),
+                    attemptId);
+                _runtime.Publish(
+                    ResidentWorkflowPublication.Completed("failed", "repair_local_protection"),
+                    attemptId);
                 Notice?.Invoke("Local protection was repaired, but protected Send could not be reactivated. It remains blocked.", true);
                 return;
             }
+
+            _runtime.Publish(
+                ResidentWorkflowPublication.Completed("succeeded", "none"),
+                attemptId);
 
             var active = _runtime.State.NativeSubmitEnabled && _runtime.State.ComposerProtected;
             Notice?.Invoke(
@@ -464,7 +547,14 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         catch (Exception exception)
         {
             _captureFailure(exception, "local_protection_recovery", "runtime_reload_failed");
-            _runtime.PublishLocalProtectionStatus(LocalProtectionRecovery.RuntimeDegradedCode);
+            _runtime.Publish(
+                ResidentWorkflowPublication.LocalProtection(
+                    LocalProtectionRecovery.RuntimeDegradedCode,
+                    attemptId),
+                attemptId);
+            _runtime.Publish(
+                ResidentWorkflowPublication.Completed("failed", "repair_local_protection"),
+                attemptId);
             Notice?.Invoke("Local protection was repaired, but protected Send could not be reactivated. It remains blocked.", true);
         }
         finally

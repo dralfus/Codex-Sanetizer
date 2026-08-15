@@ -2694,3 +2694,116 @@ desktop focus is used. Ticket 345 is complete.
    - Prove setup success, activation failure/rollback, retry failure, recovery
      failure, cancellation, and stale completion. Confirm the tray cannot
      independently mark protection ready or release Send.
+
+## 347. Углубить resident workflow interface и разгрузить TrayProtection
+
+**What to build:** Resident setup, retry, recovery, readiness and runtime
+activation are driven through one compact resident workflow interface. The tray
+continues to dispatch user intent and project published state, but it no longer
+depends on low-level transition primitives or reconstructs protection status.
+The refactor must preserve the currently working keyboard protected-Send path.
+
+**Blocked by:** 341. Deepen the resident protection runtime behind one
+published interface; 342. Make the Windows tray a thin projection of resident
+protection state; 345. Move resident setup, retry, and recovery workflows into
+one coordinator; 346. Publish immutable resident admission evidence before
+native callbacks.
+
+**State owner:** The resident workflow module owns operation ordering, attempt
+correlation, candidate activation/rollback, readiness admission and published
+terminal state. The tray owns only WinForms lifetime, explicit user intents and
+rendering of the published snapshot.
+
+**Fail-closed state:** A missing or stale workflow operation, an uncorrelated
+completion, a failed candidate activation, a failed rollback or an unavailable
+published snapshot leaves the current safe runtime active when possible;
+otherwise selected Send remains suppressed. The tray cannot mark protection
+ready from a local flag.
+
+**Allowed transitions:** `intent -> running(attempt) -> stage updates ->
+succeeded | failed | cancelled`; `candidate -> activated -> published` or
+`candidate -> rejected -> rollback`. Only the resident workflow owner may
+publish terminal state, and stale completions cannot alter a newer generation.
+
+**Deterministic proof:** Use injected queues and adapters to exercise setup,
+retry, local recovery, readiness, candidate activation, rollback, cancellation,
+stale completion and concurrent reload. Tests must run without timers, desktop
+focus, UIA or cloud access and must assert that every published protection
+state is a projection of one resident snapshot.
+
+- [x] Replace the broad workflow transition surface with one compact resident
+      workflow interface whose operations are user-intent/lifecycle oriented.
+- [x] Remove tray decisions about readiness, activation success and terminal
+      recovery state; retain only intent dispatch, confirmation and projection.
+- [x] Preserve atomic generation/CAS publication and prove no mixed state during
+      concurrent reload and callback activity.
+- [x] Keep keyboard protected Send behaviour unchanged and pass the full
+      automated suite, `--self-test` and `--product-smoke`.
+
+**Completed (2026-08-15):** Added the compact resident workflow port and moved
+setup, retry, recovery, readiness, candidate activation/rollback and terminal
+publication through the coordinator. Correlated reload checks run inside the
+reload gate, stale publications are rejected without changing the snapshot,
+and the tray-facing context retains only the resident UI port. Deterministic
+tests cover incomplete/stale publication and concurrent whole-generation
+reload. Verification: `1733/1733` tests, `--self-test` and `--product-smoke`
+passed.
+
+## 348. Выделить ядро protected Send из NativeSubmitInterception
+
+**What to build:** The correlated protected Send operation becomes one deep
+module that owns the attempt lifecycle, target revalidation, sanitization,
+confirmation, local write, replay and raw-free terminal trace. Windows hook,
+profile/compatibility evidence, persistence and product smoke remain adapters
+around that seam. The user-visible behaviour and fail-closed guarantees stay
+unchanged.
+
+**Blocked by:** 347. Deepen the resident workflow interface and разгрузить
+TrayProtection; 323. Make ChatGPT compatibility fingerprints explicitly
+opaque; 324. Centralize the verified ChatGPT discovery fixture schema; 346.
+Publish immutable resident admission evidence before native callbacks.
+
+**State owner:** The protected Send operation owns the correlated attempt,
+target identity, operation stage and terminal outcome. The Windows input
+adapter owns only fast captured-input classification and suppression. Profile
+and compatibility adapters own evidence construction and persistence. The
+resident snapshot remains the only admission source supplied to the callback.
+
+**Fail-closed state:** Any missing stage, target change, foreground refusal,
+write failure, replay uncertainty, stale snapshot or incomplete evidence
+suppresses the original Send and publishes a raw-free blocked outcome. No
+adapter may replay or submit independently of the operation.
+
+**Allowed transitions:**
+`send_detected -> target_matched -> composer_read -> sanitized ->
+overlay_decision -> text_written -> replayed -> sent_safely | blocked(reason)`.
+Safe prompts use an explicit no-overlay terminal branch. Cancel, stale target,
+write failure and replay uncertainty terminate the current attempt and leave the
+next Send eligible for a new attempt.
+
+**Deterministic proof:** Run the same protected Send interface through the
+reference composer and injected Windows adapters. Cover safe and sensitive
+prompts, cancel, foreground refusal, target change before write/replay, write
+failure, replay unavailable/partial, repeated Send and unrelated input. Tests
+must assert raw-free traces, zero callback-time storage reads and no cloud
+access.
+
+- [x] Move protected Send stage ordering and terminal trace ownership behind one
+      deep operation interface.
+- [x] Keep hook, UIA, profile storage, compatibility evidence and smoke code as
+      adapters with no independent submit/replay decisions.
+- [x] Preserve reference-composer and live compatibility evidence semantics,
+      including opaque fingerprint comparison and resident admission.
+- [x] Pass the full automated suite, `--self-test`, `--product-smoke` and the
+      deterministic reference-composer matrix before any file-ingress work.
+
+**Completed (2026-08-15):** Extracted `ProtectedSendPipeline` and guarded
+execution from `NativeSubmitInterception`. The pipeline owns correlated stage
+and terminal trace publication, while the hook only classifies/suppresses and
+the Windows/UIA path receives the operation's target, trace and execution
+guards. Replay trace publication now occurs before the actual submit side
+effect; trace failure therefore blocks without sending. Canonical safe and
+sensitive traces, repeated sends, unrelated input, raw-free exceptions and
+reference-composer failure scenarios are covered. Verification: `1733/1733`
+tests, `--self-test`, `--product-smoke` and the twice-run reference-composer
+matrix passed.

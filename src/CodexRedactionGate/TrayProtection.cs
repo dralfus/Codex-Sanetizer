@@ -101,7 +101,7 @@ internal interface ITrayHotkeyHost
     void Stop();
 }
 
-internal sealed class TrayProtectionController
+internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 {
     private readonly ITrayHotkeyHost _hotkeyHost;
     private readonly Func<OsInteractionResult> _applyOnlyRunner;
@@ -120,6 +120,7 @@ internal sealed class TrayProtectionController
     private bool _snapshotInitialized;
     private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
     private ResidentProtectedSendOperation? _activeProtectedSendOperation;
+    private readonly ProtectedSendPipeline _protectedSendPipeline;
     private ProtectionSnapshot _currentSnapshot;
 
     public TrayProtectionController(ITrayHotkeyHost hotkeyHost, Func<OsInteractionResult> applyOnlyRunner)
@@ -172,8 +173,53 @@ internal sealed class TrayProtectionController
             sendControlDiscovery,
             surfaceDiscovery);
         _snapshotInitialized = true;
+        _protectedSendPipeline = new ProtectedSendPipeline(this);
         _operationalActionLifecycle.StateChanged += (_, _) => PublishOperationalActionState();
     }
+
+    ProtectionSnapshot? IProtectedSendPipelineHost.PublishProtectedSendAttempt(
+        ProtectionSnapshot snapshot,
+        ResidentProtectedSendOperation operation,
+        string status,
+        string action) => PublishProtectedSendAttempt(snapshot, operation, status, action);
+
+    ProtectionSnapshot? IProtectedSendPipelineHost.PublishProtectedSendTrace(
+        ProtectionSnapshot snapshot,
+        ResidentProtectedSendOperation operation,
+        string stage,
+        string resultCode,
+        string? attemptStatus,
+        string? attemptAction) => PublishProtectedSendTrace(
+            snapshot,
+            operation,
+            stage,
+            resultCode,
+            attemptStatus,
+            attemptAction);
+
+    ProtectionSnapshot? IProtectedSendPipelineHost.PublishTraceUnavailable(
+        ProtectionSnapshot snapshot,
+        string? profileId) => PublishTraceUnavailable(snapshot, profileId);
+
+    void IProtectedSendPipelineHost.ObserveProtectedSendStage(string stage) => ObserveProtectedSendStage(stage);
+
+    bool IProtectedSendPipelineHost.CanContinueProtectedSendOperation(
+        ResidentProtectedSendOperation operation) => CanContinueProtectedSendOperation(operation);
+
+    IDisposable? IProtectedSendPipelineHost.AcquireProtectedSendSideEffect(
+        ResidentProtectedSendOperation operation) => AcquireProtectedSendSideEffect(operation);
+
+    OsInteractionResult IProtectedSendPipelineHost.RunNativeSubmitFlow(
+        NativeSubmitRuntime runtime,
+        NativeSubmitTargetIdentity? target,
+        Func<string, string, bool> traceStage,
+        Func<bool> executionGuard,
+        Func<IDisposable?> executionLease) => RunNativeSubmitFlow(
+            runtime,
+            target,
+            traceStage,
+            executionGuard,
+            executionLease);
 
     // Explicit test seam for controller tests that do not construct the Windows orchestrator.
     internal static TrayProtectionController CreateTest(
@@ -892,6 +938,23 @@ internal sealed class TrayProtectionController
         }
     }
 
+    internal bool ReloadNativeSubmit(
+        NativeSubmitRuntimeSet runtimeSet,
+        long expectedAttemptId)
+    {
+        ArgumentNullException.ThrowIfNull(runtimeSet);
+        lock (_reloadGate)
+        {
+            if (!IsCurrentOperationalActionAttempt(expectedAttemptId))
+            {
+                return false;
+            }
+
+            var previous = ReadSnapshot();
+            return ReloadRuntime(previous, runtimeSet, previous.ApplyOnlyRunner);
+        }
+    }
+
     public bool ReloadResidentRuntime(ResidentProtectionRuntime runtime)
     {
         ArgumentNullException.ThrowIfNull(runtime);
@@ -902,6 +965,38 @@ internal sealed class TrayProtectionController
 
         lock (_reloadGate)
         {
+            var previous = ReadSnapshot();
+            var reloaded = ReloadRuntime(
+                previous,
+                runtime.NativeSubmitRuntimeSet,
+                runtime.ApplyOnlyRunner,
+                runtime.ApplyOnlyResourceOwner);
+            if (!reloaded)
+            {
+                runtime.ApplyOnlyResourceOwner?.Dispose();
+            }
+
+            return reloaded;
+        }
+    }
+
+    internal bool ReloadResidentRuntime(
+        ResidentProtectionRuntime runtime,
+        long expectedAttemptId)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        if (runtime.NativeSubmitRuntimeSet is null)
+        {
+            return false;
+        }
+
+        lock (_reloadGate)
+        {
+            if (!IsCurrentOperationalActionAttempt(expectedAttemptId))
+            {
+                return false;
+            }
+
             var previous = ReadSnapshot();
             var reloaded = ReloadRuntime(
                 previous,
@@ -1435,7 +1530,7 @@ internal sealed class TrayProtectionController
                     snapshot,
                     runtimeSet,
                     execution.Target,
-                    operation => RunTraceUnavailableProtectedSendFlow(
+                    operation => _protectedSendPipeline.ExecuteTraceUnavailable(
                         snapshot,
                         runtime,
                         classification,
@@ -1473,7 +1568,7 @@ internal sealed class TrayProtectionController
                 snapshot,
                 runtimeSet,
                 execution.Target,
-                operation => RunProtectedNativeSubmitFlow(snapshot, runtime, classification, operation),
+                operation => _protectedSendPipeline.Execute(snapshot, runtime, classification, operation),
                 out var result))
         {
             if (Volatile.Read(ref _activeProtectedSendOperation) is not null)
@@ -1497,38 +1592,6 @@ internal sealed class TrayProtectionController
             result.Applied,
             result.Submitted,
             diagnostics: result.Diagnostics);
-    }
-
-    private NativeSubmitInterceptionResult RunTraceUnavailableProtectedSendFlow(
-        ProtectionSnapshot eventSnapshot,
-        NativeSubmitRuntime runtime,
-        NativeSubmitInterceptionResult classification,
-        ResidentProtectedSendOperation operation)
-    {
-        var detectedTraceSnapshot = PublishProtectedSendTrace(
-            eventSnapshot,
-            operation,
-            "send_detected",
-            "checking_prompt",
-            "detected",
-            "checking_prompt");
-        if (detectedTraceSnapshot is null)
-        {
-            return FailedClosedNativeSubmitResult();
-        }
-
-        if (PublishProtectedSendTrace(
-                detectedTraceSnapshot,
-                operation,
-                "terminal_blocked",
-                OsInteractionStatusIds.TraceUnavailable,
-                "trace_unavailable",
-                "retry_protection") is null)
-        {
-            return FailedClosedNativeSubmitResult();
-        }
-
-        return classification;
     }
 
     private static NativeSubmitInterceptionResult PassThroughPointer()
@@ -1639,7 +1702,7 @@ internal sealed class TrayProtectionController
                 snapshot,
                 runtimeSet,
                 execution.Target,
-                operation => RunProtectedNativeSubmitFlow(snapshot, runtime, classification, operation),
+                operation => _protectedSendPipeline.Execute(snapshot, runtime, classification, operation),
                 out var protectedResult))
         {
             if (Volatile.Read(ref _activeProtectedSendOperation) is not null)
@@ -1669,106 +1732,6 @@ internal sealed class TrayProtectionController
             diagnostics: protectedResult.Diagnostics);
     }
 
-    private NativeSubmitInterceptionResult RunProtectedNativeSubmitFlow(
-        ProtectionSnapshot eventSnapshot,
-        NativeSubmitRuntime runtime,
-        NativeSubmitInterceptionResult classification,
-        ResidentProtectedSendOperation operation)
-    {
-        var snapshot = eventSnapshot;
-        var detectedTraceSnapshot = PublishProtectedSendTrace(
-            snapshot,
-            operation,
-            "send_detected",
-            "checking_prompt",
-            "detected",
-            "checking_prompt");
-        if (detectedTraceSnapshot is null)
-        {
-            PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
-            return FailedClosedNativeSubmitResult();
-        }
-
-        var checkingSnapshot = PublishProtectedSendAttempt(
-            detectedTraceSnapshot,
-            operation,
-            "checking",
-            "checking_prompt");
-        if (checkingSnapshot is null)
-        {
-            PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
-            return FailedClosedNativeSubmitResult();
-        }
-
-        snapshot = checkingSnapshot;
-        ObserveProtectedSendStage("detection");
-        ObserveProtectedSendStage("checking");
-
-        var targetMatchedSnapshot = PublishProtectedSendTrace(
-            snapshot,
-            operation,
-            "target_matched",
-            "target_verified");
-        if (targetMatchedSnapshot is null)
-        {
-            PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
-            return FailedClosedNativeSubmitResult();
-        }
-
-        snapshot = targetMatchedSnapshot;
-
-        bool TraceStage(string stage, string resultCode)
-        {
-            ObserveProtectedSendStage(stage switch
-            {
-                "overlay_created" or "overlay_foreground_confirmed" => "overlay",
-                "text_written" => "write",
-                "send_injected" => "replay",
-                _ => stage
-            });
-            var tracedSnapshot = PublishProtectedSendTrace(snapshot, operation, stage, resultCode);
-            if (tracedSnapshot is null)
-            {
-                return false;
-            }
-
-            snapshot = tracedSnapshot;
-            return true;
-        }
-
-        var result = runtime.Controller.CompleteGuardedSubmit(
-            classification,
-            () => RunNativeSubmitFlow(
-                runtime,
-                operation.Target,
-                TraceStage,
-                () => CanContinueProtectedSendOperation(operation),
-                () => AcquireProtectedSendSideEffect(operation)));
-
-        var terminalTrace = result.Submitted
-            ? PublishProtectedSendTrace(
-                snapshot,
-                operation,
-                "sent_safely",
-                result.Status,
-                ProtectedSendAttemptStatus(result.Status, submitted: true),
-                ProtectedSendAttemptAction(result.Status, submitted: true))
-            : PublishProtectedSendTrace(
-                snapshot,
-                operation,
-                "terminal_blocked",
-                result.Status,
-                ProtectedSendAttemptStatus(result.Status, submitted: false),
-                ProtectedSendAttemptAction(result.Status, submitted: false));
-        if (terminalTrace is null)
-        {
-            PublishTraceUnavailable(snapshot, runtime.Profile.ProfileId);
-            return FailedClosedNativeSubmitResult();
-        }
-
-        return result;
-    }
-
     private void PublishNativeSubmitState(
         ProtectionSnapshot eventSnapshot,
         string lastStatus,
@@ -1789,6 +1752,7 @@ internal sealed class TrayProtectionController
                 return;
             }
 
+            var attemptDisposition = ProtectedSendPipeline.AttemptDisposition(lastStatus, submitted);
             var state = new TrayProtectionState(
                 Enabled: true,
                 Mode: "NativeSubmit",
@@ -1815,8 +1779,8 @@ internal sealed class TrayProtectionController
                 PromptProtectionRetryFailed: current.State.PromptProtectionRetryFailed,
                 PromptProtectionRetryInProgress: current.State.PromptProtectionRetryInProgress,
                 ConfiguredProfileId: current.State.ConfiguredProfileId,
-                ProtectedSendAttemptStatus: ProtectedSendAttemptStatus(lastStatus, submitted),
-                ProtectedSendAttemptAction: ProtectedSendAttemptAction(lastStatus, submitted),
+                ProtectedSendAttemptStatus: attemptDisposition.Status,
+                ProtectedSendAttemptAction: attemptDisposition.Action,
                 ProtectedSendAttemptId: current.State.ProtectedSendAttemptId,
                 ProtectedSendAttemptTrace: current.State.ProtectedSendAttemptTrace,
                 ProtectedSendAttemptStartedAtTimestamp: current.State.ProtectedSendAttemptStartedAtTimestamp,
@@ -1876,7 +1840,7 @@ internal sealed class TrayProtectionController
         };
     }
 
-    private ProtectionSnapshot? PublishProtectedSendAttempt(
+    internal ProtectionSnapshot? PublishProtectedSendAttempt(
         ProtectionSnapshot snapshot,
         ResidentProtectedSendOperation operation,
         string status,
@@ -1909,7 +1873,7 @@ internal sealed class TrayProtectionController
         }
     }
 
-    private ProtectionSnapshot? PublishProtectedSendTrace(
+    internal ProtectionSnapshot? PublishProtectedSendTrace(
         ProtectionSnapshot snapshot,
         ResidentProtectedSendOperation operation,
         string stage,
@@ -2131,7 +2095,7 @@ internal sealed class TrayProtectionController
         }
     }
 
-    private ProtectionSnapshot? PublishTraceUnavailable(ProtectionSnapshot source, string? profileId)
+    internal ProtectionSnapshot? PublishTraceUnavailable(ProtectionSnapshot source, string? profileId)
     {
         var current = ReadSnapshot();
         if (!CanContinueWithRuntime(current, source))
@@ -2239,7 +2203,7 @@ internal sealed class TrayProtectionController
             && state.ProtectedSendAttemptId > 0;
     }
 
-    private void ObserveProtectedSendStage(string stage)
+    internal void ObserveProtectedSendStage(string stage)
     {
         _protectedSendStageObserver?.Invoke(stage);
     }
@@ -2329,62 +2293,6 @@ internal sealed class TrayProtectionController
             ProtectedSendAttemptStartedAtTimestamp = operation?.StartedAtTimestamp ?? sourceState.ProtectedSendAttemptStartedAtTimestamp,
             LastProtectedSendInterruption = interruption,
             LastProtectedSendTraceStatus = "trace_unavailable"
-        };
-    }
-
-    private static string ProtectedSendAttemptStatus(string status, bool submitted)
-    {
-        if (submitted && status == OsInteractionStatusIds.Submitted)
-        {
-            return "sent_safely";
-        }
-
-        return status switch
-        {
-            OsInteractionStatusIds.NativeSubmitInProgress => "in_progress",
-            OsInteractionStatusIds.NativeSubmitSetupRequired => "setup_required",
-            OsInteractionStatusIds.ProfilesUnavailable => "settings_unavailable",
-            OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer
-                or OsInteractionStatusIds.BindingUnknown or OsInteractionStatusIds.NotConfigured => "binding_not_verified",
-            OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "composer_changed",
-            OsInteractionStatusIds.CaptureFailed => "capture_failed",
-            OsInteractionStatusIds.WriteFailed => "write_failed",
-            OsInteractionStatusIds.VerificationFailed => "verification_failed",
-            OsInteractionStatusIds.SubmitFailed => "submit_failed",
-            OsInteractionStatusIds.Canceled => "canceled",
-            OsInteractionStatusIds.ReplayIndeterminate => "replay_indeterminate",
-            OsInteractionStatusIds.TraceUnavailable => "trace_unavailable",
-            OsInteractionStatusIds.EnterpriseBlocked => "policy_blocked",
-            OsInteractionStatusIds.Blocked => "content_blocked",
-            LocalProtectionRecovery.RecoveryRequiredCode or LocalProtectionRecovery.RuntimeDegradedCode => "local_protection_unavailable",
-            _ => "protection_unavailable"
-        };
-    }
-
-    private static string ProtectedSendAttemptAction(string status, bool submitted)
-    {
-        if (submitted && status == OsInteractionStatusIds.Submitted)
-        {
-            return "none";
-        }
-
-        return status switch
-        {
-            OsInteractionStatusIds.NativeSubmitSetupRequired => "set_up_prompt_protection",
-            OsInteractionStatusIds.ProfilesUnavailable => "repair_profile_settings",
-            OsInteractionStatusIds.SurfaceUnverified or OsInteractionStatusIds.NotComposer
-                or OsInteractionStatusIds.BindingUnknown or OsInteractionStatusIds.NotConfigured => "set_up_prompt_protection",
-            OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer => "focus_and_send_again",
-            OsInteractionStatusIds.CaptureFailed or OsInteractionStatusIds.WriteFailed
-                or OsInteractionStatusIds.VerificationFailed or OsInteractionStatusIds.SubmitFailed => "retry_protection",
-            OsInteractionStatusIds.Canceled => "edit_or_send_again",
-            OsInteractionStatusIds.ReplayIndeterminate => "retry_protection",
-            OsInteractionStatusIds.TraceUnavailable => "retry_protection",
-            OsInteractionStatusIds.NativeSubmitInProgress => "wait_for_current_send",
-            OsInteractionStatusIds.EnterpriseBlocked => "contact_administrator",
-            OsInteractionStatusIds.Blocked => "edit_prompt_and_send_again",
-            LocalProtectionRecovery.RecoveryRequiredCode or LocalProtectionRecovery.RuntimeDegradedCode => "repair_local_protection",
-            _ => "retry_protection"
         };
     }
 
@@ -3095,12 +3003,12 @@ internal sealed class TrayProtectionController
         }
     }
 
-    private bool CanContinueProtectedSendOperation(ResidentProtectedSendOperation operation)
+    internal bool CanContinueProtectedSendOperation(ResidentProtectedSendOperation operation)
     {
         return operation.CanContinue(ReadSnapshot());
     }
 
-    private IDisposable? AcquireProtectedSendSideEffect(ResidentProtectedSendOperation operation)
+    internal IDisposable? AcquireProtectedSendSideEffect(ResidentProtectedSendOperation operation)
     {
         return operation.TryAcquireSideEffect(ReadSnapshot());
     }
@@ -3152,7 +3060,7 @@ internal sealed class TrayProtectionController
         }
     }
 
-    private static OsInteractionResult RunNativeSubmitFlow(
+    internal static OsInteractionResult RunNativeSubmitFlow(
         NativeSubmitRuntime runtime,
         NativeSubmitTargetIdentity? target,
         Func<string, string, bool> traceStage,
@@ -3172,19 +3080,6 @@ internal sealed class TrayProtectionController
         }
 
         return TraceRunnerUnavailableResult();
-    }
-
-    private static NativeSubmitInterceptionResult FailedClosedNativeSubmitResult()
-    {
-        return new NativeSubmitInterceptionResult(
-            OsInteractionStatusIds.FailedClosed,
-            SuppressOriginalInput: true,
-            Applied: false,
-            Submitted: false,
-            Diagnostics: new Dictionary<string, string>
-            {
-                ["trace_status"] = "trace_unavailable"
-            });
     }
 
     internal static OsInteractionResult TraceRunnerUnavailableResult()
@@ -3330,49 +3225,7 @@ internal interface IResidentProtectionRuntime
     void RefreshDiagnostics();
 }
 
-/// <summary>
-/// Internal workflow port. Only resident coordinators use these transition
-/// primitives; WinForms code is deliberately limited to IResidentProtectionRuntime.
-/// </summary>
-internal interface IResidentProtectionWorkflowRuntime : IResidentProtectionRuntime
-{
-
-    bool Reload(NativeSubmitRuntimeSet candidateRuntimeSet);
-
-    bool Reload(ResidentProtectionRuntime candidateRuntime);
-
-    void EnableResidentReadinessAdmission();
-
-    OperationalActionStartResult StartOperationalAction(string actionKind, string stage, bool userInputRequired, string nextAction);
-
-    bool PublishOperationalActionStage(string stage, bool userInputRequired, string nextAction, long expectedAttemptId = 0);
-
-    bool CompleteOperationalAction(string outcomeCode, string nextAction = "none", long expectedAttemptId = 0);
-
-    bool CancelOperationalAction(string outcomeCode = "cancelled", long expectedAttemptId = 0);
-
-    bool IsCurrentOperationalActionAttempt(long attemptId);
-
-    void RefreshOperationalActionState();
-
-    bool TryRecordResidentReadinessProof(long expectedAttemptId);
-
-    void PublishSetupVerificationProgress(PromptProtectionSetupProgress progress);
-
-    bool IsCurrentSetupVerificationAttempt(long attemptId);
-
-    void PublishPromptProtectionRetryStarted();
-
-    void PublishPromptProtectionRetrySucceeded();
-
-    void PublishPromptProtectionRetryFailure();
-
-    void PublishLocalProtectionStatus(string localProtectionStatus);
-
-    bool TryPublishLocalProtectionReady();
-}
-
-internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkflowRuntime
+internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkflowPort, IResidentProtectionRuntime
 {
     private readonly TrayProtectionController _controller;
 
@@ -3405,14 +3258,16 @@ internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkf
         _controller.RefreshNativeSubmitHookDiagnostics();
     }
 
-    public void RefreshProjectFileProtectionStatus() => _controller.RefreshProjectFileProtectionStatus();
-
-    public void RefreshNativeSubmitHookDiagnostics() => _controller.RefreshNativeSubmitHookDiagnostics();
-
     public bool Reload(NativeSubmitRuntimeSet candidateRuntimeSet)
     {
         ArgumentNullException.ThrowIfNull(candidateRuntimeSet);
         return _controller.ReloadNativeSubmit(candidateRuntimeSet);
+    }
+
+    public bool Reload(NativeSubmitRuntimeSet candidateRuntimeSet, long expectedAttemptId)
+    {
+        ArgumentNullException.ThrowIfNull(candidateRuntimeSet);
+        return _controller.ReloadNativeSubmit(candidateRuntimeSet, expectedAttemptId);
     }
 
     public bool Reload(ResidentProtectionRuntime candidateRuntime)
@@ -3421,46 +3276,131 @@ internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkf
         return _controller.ReloadResidentRuntime(candidateRuntime);
     }
 
+    public bool Reload(ResidentProtectionRuntime candidateRuntime, long expectedAttemptId)
+    {
+        ArgumentNullException.ThrowIfNull(candidateRuntime);
+        return _controller.ReloadResidentRuntime(candidateRuntime, expectedAttemptId);
+    }
+
     public void EnableResidentReadinessAdmission() => _controller.EnableResidentReadinessAdmission();
 
-    public OperationalActionStartResult StartOperationalAction(
-        string actionKind, string stage, bool userInputRequired, string nextAction) =>
-        _controller.StartOperationalAction(actionKind, stage, userInputRequired, nextAction);
+    public OperationalActionStartResult StartAction(ResidentWorkflowActionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return _controller.StartOperationalAction(
+            request.ActionKind,
+            request.InitialStage,
+            request.UserInputRequired,
+            request.NextAction);
+    }
 
-    public bool PublishOperationalActionStage(
-        string stage, bool userInputRequired, string nextAction, long expectedAttemptId = 0) =>
-        _controller.PublishOperationalActionStage(stage, userInputRequired, nextAction, expectedAttemptId);
+    public bool Publish(ResidentWorkflowPublication publication, long expectedAttemptId = 0)
+    {
+        ArgumentNullException.ThrowIfNull(publication);
+        return publication.Kind switch
+        {
+            ResidentWorkflowPublicationKind.OperationalStage => _controller.PublishOperationalActionStage(
+                publication.Stage ?? "unknown",
+                publication.UserInputRequired,
+                publication.NextAction,
+                expectedAttemptId),
+            ResidentWorkflowPublicationKind.OperationalCompleted => _controller.CompleteOperationalAction(
+                publication.OutcomeCode ?? "failed",
+                publication.NextAction,
+                expectedAttemptId),
+            ResidentWorkflowPublicationKind.OperationalCancelled => _controller.CancelOperationalAction(
+                publication.OutcomeCode ?? "cancelled",
+                expectedAttemptId),
+            ResidentWorkflowPublicationKind.SetupVerificationProgress => PublishSetupProgress(publication),
+            ResidentWorkflowPublicationKind.PromptProtectionRetryStarted => PublishRetryStarted(publication),
+            ResidentWorkflowPublicationKind.PromptProtectionRetrySucceeded => PublishRetrySucceeded(publication),
+            ResidentWorkflowPublicationKind.PromptProtectionRetryFailed => PublishRetryFailed(publication),
+            ResidentWorkflowPublicationKind.LocalProtectionStatus => PublishLocalStatus(publication),
+            ResidentWorkflowPublicationKind.LocalProtectionReady => PublishLocalReady(publication),
+            ResidentWorkflowPublicationKind.ResidentReadinessProof => _controller.TryRecordResidentReadinessProof(expectedAttemptId),
+            _ => false
+        };
+    }
 
-    public bool CompleteOperationalAction(string outcomeCode, string nextAction = "none", long expectedAttemptId = 0) =>
-        _controller.CompleteOperationalAction(outcomeCode, nextAction, expectedAttemptId);
+    public bool IsCurrent(ResidentWorkflowAttempt attempt)
+    {
+        return attempt.AttemptId > 0
+            && attempt.Kind switch
+            {
+                "operational" => _controller.IsCurrentOperationalActionAttempt(attempt.AttemptId),
+                "setup_verification" => _controller.IsCurrentSetupVerificationAttempt(attempt.AttemptId),
+                _ => false
+            };
+    }
 
-    public bool CancelOperationalAction(string outcomeCode = "cancelled", long expectedAttemptId = 0) =>
-        _controller.CancelOperationalAction(outcomeCode, expectedAttemptId);
+    public void RefreshOperationalState() => _controller.RefreshOperationalActionState();
 
-    public bool IsCurrentOperationalActionAttempt(long attemptId) =>
-        _controller.IsCurrentOperationalActionAttempt(attemptId);
+    private bool PublishSetupProgress(ResidentWorkflowPublication publication)
+    {
+        if (publication.SetupProgress is null)
+        {
+            return false;
+        }
 
-    public void RefreshOperationalActionState() => _controller.RefreshOperationalActionState();
+        _controller.PublishSetupVerificationProgress(publication.SetupProgress);
+        return true;
+    }
 
-    public bool TryRecordResidentReadinessProof(long expectedAttemptId) =>
-        _controller.TryRecordResidentReadinessProof(expectedAttemptId);
+    private bool PublishRetryStarted(ResidentWorkflowPublication publication)
+    {
+        if (!IsCurrent(ResidentWorkflowAttempt.Operational(publication.AttemptId)))
+        {
+            return false;
+        }
 
-    public void PublishSetupVerificationProgress(PromptProtectionSetupProgress progress) =>
-        _controller.PublishSetupVerificationProgress(progress);
+        _controller.PublishPromptProtectionRetryStarted();
+        return true;
+    }
 
-    public bool IsCurrentSetupVerificationAttempt(long attemptId) =>
-        _controller.IsCurrentSetupVerificationAttempt(attemptId);
+    private bool PublishRetrySucceeded(ResidentWorkflowPublication publication)
+    {
+        if (!IsCurrent(ResidentWorkflowAttempt.Operational(publication.AttemptId)))
+        {
+            return false;
+        }
 
-    public void PublishPromptProtectionRetryStarted() => _controller.PublishPromptProtectionRetryStarted();
+        _controller.PublishPromptProtectionRetrySucceeded();
+        return true;
+    }
 
-    public void PublishPromptProtectionRetrySucceeded() => _controller.PublishPromptProtectionRetrySucceeded();
+    private bool PublishRetryFailed(ResidentWorkflowPublication publication)
+    {
+        if (!IsCurrent(ResidentWorkflowAttempt.Operational(publication.AttemptId)))
+        {
+            return false;
+        }
 
-    public void PublishPromptProtectionRetryFailure() => _controller.PublishPromptProtectionRetryFailure();
+        _controller.PublishPromptProtectionRetryFailure();
+        return true;
+    }
 
-    public void PublishLocalProtectionStatus(string localProtectionStatus) =>
-        _controller.PublishLocalProtectionStatus(localProtectionStatus);
+    private bool PublishLocalStatus(ResidentWorkflowPublication publication)
+    {
+        if (string.IsNullOrWhiteSpace(publication.LocalProtectionStatus))
+        {
+            return false;
+        }
 
-    public bool TryPublishLocalProtectionReady() => _controller.TryPublishLocalProtectionReady();
+        if (publication.AttemptId > 0
+            && !IsCurrent(ResidentWorkflowAttempt.Operational(publication.AttemptId)))
+        {
+            return false;
+        }
+
+        _controller.PublishLocalProtectionStatus(publication.LocalProtectionStatus);
+        return true;
+    }
+
+    private bool PublishLocalReady(ResidentWorkflowPublication publication)
+    {
+        return IsCurrent(ResidentWorkflowAttempt.Operational(publication.AttemptId))
+            && _controller.TryPublishLocalProtectionReady();
+    }
 
     private void OnControllerStateChanged(object? sender, EventArgs eventArgs)
     {

@@ -794,7 +794,6 @@ public sealed class NativeSubmitInterceptionController
 
     public NativeSubmitInterceptionResult HandleButtonClick(
         TextSurfaceDescriptor activeSurface,
-        Func<OsInteractionResult>? submitFlow = null,
         bool hookHealthy = true,
         TextSurfaceDiscoveryResult? activeSurfaceDiscovery = null,
         NativeSubmitResidentEvidence? residentEvidence = null)
@@ -873,7 +872,6 @@ public sealed class NativeSubmitInterceptionController
 
         return HandleGesture(
             _profile.SubmitBinding.ToNativeKeyGesture(),
-            submitFlow,
             hookHealthy,
             activeSurfaceDiscovery,
             residentEvidence);
@@ -881,7 +879,6 @@ public sealed class NativeSubmitInterceptionController
 
     public NativeSubmitInterceptionResult HandleIdentifiedSendControl(
         TextSurfaceDiscoveryResult composerDiscovery,
-        Func<OsInteractionResult>? submitFlow = null,
         bool hookHealthy = true,
         NativeSubmitResidentEvidence? residentEvidence = null)
     {
@@ -913,7 +910,6 @@ public sealed class NativeSubmitInterceptionController
 
         return HandleButtonClick(
             composerDiscovery.Surface,
-            submitFlow,
             hookHealthy,
             composerDiscovery,
             residentEvidence);
@@ -921,7 +917,6 @@ public sealed class NativeSubmitInterceptionController
 
     public NativeSubmitInterceptionResult HandleGesture(
         NativeKeyGesture gesture,
-        Func<OsInteractionResult>? submitFlow = null,
         bool hookHealthy = true,
         TextSurfaceDiscoveryResult? activeSurfaceDiscovery = null,
         NativeSubmitResidentEvidence? residentEvidence = null)
@@ -1039,25 +1034,13 @@ public sealed class NativeSubmitInterceptionController
                 Diagnostics: diagnostics);
         }
 
-        if (submitFlow is null)
-        {
-            diagnostics["guard_mode"] = "true";
-            return new NativeSubmitInterceptionResult(
-                OsInteractionStatusIds.NativeSubmitGuarded,
-                SuppressOriginalInput: true,
-                Applied: false,
-                Submitted: false,
-                Diagnostics: diagnostics);
-        }
-
-        return CompleteGuardedSubmit(
-            new NativeSubmitInterceptionResult(
-                OsInteractionStatusIds.NativeSubmitGuarded,
-                SuppressOriginalInput: true,
-                Applied: false,
-                Submitted: false,
-                Diagnostics: diagnostics),
-            submitFlow);
+        diagnostics["guard_mode"] = "true";
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitGuarded,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: diagnostics);
     }
 
     private void RecordChatGptProtectedClaimDiagnostics(
@@ -1094,50 +1077,6 @@ public sealed class NativeSubmitInterceptionController
         {
             diagnostics["live_contract_capture"] = "already_pending";
         }
-    }
-
-    public NativeSubmitInterceptionResult CompleteGuardedSubmit(
-        NativeSubmitInterceptionResult classification,
-        Func<OsInteractionResult> submitFlow)
-    {
-        ArgumentNullException.ThrowIfNull(classification);
-        ArgumentNullException.ThrowIfNull(submitFlow);
-        if (classification.Status != OsInteractionStatusIds.NativeSubmitGuarded || !classification.SuppressOriginalInput)
-        {
-            return classification;
-        }
-
-        OsInteractionResult flowResult;
-        try
-        {
-            flowResult = submitFlow();
-        }
-        catch (Exception ex)
-        {
-            // Exception was caught by OsInteractionOrchestrator.RunOnce and returned as FailedClosed
-            // This catch block should never be hit in normal operation
-            var diagnostics = new Dictionary<string, string>(classification.Diagnostics, StringComparer.Ordinal)
-            {
-                ["flow_exception"] = "true",
-                ["exception_type"] = ex.GetType().FullName ?? ex.GetType().Name,
-                ["exception_status"] = "native_submit_flow_failure"
-            };
-            return new NativeSubmitInterceptionResult(
-                OsInteractionStatusIds.FailedClosed,
-                SuppressOriginalInput: true,
-                Applied: false,
-                Submitted: false,
-                Diagnostics: diagnostics);
-        }
-
-        var completedDiagnostics = new Dictionary<string, string>(Merge(classification.Diagnostics, flowResult.Diagnostics), StringComparer.Ordinal);
-        completedDiagnostics["flow_status"] = flowResult.Status;
-        return new NativeSubmitInterceptionResult(
-            flowResult.Status,
-            SuppressOriginalInput: true,
-            Applied: flowResult.Applied,
-            Submitted: flowResult.Submitted,
-            Diagnostics: completedDiagnostics);
     }
 
     private NativeSubmitInterceptionResult? EvaluateEnterpriseEnforcement(bool hookHealthy)
@@ -2466,8 +2405,8 @@ public static class NativeSubmitProductSmokeRunner
             emergency,
             clock: () => DateTimeOffset.Parse("2026-07-20T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
         var guard1 = controller1.HandleGesture(new NativeKeyGesture("Enter"));
-        var confirmAndSend1 = controller1.HandleGesture(
-            new NativeKeyGesture("Enter"),
+        var confirmAndSend1 = ProtectedSendExecution.ExecuteGuarded(
+            controller1.HandleGesture(new NativeKeyGesture("Enter")),
             () => RunConfirmAndSend(hmacSecret));
 
         var controller2 = new NativeSubmitInterceptionController(
@@ -2475,8 +2414,8 @@ public static class NativeSubmitProductSmokeRunner
             emergency,
             clock: () => DateTimeOffset.Parse("2026-07-20T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
         var guard2 = controller2.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true));
-        var confirmAndSend2 = controller2.HandleGesture(
-            new NativeKeyGesture("Enter", Ctrl: true),
+        var confirmAndSend2 = ProtectedSendExecution.ExecuteGuarded(
+            controller2.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true)),
             () => RunConfirmAndSend(hmacSecret));
 
         var residentSession = RunResidentSessionSmoke(profile1, hmacSecret);

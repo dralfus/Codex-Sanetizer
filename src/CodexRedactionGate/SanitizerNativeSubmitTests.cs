@@ -976,8 +976,8 @@ public partial class SanitizerTests
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
         var flow = NativeSubmitProductSmokeRunner.Run(System.Text.Encoding.UTF8.GetBytes("native-submit-test-secret"));
 
-        var result = controller.HandleGesture(
-            new NativeKeyGesture("Enter", Ctrl: true),
+        var result = ProtectedSendExecution.ExecuteGuarded(
+            controller.HandleGesture(new NativeKeyGesture("Enter", Ctrl: true)),
             () => new OsInteractionResult(
                 OsInteractionStatusIds.Submitted,
                 CreateNativeSubmitSurface("codex-desktop"),
@@ -1360,7 +1360,8 @@ public partial class SanitizerTests
             "target_matched",
             "composer_read",
             "sanitized",
-            "send_injected",
+            "overlay_decision",
+            "replayed",
             "terminal_blocked"
         }));
         Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
@@ -1372,7 +1373,8 @@ public partial class SanitizerTests
             "target_matched",
             "composer_read",
             "sanitized",
-            "send_injected",
+            "overlay_decision",
+            "replayed",
             "sent_safely"
         }));
         Assert.That(controller.State.ProtectedSendAttemptTrace!.All(entry =>
@@ -3630,7 +3632,8 @@ public class HandleButtonClickTests : SanitizerTests
             "target_matched",
             "composer_read",
             "sanitized",
-            "send_injected",
+            "overlay_decision",
+            "replayed",
             "sent_safely"
         }));
     }
@@ -5296,7 +5299,7 @@ public class HandleButtonClickTests : SanitizerTests
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
             profile);
-        IResidentProtectionWorkflowRuntime runtime = new ResidentProtectionRuntimeFacade(controller);
+        var runtime = new ResidentProtectionRuntimeFacade(controller);
         using var firstHookStarted = new ManualResetEventSlim(false);
         using var releaseFirstHook = new ManualResetEventSlim(false);
         firstHook.OnStarted = _ =>
@@ -5355,27 +5358,28 @@ public class HandleButtonClickTests : SanitizerTests
                 storageLayout: layout);
             var runtime = new ResidentProtectionRuntimeFacade(controller);
 
-            var started = runtime.StartOperationalAction(
-                "local_recovery",
-                "starting",
-                userInputRequired: false,
-                nextAction: "wait_for_result");
+            var started = runtime.StartAction(new ResidentWorkflowActionRequest(
+                "local_recovery", "starting", UserInputRequired: false, NextAction: "wait_for_result"));
             Assert.That(started.Started, Is.True);
-            Assert.That(runtime.PublishOperationalActionStage(
-                "reloading",
-                userInputRequired: false,
-                nextAction: "wait_for_result",
+            Assert.That(runtime.Publish(
+                ResidentWorkflowPublication.ForStage(
+                    "reloading", userInputRequired: false, nextAction: "wait_for_result"),
                 started.AttemptId), Is.True);
-            runtime.PublishLocalProtectionStatus(LocalProtectionRecovery.ReloadingCode);
+            runtime.Publish(
+                ResidentWorkflowPublication.LocalProtection(
+                    LocalProtectionRecovery.ReloadingCode,
+                    started.AttemptId),
+                started.AttemptId);
 
             Assert.That(runtime.State.EffectiveOperationalAction.Stage, Is.EqualTo("reloading"));
             Assert.That(runtime.State.LocalProtectionStatus, Is.EqualTo(LocalProtectionRecovery.ReloadingCode));
 
-            Assert.That(runtime.CompleteOperationalAction("succeeded", expectedAttemptId: started.AttemptId), Is.True);
+            Assert.That(runtime.Publish(
+                ResidentWorkflowPublication.Completed("succeeded", "none"),
+                started.AttemptId), Is.True);
             Assert.That(runtime.State.EffectiveOperationalAction.Status, Is.EqualTo("succeeded"));
 
-            runtime.RefreshProjectFileProtectionStatus();
-            runtime.RefreshNativeSubmitHookDiagnostics();
+            runtime.RefreshDiagnostics();
             var disabled = runtime.TryDisableProtection("test", confirmed: true);
 
             Assert.That(disabled.Succeeded, Is.True);
@@ -5388,6 +5392,89 @@ public class HandleButtonClickTests : SanitizerTests
                 Directory.Delete(directory, recursive: true);
             }
         }
+    }
+
+    [Test]
+    public void ResidentProtectionWorkflowPort_RejectsIncompletePublicationWithoutChangingSnapshot()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            new FakeNativeSubmitHookHost(),
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var runtime = new ResidentProtectionRuntimeFacade(controller);
+        var before = runtime.Snapshot;
+
+        Assert.That(Assert.Throws<ArgumentNullException>(
+            () => ResidentWorkflowPublication.Setup(null!)), Is.Not.Null);
+        Assert.That(runtime.Publish(
+            ResidentWorkflowPublication.ForStage("reloading", false, "wait_for_result")), Is.False);
+        Assert.That(runtime.Snapshot, Is.SameAs(before));
+
+        var first = runtime.StartAction(new ResidentWorkflowActionRequest(
+            "prompt_protection_retry", "starting", false, "wait_for_result"));
+        Assert.That(first.Started, Is.True);
+        Assert.That(runtime.Publish(
+            ResidentWorkflowPublication.Completed("succeeded", "none"),
+            first.AttemptId), Is.True);
+        var second = runtime.StartAction(new ResidentWorkflowActionRequest(
+            "prompt_protection_retry", "starting", false, "wait_for_result"));
+        Assert.That(second.Started, Is.True);
+        var beforeStalePublication = runtime.Snapshot;
+        Assert.That(runtime.Publish(
+            ResidentWorkflowPublication.RetryFailed(first.AttemptId),
+            first.AttemptId), Is.False);
+        Assert.That(runtime.Snapshot, Is.SameAs(beforeStalePublication));
+    }
+
+    [Test]
+    public void ProtectedSendExecution_DoesNotRunFlowForUnrelatedClassification()
+    {
+        var classification = new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitPassThrough,
+            SuppressOriginalInput: false,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>());
+        var flowCalled = false;
+
+        var result = ProtectedSendExecution.ExecuteGuarded(
+            classification,
+            () =>
+            {
+                flowCalled = true;
+                throw new InvalidOperationException("The unrelated flow must not run.");
+            });
+
+        Assert.That(result, Is.SameAs(classification));
+        Assert.That(flowCalled, Is.False);
+    }
+
+    [Test]
+    public void ProtectedSendExecution_ConvertsFlowExceptionToRawFreeFailClosedResult()
+    {
+        var classification = new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitGuarded,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["profile_id"] = "codex-desktop"
+            });
+
+        var result = ProtectedSendExecution.ExecuteGuarded(
+            classification,
+            () => throw new InvalidOperationException("raw prompt must never enter diagnostics"));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+        Assert.That(result.SuppressOriginalInput, Is.True);
+        Assert.That(result.Submitted, Is.False);
+        Assert.That(result.Diagnostics["exception_status"], Is.EqualTo("native_submit_flow_failure"));
+        Assert.That(result.Diagnostics.ContainsKey("raw prompt must never enter diagnostics"), Is.False);
     }
 
     [Test]
@@ -5652,7 +5739,9 @@ public class HandleButtonClickTests : SanitizerTests
             "codex-desktop",
             composerStatus: OsInteractionStatusIds.SupportedComposer);
 
-        var result = controller.HandleButtonClick(activeSurface, () => new OsInteractionResult(
+        var result = ProtectedSendExecution.ExecuteGuarded(
+            controller.HandleButtonClick(activeSurface),
+            () => new OsInteractionResult(
             OsInteractionStatusIds.Submitted,
             Surface: activeSurface,
             SanitizationResult: null,
@@ -6196,7 +6285,8 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
             "target_matched",
             "composer_read",
             "sanitized",
-            "send_injected",
+            "overlay_decision",
+            "replayed",
             "sent_safely"
         }));
     }
@@ -6216,7 +6306,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Submitted, Is.True);
         Assert.That(report.SentTexts, Has.Count.EqualTo(1));
         Assert.That(report.SentTexts[0], Does.Not.Contain("192.168.10.25"));
-        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Contain("overlay_created"));
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Contain("overlay_decision"));
         Assert.That(report.Trace.Select(entry => entry.Stage), Does.Contain("overlay_foreground_confirmed"));
         Assert.That(report.Trace[^1].Stage, Is.EqualTo("sent_safely"));
     }
