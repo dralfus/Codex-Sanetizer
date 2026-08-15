@@ -246,7 +246,7 @@ public sealed record SurfaceCompatibilityEvidence(
             ["newline_binding"] = NewlineBinding,
             ["send_control_evidence_hash"] = SendControlEvidenceFingerprint is { } sendControl
                 ? FingerprintValue(sendControl)
-                : OpaqueFingerprint.FromSource("send_control_not_available").Value,
+                : string.Empty,
             ["verification_id"] = FingerprintValue(VerificationFingerprint)
         };
     }

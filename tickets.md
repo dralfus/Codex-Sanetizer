@@ -1778,7 +1778,8 @@ or cloud access.
 stored 64-hex representation, source evidence is converted once at the
 compatibility boundary, and comparison/raw-free diagnostics return the stored
 value without rehashing. Missing or incomplete evidence is fail-closed through
-`unsupported_surface`. Full suite: `1725/1725`.
+`unsupported_surface`. Diagnostic rendering of incomplete evidence does not
+manufacture a replacement fingerprint. Full suite: `1726/1726`.
 
 ## 324. Centralize the verified ChatGPT discovery fixture schema
 

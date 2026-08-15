@@ -59,7 +59,7 @@ public readonly record struct OpaqueFingerprint
         return false;
     }
 
-    public override string ToString() => Value;
+    public override string ToString() => Value ?? string.Empty;
 }
 
 internal sealed class OpaqueFingerprintJsonConverter : JsonConverter<OpaqueFingerprint>

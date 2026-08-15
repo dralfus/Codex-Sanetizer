@@ -156,6 +156,22 @@ public sealed class ChatGptDesktopCompatibilityTests
     }
 
     [Test]
+    public void IncompleteEvidence_DoesNotCreateAFingerprintDuringDiagnosticRendering()
+    {
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", VerifiedChatGptDiscovery());
+        var incomplete = profile.CompatibilityEvidence! with
+        {
+            SendControlEvidenceFingerprint = null
+        };
+
+        var diagnostics = incomplete.ToComparisonDiagnostics();
+
+        Assert.That(incomplete.IsComplete, Is.False);
+        Assert.That(diagnostics["send_control_evidence_hash"], Is.Empty);
+    }
+
+    [Test]
     public void PinnedFingerprint_PersistsAcrossProfileStoreRoundTrip()
     {
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-fingerprint-tests", Guid.NewGuid().ToString("N"));
