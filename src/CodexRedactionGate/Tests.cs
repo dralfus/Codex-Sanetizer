@@ -6661,21 +6661,7 @@ public class CliTests
                 SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
                 NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
                 CapabilityStatus: OsInteractionStatusIds.Protected,
-                CompatibilityEvidence: new SurfaceCompatibilityEvidence(
-                    "test.package",
-                    "test.package",
-                    "1.0",
-                    "test.exe",
-                    "test",
-                    "TestWindow",
-                    "Chrome",
-                    "ControlType.Group",
-                    "TestComposer",
-                    new string('a', 64),
-                    DateTimeOffset.UtcNow,
-                    "Enter",
-                    "Ctrl+Enter",
-                    "test-send-control"),
+                CompatibilityEvidence: CreateTestChatGptEvidence(),
                 Diagnostics: new Dictionary<string, string>());
             Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
 
@@ -6707,21 +6693,7 @@ public class CliTests
                 SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
                 NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
                 CapabilityStatus: OsInteractionStatusIds.Protected,
-                CompatibilityEvidence: new SurfaceCompatibilityEvidence(
-                    "test.package",
-                    "test.package",
-                    "1.0",
-                    "test.exe",
-                    "test",
-                    "TestWindow",
-                    "Chrome",
-                    "ControlType.Group",
-                    "TestComposer",
-                    new string('a', 64),
-                    DateTimeOffset.UtcNow,
-                    "Enter",
-                    "Ctrl+Enter",
-                    "test-send-control"),
+                CompatibilityEvidence: CreateTestChatGptEvidence(),
                 Diagnostics: new Dictionary<string, string>());
             Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
             var lifecycle = new ResidentOperationalActionLifecycle(layout, () => 1000L);
@@ -6824,27 +6796,14 @@ public class CliTests
     }
 
     private static TextSurfaceDiscoveryResult CreateCliChatGptDiscovery()
-    {
-        return TextSurfaceDiscoveryResult.Success(
-            CreateCliNativeSubmitSurface("chatgpt-desktop"),
-            new Dictionary<string, string>
-            {
-                ["application_identity_hash"] = "cli-application-hash",
-                ["application_version_hash"] = "cli-version-hash",
-                ["application_version_status"] = "available",
-                ["package_full_name_hash"] = "cli-package-hash",
-                ["executable_name_hash"] = "cli-executable-hash",
-                ["process_name_hash"] = "cli-process-hash",
-                ["window_identity_hash"] = "cli-window-hash",
-                ["window_class_hash"] = "cli-window-class-hash",
-                ["composer_class_hash"] = "cli-composer-class-hash",
-                ["element_control_type"] = "ControlType.Group",
-                ["element_framework_id"] = "Chrome",
-                ["focused_element_hash"] = "cli-composer-hash",
-                [SendControlEvidence.AutomationIdHashKey] = "cli-send-automation-hash",
-                [SendControlEvidence.NameHashKey] = "cli-send-name-hash"
-            });
-    }
+        => ChatGptDiscoveryFixture.CreateVerified(CreateCliNativeSubmitSurface("chatgpt-desktop"));
+
+    private static SurfaceCompatibilityEvidence CreateTestChatGptEvidence()
+        => SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            ChatGptDiscoveryFixture.CreateVerified()).CompatibilityEvidence!;
 
     private static SanitizeRequest CreateCliPromptRequest(string text)
     {

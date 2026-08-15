@@ -1769,10 +1769,16 @@ that value without another representation change.
 round-trip persistence, and raw-free diagnostics without desktop focus, timers,
 or cloud access.
 
-- [ ] Field names or types state that their contents are opaque fingerprints.
-- [ ] Each source value is fingerprinted at exactly one boundary.
-- [ ] Raw-free rendering and runtime comparison use the same stored fingerprint
+- [x] Field names or types state that their contents are opaque fingerprints.
+- [x] Each source value is fingerprinted at exactly one boundary.
+- [x] Raw-free rendering and runtime comparison use the same stored fingerprint
   representation.
+
+**Implementation evidence (2026-08-15):** `OpaqueFingerprint` validates the
+stored 64-hex representation, source evidence is converted once at the
+compatibility boundary, and comparison/raw-free diagnostics return the stored
+value without rehashing. Missing or incomplete evidence is fail-closed through
+`unsupported_surface`. Full suite: `1725/1725`.
 
 ## 324. Centralize the verified ChatGPT discovery fixture schema
 
@@ -1798,11 +1804,16 @@ fixture and individual tests may override it to prove rejection.
 fixture can create a protected profile, while each one-field override produces
 `unsupported_surface` without desktop focus, timers, or cloud access.
 
-- [ ] Product smoke and tests no longer repeat a complete ChatGPT fingerprint
+- [x] Product smoke and tests no longer repeat a complete ChatGPT fingerprint
   diagnostics dictionary.
-- [ ] The builder exposes only intentional, named overrides for negative cases.
-- [ ] Adding a required evidence field breaks one canonical fixture test rather
+- [x] The builder exposes only intentional, named overrides for negative cases.
+- [x] Adding a required evidence field breaks one canonical fixture test rather
   than silently desynchronising multiple copies.
+
+**Implementation evidence (2026-08-15):** `ChatGptDiscoveryFixtureBuilder`
+owns the complete synthetic schema and named missing/send-control overrides;
+product smoke and ChatGPT tests use the same builder. `--self-test` and
+`--product-smoke` passed.
 
 ## Manual desktop acceptance gate (effective immediately)
 

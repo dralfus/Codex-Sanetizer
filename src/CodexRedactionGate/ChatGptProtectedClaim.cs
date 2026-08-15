@@ -74,6 +74,15 @@ public static class ChatGptProtectedClaimEvaluator
                 "fingerprint_missing");
         }
 
+        if (!profile.CompatibilityEvidence.IsComplete)
+        {
+            return new ChatGptProtectedClaimResult(
+                OsInteractionStatusIds.SurfaceUnverified,
+                "invalid",
+                "invalid",
+                "fingerprint_invalid");
+        }
+
         var fingerprintId = profile.CompatibilityEvidence.VerificationId;
         if (!ProtectedSendTrace.IsOpaqueFingerprint(fingerprintId))
         {
@@ -159,6 +168,7 @@ public static class ChatGptProtectedClaimEvaluator
         if (!string.Equals(profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
             || !profile.IsProtected
             || profile.CompatibilityEvidence is null
+            || !profile.CompatibilityEvidence.IsComplete
             || !ProtectedSendTrace.IsOpaqueFingerprint(profile.CompatibilityEvidence.VerificationId)
             || profile.SubmitBinding is null
             || trace.Count == 0
@@ -289,7 +299,8 @@ public static class ChatGptAcceptanceProofStore
         ArgumentException.ThrowIfNullOrWhiteSpace(buildVersion);
         ArgumentException.ThrowIfNullOrWhiteSpace(terminalStatus);
         if (!string.Equals(profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
-            || profile.CompatibilityEvidence is null)
+            || profile.CompatibilityEvidence is null
+            || !profile.CompatibilityEvidence.IsComplete)
         {
             return false;
         }
@@ -333,6 +344,7 @@ public static class ChatGptAcceptanceProofStore
         ArgumentNullException.ThrowIfNull(profile);
         if (!string.Equals(profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
             || profile.CompatibilityEvidence is null
+            || !profile.CompatibilityEvidence.IsComplete
             || !ProtectedSendTrace.IsOpaqueFingerprint(profile.CompatibilityEvidence.VerificationId)
             || string.IsNullOrWhiteSpace(profile.SubmitBinding?.DisplayText))
         {

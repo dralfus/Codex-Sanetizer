@@ -30,16 +30,49 @@ public sealed class ChatGptDesktopCompatibilityTests
     }
 
     [Test]
+    public void CompatibilityEvidence_UsesTheStoredOpaqueFingerprintWithoutRehashing()
+    {
+        var discovery = VerifiedChatGptDiscovery();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", discovery);
+        var expected = OpaqueFingerprint.FromStored(discovery.Diagnostics["application_identity_hash"]);
+
+        Assert.That(profile.CompatibilityEvidence, Is.Not.Null);
+        Assert.That(profile.CompatibilityEvidence!.ApplicationIdentityFingerprint, Is.EqualTo(expected));
+        Assert.That(
+            profile.CompatibilityEvidence.ToComparisonDiagnostics()["application_identity_hash"],
+            Is.EqualTo(expected.Value));
+    }
+
+    [Test]
+    public void CanonicalDiscoveryFixture_IsCompleteAndMissingEvidenceFailsClosed()
+    {
+        var discovery = ChatGptDiscoveryFixture.CreateVerified();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", discovery);
+        var incomplete = ChatGptDiscoveryFixture.CreateBuilder()
+            .WithoutApplicationIdentityFingerprint()
+            .Build();
+        var incompleteProfile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", incomplete);
+
+        Assert.That(profile.IsProtected, Is.True);
+        Assert.That(
+            ChatGptDesktopCompatibility.RequiredEvidenceKeys.All(discovery.Diagnostics.ContainsKey),
+            Is.True);
+        Assert.That(incompleteProfile.CapabilityStatus, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(incompleteProfile.IsProtected, Is.False);
+    }
+
+    [Test]
     public void ActiveSendControlEvidence_IsRequiredToMatchPinnedFingerprint()
     {
         var discovery = VerifiedChatGptDiscovery();
         var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "chatgpt-desktop", "Ctrl+Enter", "Enter", discovery);
-        var changedDiagnostics = new Dictionary<string, string>(discovery.Diagnostics, StringComparer.Ordinal)
-        {
-            [SendControlEvidence.AutomationIdHashKey] = "changed-send-control"
-        };
-        var changedDiscovery = discovery with { Diagnostics = changedDiagnostics };
+        var changedDiscovery = ChatGptDiscoveryFixture.CreateBuilder()
+            .WithSendControlAutomationFingerprint(ChatGptDiscoveryFixture.Fingerprint("changed-send-control"))
+            .Build();
 
         var result = SurfaceCompatibilityEvaluator.Evaluate(
             profile,
@@ -61,12 +94,10 @@ public sealed class ChatGptDesktopCompatibilityTests
             new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
 
         var accepted = controller.HandleIdentifiedSendControl(discovery);
-        var changedDiagnostics = new Dictionary<string, string>(discovery.Diagnostics, StringComparer.Ordinal)
-        {
-            [SendControlEvidence.NameHashKey] = "changed-send-control"
-        };
         var changed = controller.HandleIdentifiedSendControl(
-            discovery with { Diagnostics = changedDiagnostics });
+            ChatGptDiscoveryFixture.CreateBuilder()
+                .WithSendControlNameFingerprint(ChatGptDiscoveryFixture.Fingerprint("changed-send-control"))
+                .Build());
 
         Assert.That(accepted.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
         Assert.That(changed.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
@@ -76,10 +107,9 @@ public sealed class ChatGptDesktopCompatibilityTests
     [Test]
     public void VerifyUserBindings_LeavesChatGptUnsupportedWhenFingerprintEvidenceIsIncomplete()
     {
-        var discovery = VerifiedChatGptDiscovery() with
-        {
-            Diagnostics = new Dictionary<string, string> { ["application_identity_hash"] = "a" }
-        };
+        var discovery = ChatGptDiscoveryFixture.CreateBuilder()
+            .WithoutApplicationIdentityFingerprint()
+            .Build();
         var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "chatgpt-desktop", "Ctrl+Enter", "Enter", discovery);
 
@@ -112,8 +142,8 @@ public sealed class ChatGptDesktopCompatibilityTests
         {
             CompatibilityEvidence = profile.CompatibilityEvidence! with
             {
-                PackageFamilyName = "ChatGPT secret C:\\private\\prompt.txt",
-                ComposerClassName = "Button Name: Send"
+                ApplicationIdentityFingerprint = OpaqueFingerprint.FromSource("ChatGPT secret C:\\private\\prompt.txt"),
+                ComposerClassFingerprint = OpaqueFingerprint.FromSource("Button Name: Send")
             }
         };
         var rendered = string.Join("\n", profile.ToRawFreeDiagnostics().Select(pair => $"{pair.Key}={pair.Value}"));
@@ -156,26 +186,5 @@ public sealed class ChatGptDesktopCompatibilityTests
     }
 
     private static TextSurfaceDiscoveryResult VerifiedChatGptDiscovery()
-    {
-        var surface = new TextSurfaceDescriptor(
-            "test-chatgpt", "chatgpt-desktop", "ChatGPT", true, true, true, true,
-            new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer));
-        return TextSurfaceDiscoveryResult.Success(surface, new Dictionary<string, string>
-        {
-            ["application_identity_hash"] = "application-hash",
-            ["application_version_hash"] = "version-hash",
-            ["application_version_status"] = "available",
-            ["package_full_name_hash"] = "package-hash",
-            ["executable_name_hash"] = "executable-hash",
-            ["process_name_hash"] = "process-hash",
-            ["window_identity_hash"] = "window-hash",
-            ["window_class_hash"] = "window-class-hash",
-            ["composer_class_hash"] = "composer-class-hash",
-            ["element_control_type"] = "ControlType.Group",
-            ["element_framework_id"] = "Chrome",
-            ["focused_element_hash"] = "composer-hash",
-            [SendControlEvidence.AutomationIdHashKey] = "send-automation-hash",
-            [SendControlEvidence.NameHashKey] = "send-name-hash"
-        });
-    }
+        => ChatGptDiscoveryFixture.CreateVerified();
 }

@@ -179,26 +179,48 @@ public sealed record NativePointerGesture(
     uint TargetProcessId = 0);
 
 public sealed record SurfaceCompatibilityEvidence(
-    string PackageFamilyName,
-    string PackageFullNamePattern,
-    string PackageVersion,
-    string ExecutableName,
-    string ProcessName,
-    string WindowClassName,
-    string FrameworkId,
-    string ControlType,
-    string ComposerClassName,
-    string VerificationId,
+    OpaqueFingerprint ApplicationIdentityFingerprint,
+    OpaqueFingerprint ApplicationVersionFingerprint,
+    string? ApplicationVersionStatus,
+    OpaqueFingerprint PackageFullNameFingerprint,
+    OpaqueFingerprint ExecutableNameFingerprint,
+    OpaqueFingerprint ProcessNameFingerprint,
+    OpaqueFingerprint WindowIdentityFingerprint,
+    OpaqueFingerprint WindowClassFingerprint,
+    OpaqueFingerprint FrameworkFingerprint,
+    OpaqueFingerprint ControlTypeFingerprint,
+    OpaqueFingerprint ComposerClassFingerprint,
+    OpaqueFingerprint FocusedElementFingerprint,
+    OpaqueFingerprint VerificationFingerprint,
     DateTimeOffset VerifiedAtUtc,
     string SubmitBinding = "unknown",
     string NewlineBinding = "unknown",
-    string SendControlEvidenceHash = "unknown")
+    OpaqueFingerprint? SendControlEvidenceFingerprint = null)
 {
+    [JsonIgnore]
+    public string VerificationId => FingerprintValue(VerificationFingerprint);
+
+    public bool IsComplete =>
+        ApplicationIdentityFingerprint.IsValid
+        && ApplicationVersionFingerprint.IsValid
+        && string.Equals(ApplicationVersionStatus, "available", StringComparison.Ordinal)
+        && PackageFullNameFingerprint.IsValid
+        && ExecutableNameFingerprint.IsValid
+        && ProcessNameFingerprint.IsValid
+        && WindowIdentityFingerprint.IsValid
+        && WindowClassFingerprint.IsValid
+        && FrameworkFingerprint.IsValid
+        && ControlTypeFingerprint.IsValid
+        && ComposerClassFingerprint.IsValid
+        && FocusedElementFingerprint.IsValid
+        && VerificationFingerprint.IsValid
+        && SendControlEvidenceFingerprint?.IsValid == true;
+
     public IReadOnlyDictionary<string, string> ToRawFreeDiagnostics()
     {
         var diagnostics = new Dictionary<string, string>(ToComparisonDiagnostics(), StringComparer.Ordinal)
         {
-            ["verification_id"] = Opaque(VerificationId),
+            ["verification_id"] = FingerprintValue(VerificationFingerprint),
             ["verified_at_utc"] = VerifiedAtUtc.ToString("O")
         };
         return diagnostics;
@@ -208,26 +230,29 @@ public sealed record SurfaceCompatibilityEvidence(
     {
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["package_family_name"] = Opaque(PackageFamilyName),
-            ["package_full_name_pattern"] = Opaque(PackageFullNamePattern),
-            ["package_version"] = Opaque(PackageVersion),
-            ["executable_name"] = Opaque(ExecutableName),
-            ["process_name"] = Opaque(ProcessName),
-            ["window_class_name"] = Opaque(WindowClassName),
-            ["framework_id"] = Opaque(FrameworkId),
-            ["control_type"] = Opaque(ControlType),
-            ["composer_class_name"] = Opaque(ComposerClassName),
+            ["application_identity_hash"] = FingerprintValue(ApplicationIdentityFingerprint),
+            ["application_version_hash"] = FingerprintValue(ApplicationVersionFingerprint),
+            ["application_version_status"] = ApplicationVersionStatus ?? "unknown",
+            ["package_full_name_hash"] = FingerprintValue(PackageFullNameFingerprint),
+            ["executable_name_hash"] = FingerprintValue(ExecutableNameFingerprint),
+            ["process_name_hash"] = FingerprintValue(ProcessNameFingerprint),
+            ["window_identity_hash"] = FingerprintValue(WindowIdentityFingerprint),
+            ["window_class_hash"] = FingerprintValue(WindowClassFingerprint),
+            ["element_framework_id"] = FingerprintValue(FrameworkFingerprint),
+            ["element_control_type"] = FingerprintValue(ControlTypeFingerprint),
+            ["composer_class_hash"] = FingerprintValue(ComposerClassFingerprint),
+            ["focused_element_hash"] = FingerprintValue(FocusedElementFingerprint),
             ["submit_binding"] = SubmitBinding,
             ["newline_binding"] = NewlineBinding,
-            ["send_control_evidence_hash"] = Opaque(SendControlEvidenceHash)
+            ["send_control_evidence_hash"] = SendControlEvidenceFingerprint is { } sendControl
+                ? FingerprintValue(sendControl)
+                : OpaqueFingerprint.FromSource("send_control_not_available").Value,
+            ["verification_id"] = FingerprintValue(VerificationFingerprint)
         };
     }
 
-    private static string Opaque(string value)
-    {
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
-    }
+    private static string FingerprintValue(OpaqueFingerprint fingerprint)
+        => fingerprint.IsValid ? fingerprint.Value : string.Empty;
 }
 
 public sealed record SubmitBindingProfile(
@@ -626,7 +651,9 @@ public static class SurfaceCompatibilityEvaluator
         }
 
         if (string.Equals(profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
-            && (profile.CompatibilityEvidence is null || activeEvidence is null))
+            && (profile.CompatibilityEvidence is null
+                || !profile.CompatibilityEvidence.IsComplete
+                || activeEvidence is null))
         {
             diagnostics["mismatch_reason"] = "compatibility_evidence_missing";
             return new SurfaceCompatibilityResult(OsInteractionStatusIds.SurfaceUnverified, diagnostics);
@@ -2423,25 +2450,7 @@ public static class NativeSubmitProductSmokeRunner
 
         // Test pair 2: Ctrl+Enter as Send / Enter as newline
         var surface2 = CreateSurface("chatgpt-desktop", "profile-smoke");
-        var discovery2 = TextSurfaceDiscoveryResult.Success(surface2, new Dictionary<string, string>
-        {
-            ["surface_kind"] = "disposable_local_target",
-            ["cloud_submission"] = "false",
-            ["application_identity_hash"] = "smoke-application-hash",
-            ["application_version_hash"] = "smoke-version-hash",
-            ["application_version_status"] = "available",
-            ["package_full_name_hash"] = "smoke-package-hash",
-            ["executable_name_hash"] = "smoke-executable-hash",
-            ["process_name_hash"] = "smoke-process-hash",
-            ["window_identity_hash"] = "smoke-window-hash",
-            ["window_class_hash"] = "smoke-window-class-hash",
-            ["composer_class_hash"] = "smoke-composer-class-hash",
-            ["element_control_type"] = "ControlType.Group",
-            ["element_framework_id"] = "Chrome",
-            ["focused_element_hash"] = "smoke-composer-hash",
-            [SendControlEvidence.AutomationIdHashKey] = "smoke-send-automation-hash",
-            [SendControlEvidence.NameHashKey] = "smoke-send-name-hash"
-        });
+        var discovery2 = ChatGptDiscoveryFixture.CreateVerified(surface2);
         var profile2 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "chatgpt-desktop",
             "Ctrl+Enter",

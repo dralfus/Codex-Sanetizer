@@ -72,7 +72,7 @@ public sealed class ChatGptProtectedClaimTests
         {
             CompatibilityEvidence = CreateProfile().CompatibilityEvidence! with
             {
-                VerificationId = "raw-looking-fingerprint"
+                VerificationFingerprint = default
             }
         };
 
@@ -475,50 +475,14 @@ public sealed class ChatGptProtectedClaimTests
     }
 
     private static SubmitBindingProfile CreateProfile()
-    {
-        var evidence = new SurfaceCompatibilityEvidence(
-            "app", "package", "version", "exe", "process", "window",
-            "Chrome", "Group", "composer", new string('b', 64), DateTimeOffset.UtcNow,
-            "Ctrl+Enter", "Enter", "send-control");
-        return new SubmitBindingProfile(
+        => SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "chatgpt-desktop",
-            Enabled: true,
-            BindingSource: "user_verified",
-            SubmitBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
-            NewlineBinding: SubmitKeyBinding.Parse("Enter").Binding!,
-            CapabilityStatus: OsInteractionStatusIds.Protected,
-            CompatibilityEvidence: evidence,
-            Diagnostics: new Dictionary<string, string>());
-    }
+            "Ctrl+Enter",
+            "Enter",
+            CreateDiscovery());
 
     private static TextSurfaceDiscoveryResult CreateDiscovery()
-    {
-        return TextSurfaceDiscoveryResult.Success(
-            new TextSurfaceDescriptor(
-                "chatgpt-composer",
-                "chatgpt-desktop",
-                "ChatGPT Desktop",
-                Supported: true,
-                CanCaptureText: true,
-                CanReplaceText: true,
-                CanSubmit: true,
-                new SurfaceMetadata(ComposerStatus: OsInteractionStatusIds.SupportedComposer)),
-            new Dictionary<string, string>
-            {
-                ["application_identity_hash"] = "application-hash",
-                ["application_version_hash"] = "version-hash",
-                ["application_version_status"] = "available",
-                ["package_full_name_hash"] = "package-hash",
-                ["executable_name_hash"] = "executable-hash",
-                ["process_name_hash"] = "process-hash",
-                ["window_identity_hash"] = "window-hash",
-                ["window_class_hash"] = "window-class-hash",
-                ["composer_class_hash"] = "composer-class-hash",
-                ["element_control_type"] = "ControlType.Group",
-                ["element_framework_id"] = "Chrome",
-                ["focused_element_hash"] = "composer-hash"
-            });
-    }
+        => ChatGptDiscoveryFixture.CreateVerified();
 
     private static IReadOnlyList<ProtectedSendTraceEntry> CreateSafeTrace(string fingerprint)
     {

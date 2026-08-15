@@ -9,25 +9,7 @@ using CodexRedactionGate;
 public partial class SanitizerTests
 {
     internal static TextSurfaceDiscoveryResult CreateVerifiedChatGptDiscovery()
-    {
-        return TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface("chatgpt-desktop"), new Dictionary<string, string>
-        {
-            ["application_identity_hash"] = "test-application-hash",
-            ["application_version_hash"] = "test-version-hash",
-            ["application_version_status"] = "available",
-            ["package_full_name_hash"] = "test-package-hash",
-            ["executable_name_hash"] = "test-executable-hash",
-            ["process_name_hash"] = "test-process-hash",
-            ["window_identity_hash"] = "test-window-hash",
-            ["window_class_hash"] = "test-window-class-hash",
-            ["composer_class_hash"] = "test-composer-class-hash",
-            ["element_control_type"] = "ControlType.Group",
-            ["element_framework_id"] = "Chrome",
-            ["focused_element_hash"] = "test-composer-hash",
-            [SendControlEvidence.AutomationIdHashKey] = "test-send-automation-hash",
-            [SendControlEvidence.NameHashKey] = "test-send-name-hash"
-        });
-    }
+        => ChatGptDiscoveryFixture.CreateVerified(CreateNativeSubmitSurface("chatgpt-desktop"));
 
     internal static SubmitBindingProfile CreateVerifiedChatGptProfile(
         string submitBinding = "Ctrl+Enter",
@@ -5076,14 +5058,11 @@ public class HandleButtonClickTests : SanitizerTests
     {
         var oldHook = new FakeNativeSubmitHookHost();
         var candidateHook = new FakeNativeSubmitHookHost();
-        var oldFingerprint = new SurfaceCompatibilityEvidence(
-            "old-app", "old-package", "old-version", "old-exe", "old-process", "old-window",
-            "Chrome", "Group", "old-composer", "old-verification", DateTimeOffset.UtcNow,
-            "Ctrl+Enter", "Enter", "old-send");
+        var oldFingerprint = CreateVerifiedChatGptProfile().CompatibilityEvidence!;
         var candidateFingerprint = oldFingerprint with
         {
-            PackageVersion = "candidate-version",
-            VerificationId = "candidate-verification"
+            ApplicationVersionFingerprint = OpaqueFingerprint.FromSource("candidate-version"),
+            VerificationFingerprint = OpaqueFingerprint.FromSource("candidate-verification")
         };
         var oldProfile = CreateProtectedProfile() with
         {
@@ -5116,11 +5095,11 @@ public class HandleButtonClickTests : SanitizerTests
     {
         var oldHook = new FakeNativeSubmitHookHost();
         var failedHook = new FakeNativeSubmitHookHost { StartResult = false };
-        var oldFingerprint = new SurfaceCompatibilityEvidence(
-            "old-app", "old-package", "old-version", "old-exe", "old-process", "old-window",
-            "Chrome", "Group", "old-composer", "old-verification", DateTimeOffset.UtcNow,
-            "Ctrl+Enter", "Enter", "old-send");
-        var candidateFingerprint = oldFingerprint with { VerificationId = "candidate-verification" };
+        var oldFingerprint = CreateVerifiedChatGptProfile().CompatibilityEvidence!;
+        var candidateFingerprint = oldFingerprint with
+        {
+            VerificationFingerprint = OpaqueFingerprint.FromSource("candidate-verification")
+        };
         var oldProfile = CreateProtectedProfile() with
         {
             ProfileId = "chatgpt-desktop",

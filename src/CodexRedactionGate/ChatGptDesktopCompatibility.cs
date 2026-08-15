@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace CodexRedactionGate;
 
@@ -10,7 +8,7 @@ internal static class ChatGptDesktopCompatibility
 {
     private const string ProfileId = "chatgpt-desktop";
 
-    private static readonly string[] RequiredEvidenceKeys =
+    internal static IReadOnlyList<string> RequiredEvidenceKeys { get; } = new[]
     {
         "application_identity_hash",
         "application_version_hash",
@@ -31,7 +29,7 @@ internal static class ChatGptDesktopCompatibility
         ArgumentNullException.ThrowIfNull(profile);
         return string.Equals(profile.ProfileId, ProfileId, StringComparison.Ordinal)
             && profile.IsProtected
-            && profile.CompatibilityEvidence is null
+            && (profile.CompatibilityEvidence is null || !profile.CompatibilityEvidence.IsComplete)
             ? profile with
             {
                 Enabled = false,
@@ -62,21 +60,52 @@ internal static class ChatGptDesktopCompatibility
             return false;
         }
 
+        var fingerprints = new Dictionary<string, OpaqueFingerprint>(StringComparer.Ordinal);
+        foreach (var key in RequiredEvidenceKeys)
+        {
+            if (key == "application_version_status")
+            {
+                continue;
+            }
+
+            if (!TryReadFingerprint(discovery.Diagnostics, key, out var fingerprint))
+            {
+                return false;
+            }
+
+            fingerprints[key] = fingerprint;
+        }
+
+        var sendControlEvidence = activeSendEvidence ?? profile.Diagnostics;
+        if (!TryReadSendControlFingerprint(sendControlEvidence, out var sendControlFingerprint))
+        {
+            return false;
+        }
+
+        var activeVersionStatus = discovery.Diagnostics["application_version_status"];
+        var verificationFingerprint = CreateVerificationId(
+            discovery.Diagnostics,
+            profile,
+            fingerprints,
+            sendControlFingerprint);
         evidence = new SurfaceCompatibilityEvidence(
-            discovery.Diagnostics["application_identity_hash"],
-            discovery.Diagnostics["package_full_name_hash"],
-            discovery.Diagnostics["application_version_hash"],
-            discovery.Diagnostics["executable_name_hash"],
-            discovery.Diagnostics["process_name_hash"],
-            discovery.Diagnostics["window_class_hash"],
-            discovery.Diagnostics["element_framework_id"],
-            discovery.Diagnostics["element_control_type"],
-            discovery.Diagnostics["composer_class_hash"],
-            CreateVerificationId(discovery.Diagnostics, profile, activeSendEvidence ?? profile.Diagnostics),
+            fingerprints["application_identity_hash"],
+            fingerprints["application_version_hash"],
+            activeVersionStatus,
+            fingerprints["package_full_name_hash"],
+            fingerprints["executable_name_hash"],
+            fingerprints["process_name_hash"],
+            fingerprints["window_identity_hash"],
+            fingerprints["window_class_hash"],
+            fingerprints["element_framework_id"],
+            fingerprints["element_control_type"],
+            fingerprints["composer_class_hash"],
+            fingerprints["focused_element_hash"],
+            verificationFingerprint,
             DateTimeOffset.UtcNow,
             profile.SubmitBinding.DisplayText,
             profile.NewlineBinding.DisplayText,
-            FingerprintSendControl(activeSendEvidence ?? profile.Diagnostics));
+            sendControlFingerprint);
         return true;
     }
 
@@ -89,29 +118,66 @@ internal static class ChatGptDesktopCompatibility
             : null;
     }
 
-    private static string FingerprintSendControl(IReadOnlyDictionary<string, string> diagnostics)
+    private static bool TryReadFingerprint(
+        IReadOnlyDictionary<string, string> diagnostics,
+        string key,
+        out OpaqueFingerprint fingerprint)
     {
-        var automationId = diagnostics.TryGetValue(SendControlEvidence.AutomationIdHashKey, out var automationValue)
-            ? automationValue : "not_available";
-        var name = diagnostics.TryGetValue(SendControlEvidence.NameHashKey, out var nameValue)
-            ? nameValue : "not_available";
-        return Hash($"{automationId}|{name}");
+        if (!diagnostics.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value))
+        {
+            fingerprint = default;
+            return false;
+        }
+
+        if (key is "element_control_type" or "element_framework_id")
+        {
+            fingerprint = OpaqueFingerprint.FromSource(value);
+            return true;
+        }
+
+        return OpaqueFingerprint.TryParse(value, out fingerprint);
     }
 
-    private static string CreateVerificationId(
+    private static bool TryReadSendControlFingerprint(
+        IReadOnlyDictionary<string, string> diagnostics,
+        out OpaqueFingerprint fingerprint)
+    {
+        var hasAutomationId = diagnostics.TryGetValue(
+            SendControlEvidence.AutomationIdHashKey,
+            out var automationValue);
+        var hasName = diagnostics.TryGetValue(SendControlEvidence.NameHashKey, out var nameValue);
+
+        if (!hasAutomationId && !hasName)
+        {
+            fingerprint = OpaqueFingerprint.FromSource("send_control_not_available");
+            return true;
+        }
+
+        if (!OpaqueFingerprint.TryParse(automationValue, out var automationId)
+            || !OpaqueFingerprint.TryParse(nameValue, out var name))
+        {
+            fingerprint = default;
+            return false;
+        }
+
+        fingerprint = OpaqueFingerprint.FromSource($"{automationId.Value}|{name.Value}");
+        return true;
+    }
+
+    private static OpaqueFingerprint CreateVerificationId(
         IReadOnlyDictionary<string, string> diagnostics,
         SubmitBindingProfile profile,
-        IReadOnlyDictionary<string, string> sendControlEvidence)
+        IReadOnlyDictionary<string, OpaqueFingerprint> fingerprints,
+        OpaqueFingerprint sendControlFingerprint)
     {
-        var evidence = string.Join("|", RequiredEvidenceKeys.Select(key => diagnostics[key]));
+        var evidence = string.Join(
+            "|",
+            RequiredEvidenceKeys.Select(key => key == "application_version_status"
+                ? diagnostics[key]
+                : fingerprints[key].Value));
         var binding = $"submit={profile.SubmitBinding!.DisplayText}|newline={profile.NewlineBinding!.DisplayText}";
-        var sendControl = $"send_control={FingerprintSendControl(sendControlEvidence)}";
-        return Hash($"{evidence}|{binding}|{sendControl}");
-    }
-
-    private static string Hash(string value)
-    {
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+        var sendControl = $"send_control={sendControlFingerprint.Value}";
+        return OpaqueFingerprint.FromSource($"{evidence}|{binding}|{sendControl}");
     }
 
     private static IReadOnlyDictionary<string, string> Merge(

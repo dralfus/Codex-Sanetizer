@@ -44,8 +44,8 @@ flowchart TD
     R346["[x] 346\nImmutable admission evidence\nдо native callback"]
     R314["[~] 314\nБезопасный первый mouse Send"]
     Keyboard["Клавиатурная prompt-защита\nповторная release-приёмка"]
-    R323["[~] 323\nOpaque compatibility fingerprints"]
-    R324["[~] 324\nКанонический fixture discovery"]
+    R323["[x] 323\nOpaque compatibility fingerprints"]
+    R324["[x] 324\nКанонический fixture discovery"]
     Ingress["[!] 283\nПодтвердить реальный pre-cloud ingress\nдля проектных файлов"]
     Files["[!] 286\nИсключение .env и других файлов\nиз cloud context"]
 
@@ -76,11 +76,11 @@ flowchart TD
 | 2 | **345** `[x]` | Coordinator владеет setup, retry, local recovery и readiness; acceptance-матрица покрывает success, cancellation, stale candidate, rollback и recovery failure. | 341 |
 | 3 | **342** `[x]` | Tray хранит только UI-порт, отображает published state и отправляет явные intents. | 345 |
 | 4 | **343** `[x]` | Profile verification/storage отделены от low-level keyboard/pointer input adapter; status и live-contract arm собираются до запуска hook. | 341 |
-| параллельно | **344** `[x]` | Полный automated suite изолирован от установленного tray через уникальные per-test instance IDs; `1723/1723` прошли при запущенном installed tray. | Нет |
+| параллельно | **344** `[x]` | Полный automated suite изолирован от установленного tray через уникальные per-test instance IDs; `1725/1725` прошли при запущенном installed tray. | Нет |
 | 5 | **346** `[x]` | Resident публикует immutable admission evidence до callback; callback не вызывает provider и не выполняет I/O. | 343 |
 
 **Контрольная точка после этапа 1:** автоматические проверки уже пройдены:
-`1723/1723`, `--self-test` и `--product-smoke`; установленный tray оставался
+`1725/1725`, `--self-test` и `--product-smoke`; установленный tray оставался
 запущенным во время полного suite. До ручной приёмки и перехода к mouse Send
 необходимо пересобрать installer и выполнить одну ограниченную ручную проверку
 **клавиатурной** отправки в выбранном OpenAI Desktop composer.
@@ -90,8 +90,8 @@ flowchart TD
 | Очерёдность | Тикет | Результат | Зависимости |
 |---:|---|---|---|
 | 6 | **314** `[~]` | Первый клик по Send безопасно решается из resident evidence до UIA; нет глобальной блокировки навигации. | Формально 297 и 309 завершены; архитектурно после 346, до keyboard release-приёмки |
-| 7 | **323** `[~]` | Compatibility evidence хранится и сравнивается как явно opaque fingerprint. | После keyboard release-приёмки; 346 завершён |
-| 8 | **324** `[~]` | Один канонический fixture для verified ChatGPT discovery; тесты больше не расходятся по словарям evidence. | 323 |
+| 7 | **323** `[x]` | Compatibility evidence хранится и сравнивается как явно opaque fingerprint; значения не хешируются повторно. | После keyboard release-приёмки; 346 завершён |
+| 8 | **324** `[x]` | Один канонический fixture для verified ChatGPT discovery; тесты и product smoke используют одну схему evidence. | 323 |
 
 **Правило до завершения 314:** пользовательский mouse Send не считается
 защищённым и не должен включаться в capability claim. Защищённым путём остаётся
@@ -114,8 +114,10 @@ flowchart TD
 1. Пересобрать installer и провести одну ограниченную ручную приёмку
    клавиатурного protected Send.
 2. Если mouse Send входит в объём этой приёмки, сначала завершить `314`.
-3. Только после успешной keyboard release-приёмки брать `323 -> 324` и
-   начинать исследование внешней интеграционной возможности для `283`.
+3. `323 -> 324` завершены; `314` сознательно оставить открытой до отдельного
+   этапа добавления mouse Send.
+4. После решения по mouse Send начинать исследование внешней интеграционной
+   возможности для `283`.
 
 ## Границы, которые нельзя размывать
 
