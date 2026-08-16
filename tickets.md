@@ -2749,6 +2749,33 @@ tests cover incomplete/stale publication and concurrent whole-generation
 reload. Verification: `1733/1733` tests, `--self-test` and `--product-smoke`
 passed.
 
+**Reopened (2026-08-16):** Final review found that correlated runtime reload
+and terminal workflow publication are still separate critical sections. A
+cancellation or newer operation can therefore win after candidate activation
+but before profile commit or terminal publication, leaving activated runtime
+state that is not represented by the published workflow result.
+
+- [x] Make setup/retry candidate activation, profile commit where applicable,
+      and terminal publication one linearized resident workflow transaction.
+- [x] A cancellation or stale completion that wins before that transaction
+      must prevent activation and persistence; once the transaction begins,
+      cancellation must observe its completed terminal result rather than
+      create mixed state.
+- [ ] Add deterministic tests that pause after successful candidate reload and
+      race cancellation/newer work before profile commit and terminal
+      publication, without timers, UIA, desktop focus or cloud access.
+- [ ] Keep the previous completion record above as historical evidence; close
+      this ticket again only after the focused race matrix and all product
+      verification gates pass.
+
+**Remediation implemented (2026-08-16):** Added an attempt-scoped resident
+workflow lease and routed lifecycle/reload/publication through its gate. Retry,
+setup and recovery retain the lease through activation and terminal state;
+failed setup rollback stops resident protection if the previous runtime cannot
+be restored. Retry/cancellation and port-level contention tests pass. Ticket
+349 tracks the remaining deterministic setup/recovery race matrix before this
+ticket is reclosed.
+
 ## 348. Выделить ядро protected Send из NativeSubmitInterception
 
 **What to build:** The correlated protected Send operation becomes one deep
@@ -2807,3 +2834,70 @@ sensitive traces, repeated sends, unrelated input, raw-free exceptions and
 reference-composer failure scenarios are covered. Verification: `1733/1733`
 tests, `--self-test`, `--product-smoke` and the twice-run reference-composer
 matrix passed.
+
+**Reopened (2026-08-16):** Final review found that the execution lease is
+released immediately after the OS submit side effect, while the canonical
+`sent_safely` terminal trace is published later by the pipeline. Reload or
+cancellation in that gap can reject terminal publication after sanitized text
+was already sent, producing a false fail-closed result and making a duplicate
+retry possible.
+
+- [x] Hold one correlated side-effect boundary from the first irreversible
+      local write/replay decision through canonical terminal publication.
+- [x] Once sanitized submit succeeds, publish exactly one `sent_safely`
+      terminal outcome before reload/cancellation can invalidate the attempt;
+      never report `Submitted=false` after the side effect already occurred.
+- [x] Add a deterministic test that races reload/cancellation after submit
+      succeeds but before terminal publication and proves one submit, one
+      terminal result and no duplicate-send ambiguity.
+- [x] Centralize adapter-stage normalization in the protected Send operation so
+      Windows adapters cannot independently reinterpret replay/terminal state.
+- [ ] Close this ticket again only after focused tests, the full suite,
+      `--self-test`, `--product-smoke` and the reference-composer matrix pass.
+
+**Remediation implemented (2026-08-16):** One side-effect scope now spans
+write/replay through terminal publication. Cancellation requested before the
+linearization point blocks the side effect; cancellation after it waits for a
+locally committed, serialized `sent_safely` snapshot. The deterministic reload
+race proves one submit and exactly one terminal outcome. Verification:
+`1739/1739`, `--self-test` and `--product-smoke` passed; the explicit reference
+matrix reported all scenarios and cleanup passed but did not record a release
+proof for the current installed-build mismatch. Reclosure remains gated by 347
+and ticket 349.
+
+## 349. Доказать setup/recovery workflow transaction на полной race-матрице
+
+**What to build:** The reopened resident workflow fix receives deterministic
+end-to-end proof for setup and local recovery, complementing the implemented
+retry race test. The proof demonstrates that cancellation or newer work cannot
+split candidate reload, persistence/rollback and terminal publication, and
+that rollback failure leaves resident protection explicitly stopped.
+
+**Blocked by:** 347. Reopened resident workflow transaction implementation.
+
+**State owner:** The resident workflow coordinator and its attempt-scoped port
+lease own every tested transition; test adapters only expose deterministic
+barriers and observed published state.
+
+**Fail-closed state:** Cancellation before transaction admission prevents all
+activation/persistence. Rollback-runtime failure stops resident protection.
+No scenario may leave an active candidate paired with failed or stale terminal
+state.
+
+**Allowed transitions:** `setup/recovery running -> transaction admitted ->
+activated -> terminal success`, or `running -> cancelled/stale/rollback failed
+-> terminal failure + resident stopped`.
+
+**Deterministic proof:** Inject barriers immediately before the contested
+workflow gate and after candidate hook start. Cover setup cancellation, newer
+operation, rollback-runtime failure, recovery cancellation and recovery newer
+operation without sleeps, UIA, desktop focus or cloud access.
+
+- [ ] Prove setup cancellation/newer work cannot interleave after candidate
+      activation and before persistence/terminal publication.
+- [ ] Prove rollback-runtime failure publishes workflow-owned failure and
+      leaves resident protection stopped.
+- [ ] Prove recovery cancellation/newer work cannot interleave between reload
+      and terminal publication.
+- [ ] Pass the full automated and product verification gates, then use this
+      evidence to close reopened ticket 347.

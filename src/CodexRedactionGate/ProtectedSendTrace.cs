@@ -199,6 +199,21 @@ internal readonly record struct ProtectedSendTraceTransition(
 
     public string StageToken => StageTokens.TryGetValue(Stage, out var token) ? token : "unavailable";
 
+    internal static string CanonicalizeAdapterStage(string stage) => stage switch
+    {
+        "overlay_created" => "overlay_decision",
+        "send_injected" => "replayed",
+        _ => stage
+    };
+
+    internal static string ObserverStage(string canonicalStage) => canonicalStage switch
+    {
+        "overlay_decision" or "overlay_foreground_confirmed" or "approved" or "cancelled" => "overlay",
+        "text_written" => "write",
+        "replayed" => "replay",
+        _ => canonicalStage
+    };
+
     private static bool IsAllowedResultCode(
         ProtectedSendTraceStage stage,
         string resultCode)

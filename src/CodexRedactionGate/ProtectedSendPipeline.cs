@@ -107,24 +107,13 @@ internal sealed class ProtectedSendPipeline
                 return false;
             }
 
-            var canonicalStage = stage switch
-            {
-                "overlay_created" => "overlay_decision",
-                "send_injected" => "replayed",
-                _ => stage
-            };
+            var canonicalStage = ProtectedSendTraceTransition.CanonicalizeAdapterStage(stage);
             return TraceCanonicalStage(canonicalStage, resultCode);
         }
 
         bool TraceCanonicalStage(string stage, string resultCode)
         {
-            _host.ObserveProtectedSendStage(stage switch
-            {
-                "overlay_decision" or "overlay_created" or "overlay_foreground_confirmed" or "approved" or "cancelled" => "overlay",
-                "text_written" => "write",
-                "replayed" or "send_injected" => "replay",
-                _ => stage
-            });
+            _host.ObserveProtectedSendStage(ProtectedSendTraceTransition.ObserverStage(stage));
             var tracedSnapshot = _host.PublishProtectedSendTrace(snapshot, operation, stage, resultCode);
             if (tracedSnapshot is null)
             {
@@ -135,6 +124,8 @@ internal sealed class ProtectedSendPipeline
             return true;
         }
 
+        using var sideEffectScope = new ProtectedSendSideEffectScope(
+            () => _host.AcquireProtectedSendSideEffect(operation));
         var result = ProtectedSendExecution.ExecuteGuarded(
             classification,
             () => _host.RunNativeSubmitFlow(
@@ -142,9 +133,10 @@ internal sealed class ProtectedSendPipeline
                 operation.Target,
                 TraceStage,
                 () => _host.CanContinueProtectedSendOperation(operation),
-                () => _host.AcquireProtectedSendSideEffect(operation)));
+                sideEffectScope.Acquire));
 
         var disposition = AttemptDisposition(result.Status, result.Submitted);
+        _host.ObserveProtectedSendStage("terminal");
         var terminalTrace = result.Submitted
             ? _host.PublishProtectedSendTrace(
                 snapshot,
@@ -167,6 +159,54 @@ internal sealed class ProtectedSendPipeline
         }
 
         return result;
+    }
+
+    private sealed class ProtectedSendSideEffectScope : IDisposable
+    {
+        private static readonly IDisposable BorrowedLease = new NoOpLease();
+        private readonly Func<IDisposable?> _leaseFactory;
+        private IDisposable? _lease;
+        private bool _disposed;
+
+        internal ProtectedSendSideEffectScope(Func<IDisposable?> leaseFactory)
+        {
+            _leaseFactory = leaseFactory ?? throw new ArgumentNullException(nameof(leaseFactory));
+        }
+
+        internal IDisposable? Acquire()
+        {
+            if (_disposed)
+            {
+                return null;
+            }
+
+            if (_lease is not null)
+            {
+                return BorrowedLease;
+            }
+
+            _lease = _leaseFactory();
+            return _lease is null ? null : BorrowedLease;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _lease?.Dispose();
+            _lease = null;
+        }
+
+        private sealed class NoOpLease : IDisposable
+        {
+            public void Dispose()
+            {
+            }
+        }
     }
 
     internal NativeSubmitInterceptionResult ExecuteTraceUnavailable(

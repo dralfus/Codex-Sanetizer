@@ -115,6 +115,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
     private IDisposable? _residentRuntimeOwner;
     private readonly ConcurrentDictionary<CapturedTargetProfileKey, string> _capturedTargetProfiles = new();
     private readonly object _reloadGate = new();
+    private readonly object _snapshotPublicationGate = new();
     private readonly ResidentOperationalActionLifecycle _operationalActionLifecycle;
     private bool _residentReadinessAdmissionEnabled;
     private bool _snapshotInitialized;
@@ -853,8 +854,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         var operationToCancel = Volatile.Read(ref _activeProtectedSendOperation);
         if (operationToCancel is not null)
         {
-            operationToCancel.RequestCancellation();
             ObserveProtectedSendStage("stop_cancellation_requested");
+            operationToCancel.RequestCancellation();
         }
 
         lock (_reloadGate)
@@ -1022,8 +1023,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         if (activeOperation is not null
             && ReferenceEquals(activeOperation.RuntimeSet, previous.RuntimeSet))
         {
-            activeOperation.RequestCancellation();
             ObserveProtectedSendStage("reload_cancellation_requested");
+            activeOperation.RequestCancellation();
         }
 
         var candidate = TryBuildCandidateSnapshot(
@@ -1893,6 +1894,16 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         string? attemptStatus = null,
         string? attemptAction = null)
     {
+        if (transition.Stage == ProtectedSendTraceStage.SentSafely)
+        {
+            return PublishSubmittedTerminalTrace(
+                snapshot,
+                operation,
+                transition,
+                attemptStatus ?? "sent_safely",
+                attemptAction ?? "none");
+        }
+
         return PublishOperationTraceTransaction(
             snapshot,
             operation,
@@ -1905,6 +1916,42 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 DurationSince(operation.StartedAtTimestamp),
                 tryPublish,
                 out _));
+    }
+
+    private ProtectionSnapshot? PublishSubmittedTerminalTrace(
+        ProtectionSnapshot snapshot,
+        ResidentProtectedSendOperation operation,
+        ProtectedSendTraceTransition transition,
+        string attemptStatus,
+        string attemptAction)
+    {
+        if (!operation.TryCommitSubmittedTerminalTrace(
+                transition.ResultCode.Value,
+                DurationSince(operation.StartedAtTimestamp),
+                out var trace)
+            || !TryPublishOperationTraceSnapshot(
+                snapshot,
+                operation,
+                trace,
+                attemptStatus,
+                attemptAction,
+                allowCancelledOperation: false,
+                out var published))
+        {
+            return null;
+        }
+
+        try
+        {
+            NotifyStateChanged();
+        }
+        catch
+        {
+            // The irreversible submit and canonical resident terminal state
+            // are already committed. A UI observer cannot undo either one.
+        }
+
+        return published;
     }
 
     private ProtectionSnapshot? PublishTerminalBlockedTrace(
@@ -1955,6 +2002,10 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         out ProtectionSnapshot? published)
     {
         published = null;
+        var mustPublishSubmittedTerminal = attemptStatus == "sent_safely";
+        using var publicationLease = mustPublishSubmittedTerminal
+            ? MonitorLease.Acquire(_snapshotPublicationGate)
+            : null;
         for (var attempt = 0; attempt < 2; attempt++)
         {
             if (operation.IsCancelled && !allowCancelledOperation)
@@ -1963,7 +2014,11 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             }
 
             var current = ReadSnapshot();
-            if (!CanContinueWithRuntime(current, source))
+            if (!CanContinueWithRuntime(current, source)
+                && !(mustPublishSubmittedTerminal
+                    && current.State.Enabled
+                    && current.HookReady
+                    && ReferenceEquals(current.RuntimeSet, operation.RuntimeSet)))
             {
                 return false;
             }
@@ -2854,9 +2909,13 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 
     private void PublishSnapshot(ProtectionSnapshot snapshot)
     {
-        var published = WithResidentEvidence(snapshot);
-        Volatile.Write(ref _currentSnapshot, published);
-        PublishResidentEvidence(published);
+        lock (_snapshotPublicationGate)
+        {
+            var published = WithResidentEvidence(snapshot);
+            Volatile.Write(ref _currentSnapshot, published);
+            PublishResidentEvidence(published);
+        }
+
         NotifyStateChanged();
     }
 
@@ -2873,16 +2932,41 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 
     private bool TryReplaceSnapshotIfCurrent(ProtectionSnapshot expected, ProtectionSnapshot replacement)
     {
-        var published = WithResidentEvidence(replacement);
-        if (!ReferenceEquals(
-                Interlocked.CompareExchange(ref _currentSnapshot, published, expected),
-                expected))
+        lock (_snapshotPublicationGate)
         {
-            return false;
+            var published = WithResidentEvidence(replacement);
+            if (!ReferenceEquals(
+                    Interlocked.CompareExchange(ref _currentSnapshot, published, expected),
+                    expected))
+            {
+                return false;
+            }
+
+            PublishResidentEvidence(published);
+            return true;
+        }
+    }
+
+    private sealed class MonitorLease : IDisposable
+    {
+        private object? _gate;
+
+        private MonitorLease(object gate) => _gate = gate;
+
+        internal static MonitorLease Acquire(object gate)
+        {
+            Monitor.Enter(gate);
+            return new MonitorLease(gate);
         }
 
-        PublishResidentEvidence(published);
-        return true;
+        public void Dispose()
+        {
+            var gate = Interlocked.Exchange(ref _gate, null);
+            if (gate is not null)
+            {
+                Monitor.Exit(gate);
+            }
+        }
     }
 
     private ProtectionSnapshot WithResidentEvidence(ProtectionSnapshot snapshot)
@@ -3228,10 +3312,15 @@ internal interface IResidentProtectionRuntime
 internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkflowPort, IResidentProtectionRuntime
 {
     private readonly TrayProtectionController _controller;
+    private readonly object _workflowGate = new();
+    private readonly Action<string>? _beforeWorkflowGateEnterForTesting;
 
-    public ResidentProtectionRuntimeFacade(TrayProtectionController controller)
+    public ResidentProtectionRuntimeFacade(
+        TrayProtectionController controller,
+        Action<string>? beforeWorkflowGateEnterForTesting = null)
     {
         _controller = controller ?? throw new ArgumentNullException(nameof(controller));
+        _beforeWorkflowGateEnterForTesting = beforeWorkflowGateEnterForTesting;
         _controller.StateChanged += OnControllerStateChanged;
     }
 
@@ -3245,12 +3334,29 @@ internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkf
 
     public bool IsNativeSubmitHookReady => _controller.IsNativeSubmitHookReady;
 
-    public bool Start() => _controller.Start();
+    public bool Start()
+    {
+        lock (_workflowGate)
+        {
+            return _controller.Start();
+        }
+    }
 
-    public void Stop() => _controller.Stop();
+    public void Stop()
+    {
+        lock (_workflowGate)
+        {
+            _controller.Stop();
+        }
+    }
 
-    public ProtectionDisableResult TryDisableProtection(string action, bool confirmed) =>
-        _controller.TryDisableProtection(action, confirmed);
+    public ProtectionDisableResult TryDisableProtection(string action, bool confirmed)
+    {
+        lock (_workflowGate)
+        {
+            return _controller.TryDisableProtection(action, confirmed);
+        }
+    }
 
     public void RefreshDiagnostics()
     {
@@ -3261,68 +3367,113 @@ internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkf
     public bool Reload(NativeSubmitRuntimeSet candidateRuntimeSet)
     {
         ArgumentNullException.ThrowIfNull(candidateRuntimeSet);
-        return _controller.ReloadNativeSubmit(candidateRuntimeSet);
+        lock (_workflowGate)
+        {
+            return _controller.ReloadNativeSubmit(candidateRuntimeSet);
+        }
     }
 
     public bool Reload(NativeSubmitRuntimeSet candidateRuntimeSet, long expectedAttemptId)
     {
         ArgumentNullException.ThrowIfNull(candidateRuntimeSet);
-        return _controller.ReloadNativeSubmit(candidateRuntimeSet, expectedAttemptId);
+        lock (_workflowGate)
+        {
+            return _controller.ReloadNativeSubmit(candidateRuntimeSet, expectedAttemptId);
+        }
     }
 
     public bool Reload(ResidentProtectionRuntime candidateRuntime)
     {
         ArgumentNullException.ThrowIfNull(candidateRuntime);
-        return _controller.ReloadResidentRuntime(candidateRuntime);
+        lock (_workflowGate)
+        {
+            return _controller.ReloadResidentRuntime(candidateRuntime);
+        }
     }
 
     public bool Reload(ResidentProtectionRuntime candidateRuntime, long expectedAttemptId)
     {
         ArgumentNullException.ThrowIfNull(candidateRuntime);
-        return _controller.ReloadResidentRuntime(candidateRuntime, expectedAttemptId);
+        lock (_workflowGate)
+        {
+            return _controller.ReloadResidentRuntime(candidateRuntime, expectedAttemptId);
+        }
     }
 
-    public void EnableResidentReadinessAdmission() => _controller.EnableResidentReadinessAdmission();
+    public void EnableResidentReadinessAdmission()
+    {
+        lock (_workflowGate)
+        {
+            _controller.EnableResidentReadinessAdmission();
+        }
+    }
 
     public OperationalActionStartResult StartAction(ResidentWorkflowActionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return _controller.StartOperationalAction(
-            request.ActionKind,
-            request.InitialStage,
-            request.UserInputRequired,
-            request.NextAction);
+        lock (_workflowGate)
+        {
+            return _controller.StartOperationalAction(
+                request.ActionKind,
+                request.InitialStage,
+                request.UserInputRequired,
+                request.NextAction);
+        }
+    }
+
+    public IDisposable? TryAcquireAttempt(ResidentWorkflowAttempt attempt)
+    {
+        Monitor.Enter(_workflowGate);
+        if (!IsCurrentUnderWorkflowGate(attempt))
+        {
+            Monitor.Exit(_workflowGate);
+            return null;
+        }
+
+        return new ResidentWorkflowLease(_workflowGate);
     }
 
     public bool Publish(ResidentWorkflowPublication publication, long expectedAttemptId = 0)
     {
         ArgumentNullException.ThrowIfNull(publication);
-        return publication.Kind switch
+        _beforeWorkflowGateEnterForTesting?.Invoke("publish");
+        lock (_workflowGate)
         {
-            ResidentWorkflowPublicationKind.OperationalStage => _controller.PublishOperationalActionStage(
-                publication.Stage ?? "unknown",
-                publication.UserInputRequired,
-                publication.NextAction,
-                expectedAttemptId),
-            ResidentWorkflowPublicationKind.OperationalCompleted => _controller.CompleteOperationalAction(
-                publication.OutcomeCode ?? "failed",
-                publication.NextAction,
-                expectedAttemptId),
-            ResidentWorkflowPublicationKind.OperationalCancelled => _controller.CancelOperationalAction(
-                publication.OutcomeCode ?? "cancelled",
-                expectedAttemptId),
-            ResidentWorkflowPublicationKind.SetupVerificationProgress => PublishSetupProgress(publication),
-            ResidentWorkflowPublicationKind.PromptProtectionRetryStarted => PublishRetryStarted(publication),
-            ResidentWorkflowPublicationKind.PromptProtectionRetrySucceeded => PublishRetrySucceeded(publication),
-            ResidentWorkflowPublicationKind.PromptProtectionRetryFailed => PublishRetryFailed(publication),
-            ResidentWorkflowPublicationKind.LocalProtectionStatus => PublishLocalStatus(publication),
-            ResidentWorkflowPublicationKind.LocalProtectionReady => PublishLocalReady(publication),
-            ResidentWorkflowPublicationKind.ResidentReadinessProof => _controller.TryRecordResidentReadinessProof(expectedAttemptId),
-            _ => false
-        };
+            return publication.Kind switch
+            {
+                ResidentWorkflowPublicationKind.OperationalStage => _controller.PublishOperationalActionStage(
+                    publication.Stage ?? "unknown",
+                    publication.UserInputRequired,
+                    publication.NextAction,
+                    expectedAttemptId),
+                ResidentWorkflowPublicationKind.OperationalCompleted => _controller.CompleteOperationalAction(
+                    publication.OutcomeCode ?? "failed",
+                    publication.NextAction,
+                    expectedAttemptId),
+                ResidentWorkflowPublicationKind.OperationalCancelled => _controller.CancelOperationalAction(
+                    publication.OutcomeCode ?? "cancelled",
+                    expectedAttemptId),
+                ResidentWorkflowPublicationKind.SetupVerificationProgress => PublishSetupProgress(publication),
+                ResidentWorkflowPublicationKind.PromptProtectionRetryStarted => PublishRetryStarted(publication),
+                ResidentWorkflowPublicationKind.PromptProtectionRetrySucceeded => PublishRetrySucceeded(publication),
+                ResidentWorkflowPublicationKind.PromptProtectionRetryFailed => PublishRetryFailed(publication),
+                ResidentWorkflowPublicationKind.LocalProtectionStatus => PublishLocalStatus(publication),
+                ResidentWorkflowPublicationKind.LocalProtectionReady => PublishLocalReady(publication),
+                ResidentWorkflowPublicationKind.ResidentReadinessProof => _controller.TryRecordResidentReadinessProof(expectedAttemptId),
+                _ => false
+            };
+        }
     }
 
     public bool IsCurrent(ResidentWorkflowAttempt attempt)
+    {
+        lock (_workflowGate)
+        {
+            return IsCurrentUnderWorkflowGate(attempt);
+        }
+    }
+
+    private bool IsCurrentUnderWorkflowGate(ResidentWorkflowAttempt attempt)
     {
         return attempt.AttemptId > 0
             && attempt.Kind switch
@@ -3331,6 +3482,22 @@ internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkf
                 "setup_verification" => _controller.IsCurrentSetupVerificationAttempt(attempt.AttemptId),
                 _ => false
             };
+    }
+
+    private sealed class ResidentWorkflowLease : IDisposable
+    {
+        private object? _gate;
+
+        internal ResidentWorkflowLease(object gate) => _gate = gate;
+
+        public void Dispose()
+        {
+            var gate = Interlocked.Exchange(ref _gate, null);
+            if (gate is not null)
+            {
+                Monitor.Exit(gate);
+            }
+        }
     }
 
     public void RefreshOperationalState() => _controller.RefreshOperationalActionState();

@@ -168,9 +168,13 @@ internal interface IResidentProtectionWorkflowPort
 
     bool Start();
 
+    void Stop();
+
     void EnableResidentReadinessAdmission();
 
     OperationalActionStartResult StartAction(ResidentWorkflowActionRequest request);
+
+    IDisposable? TryAcquireAttempt(ResidentWorkflowAttempt attempt);
 
     bool Publish(
         ResidentWorkflowPublication publication,

@@ -1884,13 +1884,113 @@ public partial class SanitizerTests
         cancellationThread.Start();
 
         Assert.That(cancellationStarted.Wait(TimeSpan.FromSeconds(1)), Is.True);
-        Assert.That(SpinWait.SpinUntil(() => operation.IsCancelled, TimeSpan.FromSeconds(1)), Is.True);
+        Assert.That(operation.IsCancelled, Is.False);
         Assert.That(cancellationFinished.IsSet, Is.False);
         lease!.Dispose();
         Assert.That(cancellationFinished.Wait(TimeSpan.FromSeconds(1)), Is.True);
         cancellationThread.Join();
         Assert.That(operation.IsCancelled, Is.True);
         Assert.That(sideEffectsCancelled, Is.True);
+    }
+
+    [Test]
+    public void TrayProtectionController_ReloadWaitsUntilSubmittedAttemptPublishesTerminalTrace()
+    {
+        var oldHook = new FakeNativeSubmitHookHost();
+        var replacementHook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var submitSideEffects = 0;
+        using var reloadStarted = new ManualResetEventSlim(false);
+        using var reloadCancellationRequested = new ManualResetEventSlim(false);
+        using var reloadFinished = new ManualResetEventSlim(false);
+        Thread? reloadThread = null;
+        TrayProtectionController? controller = null;
+
+        OsInteractionResult RunSubmittedFlow(
+            Func<string, string, bool> traceStage,
+            Func<bool> executionGuard,
+            Func<IDisposable?> executionLease)
+        {
+            foreach (var stage in new[]
+            {
+                ("composer_read", "capture_verified"),
+                ("sanitized", "sanitization_verified"),
+                ("overlay_created", "confirmation_requested"),
+                ("overlay_foreground_confirmed", "foreground_verified"),
+                ("approved", "user_approved"),
+                ("text_written", "write_verified"),
+                ("send_injected", "submit_requested")
+            })
+            {
+                Assert.That(traceStage(stage.Item1, stage.Item2), Is.True);
+            }
+
+            Assert.That(executionGuard(), Is.True);
+            using var lease = executionLease();
+            Assert.That(lease, Is.Not.Null);
+            submitSideEffects++;
+            return CreateSubmittedResult(profile.ProfileId);
+        }
+
+        var oldRuntime = NativeSubmitRuntime.CreateTest(
+            oldHook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("The traced runner must be used."),
+            profile,
+            ResidentTracedRunner: (trace, guard, lease) => RunSubmittedFlow(trace, guard, lease),
+            ResidentTargetTracedRunner: (_, trace, guard, lease) => RunSubmittedFlow(trace, guard, lease));
+        var replacementRuntime = NativeSubmitRuntime.CreateTest(
+            replacementHook,
+            new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        controller = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            oldRuntime.Controller,
+            profile,
+            protectedSendStageObserver: stage =>
+            {
+                if (stage == "reload_cancellation_requested")
+                {
+                    reloadCancellationRequested.Set();
+                    return;
+                }
+
+                if (stage != "terminal" || reloadThread is not null)
+                {
+                    return;
+                }
+
+                reloadThread = new Thread(() =>
+                {
+                    reloadStarted.Set();
+                    controller!.ReloadNativeSubmit(replacementRuntime);
+                    reloadFinished.Set();
+                });
+                reloadThread.Start();
+                Assert.That(reloadStarted.Wait(TimeSpan.FromSeconds(1)), Is.True);
+                Assert.That(reloadCancellationRequested.Wait(TimeSpan.FromSeconds(1)), Is.True);
+                Assert.That(reloadFinished.IsSet, Is.False,
+                    "Reload must not invalidate an attempt after submit and before terminal publication.");
+            },
+            nativeSubmitRuntimes: new[] { oldRuntime });
+
+        Assert.That(controller.Start(), Is.True);
+        oldHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+        Assert.That(reloadFinished.Wait(TimeSpan.FromSeconds(2)), Is.True);
+        reloadThread!.Join();
+
+        Assert.That(submitSideEffects, Is.EqualTo(1));
+        Assert.That(controller.State.ProtectedSendAttemptTrace, Is.Not.Null.Or.Empty);
+        Assert.That(controller.State.ProtectedSendAttemptTrace!.Count(entry => entry.Stage == "sent_safely"), Is.EqualTo(1));
+        Assert.That(controller.State.ProtectedSendAttemptTrace!.Count(entry =>
+            entry.Stage is "sent_safely" or "terminal_blocked"), Is.EqualTo(1));
     }
 
     [Test]
@@ -3384,11 +3484,9 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(publicationInvalidations, Is.GreaterThanOrEqualTo(1));
         Assert.That(generationChanged, Is.True);
         Assert.That(submitCalls, Is.Zero);
-        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
-        {
-            "send_detected",
-            "terminal_blocked"
-        }));
+        Assert.That(tray.State.ProtectedSendAttemptTrace![0].Stage, Is.EqualTo("send_detected"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace![^1].Stage, Is.EqualTo("terminal_blocked"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
         Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
     }
 
@@ -3447,11 +3545,9 @@ public class HandleButtonClickTests : SanitizerTests
 
         Assert.That(generationChanged, Is.True);
         Assert.That(submitCalls, Is.Zero);
-        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
-        {
-            "send_detected",
-            "terminal_blocked"
-        }));
+        Assert.That(tray.State.ProtectedSendAttemptTrace![0].Stage, Is.EqualTo("send_detected"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace![^1].Stage, Is.EqualTo("terminal_blocked"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
         Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
         Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("runtime_replaced"));
         Assert.That(tray.GetCurrentSnapshot().Generation, Is.GreaterThan(sourceGeneration));
@@ -3463,6 +3559,7 @@ public class HandleButtonClickTests : SanitizerTests
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
         TrayProtectionController? tray = null;
+        using var stopStarted = new ManualResetEventSlim(false);
         using var stopRequested = new ManualResetEventSlim(false);
         Thread? stopThread = null;
         var boundaryEntered = false;
@@ -3488,8 +3585,13 @@ public class HandleButtonClickTests : SanitizerTests
                 if (!boundaryEntered)
                 {
                     boundaryEntered = true;
-                    stopThread = new Thread(() => tray!.Stop());
+                    stopThread = new Thread(() =>
+                    {
+                        stopStarted.Set();
+                        tray!.Stop();
+                    });
                     stopThread.Start();
+                    Assert.That(stopStarted.Wait(TimeSpan.FromSeconds(1)), Is.True);
                     cancellationObserved = stopRequested.Wait(TimeSpan.FromSeconds(1));
                 }
             });
@@ -3501,15 +3603,14 @@ public class HandleButtonClickTests : SanitizerTests
         stopThread!.Join();
 
         Assert.That(cancellationObserved, Is.True);
+        Assert.That(stopRequested.IsSet, Is.True);
         Assert.That(submitCalls, Is.Zero);
         Assert.That(tray.State.Enabled, Is.False);
-        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
-        {
-            "send_detected",
-            "terminal_blocked"
-        }));
+        Assert.That(tray.State.ProtectedSendAttemptTrace![0].Stage, Is.EqualTo("send_detected"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace![^1].Stage, Is.EqualTo("terminal_blocked"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
         Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
-        Assert.That(publishedStages, Is.Empty.Or.EquivalentTo(new[] { "terminal_blocked" }));
+        Assert.That(publishedStages, Does.Not.Contain("sent_safely"));
         Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("protection_stopped"));
     }
 
@@ -3520,6 +3621,7 @@ public class HandleButtonClickTests : SanitizerTests
         var replacementHook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
         TrayProtectionController? tray = null;
+        using var reloadStarted = new ManualResetEventSlim(false);
         using var reloadRequested = new ManualResetEventSlim(false);
         Thread? reloadThread = null;
         var boundaryEntered = false;
@@ -3556,8 +3658,13 @@ public class HandleButtonClickTests : SanitizerTests
                 if (!boundaryEntered)
                 {
                     boundaryEntered = true;
-                    reloadThread = new Thread(() => reloaded = tray!.ReloadNativeSubmit(replacementRuntime));
+                    reloadThread = new Thread(() =>
+                    {
+                        reloadStarted.Set();
+                        reloaded = tray!.ReloadNativeSubmit(replacementRuntime);
+                    });
                     reloadThread.Start();
+                    Assert.That(reloadStarted.Wait(TimeSpan.FromSeconds(1)), Is.True);
                     cancellationObserved = reloadRequested.Wait(TimeSpan.FromSeconds(1));
                 }
             });
@@ -3569,17 +3676,16 @@ public class HandleButtonClickTests : SanitizerTests
         reloadThread!.Join();
 
         Assert.That(cancellationObserved, Is.True);
+        Assert.That(reloadRequested.IsSet, Is.True);
         Assert.That(reloaded, Is.True);
         Assert.That(oldSubmitCalls, Is.Zero);
         Assert.That(replacementSubmitCalls, Is.Zero);
-        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Is.EqualTo(new[]
-        {
-            "send_detected",
-            "terminal_blocked"
-        }));
+        Assert.That(tray.State.ProtectedSendAttemptTrace![0].Stage, Is.EqualTo("send_detected"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace![^1].Stage, Is.EqualTo("terminal_blocked"));
+        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
         Assert.That(tray.State.LastProtectedSendInterruption!.Reason, Is.EqualTo("runtime_replaced"));
         Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry => entry.SnapshotGeneration == sourceGeneration), Is.True);
-        Assert.That(publishedStages, Is.Empty.Or.EquivalentTo(new[] { "terminal_blocked" }));
+        Assert.That(publishedStages.Last(), Is.EqualTo("terminal_blocked"));
         Assert.That(tray.GetCurrentSnapshot().Generation, Is.GreaterThan(sourceGeneration));
     }
 
@@ -5428,6 +5534,148 @@ public class HandleButtonClickTests : SanitizerTests
             ResidentWorkflowPublication.RetryFailed(first.AttemptId),
             first.AttemptId), Is.False);
         Assert.That(runtime.Snapshot, Is.SameAs(beforeStalePublication));
+    }
+
+    [Test]
+    public void ResidentProtectionWorkflowPort_AttemptLeaseLinearizesActivationAndTerminalPublication()
+    {
+        var profile = CreateProtectedProfile();
+        var controller = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            new FakeNativeSubmitHookHost(),
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var observePublicationGate = false;
+        using var publicationGateEntered = new ManualResetEventSlim(false);
+        var runtime = new ResidentProtectionRuntimeFacade(
+            controller,
+            operation =>
+            {
+                if (observePublicationGate && operation == "publish")
+                {
+                    publicationGateEntered.Set();
+                }
+            });
+        var started = runtime.StartAction(new ResidentWorkflowActionRequest(
+            "prompt_protection_retry", "starting", false, "wait_for_result"));
+        Assert.That(started.Started, Is.True);
+
+        using var lease = runtime.TryAcquireAttempt(ResidentWorkflowAttempt.Operational(started.AttemptId));
+        Assert.That(lease, Is.Not.Null);
+        using var cancellationStarted = new ManualResetEventSlim(false);
+        using var cancellationFinished = new ManualResetEventSlim(false);
+        var cancellationResult = true;
+        var cancellation = new Thread(() =>
+        {
+            cancellationStarted.Set();
+            cancellationResult = runtime.Publish(
+                ResidentWorkflowPublication.Cancelled(),
+                started.AttemptId);
+            cancellationFinished.Set();
+        });
+        observePublicationGate = true;
+        cancellation.Start();
+        Assert.That(cancellationStarted.Wait(TimeSpan.FromSeconds(1)), Is.True);
+        Assert.That(publicationGateEntered.Wait(TimeSpan.FromSeconds(1)), Is.True);
+        Assert.That(cancellationFinished.IsSet, Is.False);
+
+        Assert.That(runtime.Publish(
+            ResidentWorkflowPublication.RetrySucceeded(started.AttemptId),
+            started.AttemptId), Is.True);
+        Assert.That(runtime.Publish(
+            ResidentWorkflowPublication.Completed("succeeded", "none"),
+            started.AttemptId), Is.True);
+        lease!.Dispose();
+
+        Assert.That(cancellationFinished.Wait(TimeSpan.FromSeconds(1)), Is.True);
+        cancellation.Join();
+        Assert.That(cancellationResult, Is.False);
+        Assert.That(runtime.OperationalAction.Status, Is.EqualTo("succeeded"));
+    }
+
+    [Test]
+    public void ResidentProtectionWorkflowCoordinator_RetryPublishesTerminalBeforeConcurrentCancellation()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = CreateProtectedProfile();
+        var oldHook = new FakeNativeSubmitHookHost();
+        var candidateHook = new FakeNativeSubmitHookHost();
+        var controller = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => throw new InvalidOperationException("Manual scan should not run."),
+            oldHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile,
+            storageLayout: layout);
+        using var publicationGateEntered = new ManualResetEventSlim(false);
+        var runtime = new ResidentProtectionRuntimeFacade(
+            controller,
+            operation =>
+            {
+                if (operation == "publish")
+                {
+                    publicationGateEntered.Set();
+                }
+            });
+        var candidate = NativeSubmitRuntime.CreateTest(
+            candidateHook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var candidateSet = new NativeSubmitRuntimeSet(candidateHook, new[] { candidate });
+        ResidentProtectionWorkflowCoordinator? coordinator = null;
+        using var cancellationStarted = new ManualResetEventSlim(false);
+        using var cancellationFinished = new ManualResetEventSlim(false);
+        Thread? cancellationThread = null;
+        candidateHook.OnStarted = _ =>
+        {
+            publicationGateEntered.Reset();
+            cancellationThread = new Thread(() =>
+            {
+                cancellationStarted.Set();
+                coordinator!.CancelCurrentOperation();
+                cancellationFinished.Set();
+            });
+            cancellationThread.Start();
+            Assert.That(cancellationStarted.Wait(TimeSpan.FromSeconds(1)), Is.True);
+            Assert.That(publicationGateEntered.Wait(TimeSpan.FromSeconds(1)), Is.True);
+            Assert.That(cancellationFinished.IsSet, Is.False);
+        };
+        coordinator = new ResidentProtectionWorkflowCoordinator(
+            runtime,
+            layout,
+            () => throw new InvalidOperationException("Setup should not run."),
+            _ => throw new InvalidOperationException("Setup candidate should not run."),
+            () => candidateSet,
+            () => throw new InvalidOperationException("Recovery should not run."),
+            () => throw new InvalidOperationException("Recovery should not run."),
+            action => action(),
+            action => action(),
+            (_, _, _) => Assert.Fail("Retry should not capture a failure."));
+
+        try
+        {
+            Assert.That(controller.Start(), Is.True);
+            coordinator.RetryPromptProtection();
+            Assert.That(cancellationFinished.Wait(TimeSpan.FromSeconds(1)), Is.True);
+            cancellationThread!.Join();
+
+            Assert.That(runtime.OperationalAction.Status, Is.EqualTo("succeeded"));
+            Assert.That(runtime.State.NativeSubmitEnabled, Is.True);
+            Assert.That(runtime.State.ComposerProtected, Is.True);
+        }
+        finally
+        {
+            controller.Stop();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     [Test]

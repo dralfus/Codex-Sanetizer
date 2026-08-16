@@ -19,6 +19,7 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
     private readonly Action? _cancelSideEffects;
     private IReadOnlyList<ProtectedSendTraceEntry> _trace = Array.Empty<ProtectedSendTraceEntry>();
     private int _completed;
+    private int _cancellationRequested;
     private int _cancelled;
     private int _executionThreadId;
     private bool _disposed;
@@ -149,6 +150,36 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
         }
     }
 
+    public bool TryCommitSubmittedTerminalTrace(
+        string resultCode,
+        int durationMilliseconds,
+        out IReadOnlyList<ProtectedSendTraceEntry> trace)
+    {
+        lock (_lifecycleGate)
+        {
+            if (_disposed
+                || Volatile.Read(ref _completed) != 0
+                || Volatile.Read(ref _cancelled) != 0
+                || !ProtectedSendTrace.TryAppend(
+                    _trace,
+                    AttemptId,
+                    Snapshot.Generation,
+                    TargetFingerprint,
+                    "sent_safely",
+                    resultCode,
+                    durationMilliseconds,
+                    out var updated))
+            {
+                trace = _trace;
+                return false;
+            }
+
+            _trace = updated;
+            trace = _trace;
+            return true;
+        }
+    }
+
     public bool TryEnsureTerminalBlockedTrace(out IReadOnlyList<ProtectedSendTraceEntry> trace)
     {
         lock (_lifecycleGate)
@@ -254,9 +285,13 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
 
     public void RequestCancellation()
     {
-        lock (_publicationGate)
+        Interlocked.Exchange(ref _cancellationRequested, 1);
+        lock (_lifecycleGate)
         {
-            Interlocked.Exchange(ref _cancelled, 1);
+            lock (_publicationGate)
+            {
+                Interlocked.Exchange(ref _cancelled, 1);
+            }
         }
     }
 
@@ -299,6 +334,7 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
     private bool CanContinueUnderLock(ProtectionSnapshot current)
     {
         return Volatile.Read(ref _completed) == 0
+            && Volatile.Read(ref _cancellationRequested) == 0
             && Volatile.Read(ref _cancelled) == 0
             && !_cancellation.IsCancellationRequested
             && current.State.Enabled

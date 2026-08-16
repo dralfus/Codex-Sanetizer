@@ -177,6 +177,15 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             runtimeSet =>
             {
                 var activated = false;
+                using var attemptLease = _runtime.TryAcquireAttempt(
+                    ResidentWorkflowAttempt.Operational(started.AttemptId));
+                if (attemptLease is null)
+                {
+                    StopUnactivatedRuntime(runtimeSet);
+                    Interlocked.Exchange(ref _workflowInProgress, 0);
+                    return;
+                }
+
                 try
                 {
                     activated = runtimeSet is not null
@@ -311,13 +320,17 @@ internal sealed class ResidentProtectionWorkflowCoordinator
 
     private void CompleteSetup(FirstRunSetupResult? result, long operationalAttemptId)
     {
-        if (!_runtime.IsCurrent(ResidentWorkflowAttempt.Operational(operationalAttemptId)))
+        using var operationalLease = _runtime.TryAcquireAttempt(
+            ResidentWorkflowAttempt.Operational(operationalAttemptId));
+        if (operationalLease is null)
         {
             return;
         }
 
         var success = false;
         var activationFailed = false;
+        string? noticeMessage = null;
+        var noticeIsError = false;
         var setupAttemptId = SetupAttemptId(result);
         if (result?.PendingProfiles is not null
             && (setupAttemptId <= 0 || !_runtime.IsCurrent(ResidentWorkflowAttempt.SetupVerification(setupAttemptId))))
@@ -337,6 +350,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                     "activating_protection", "wait_for_verification", ProfileId(result),
                     _runtime.State.ProtectedSendBinding, setupAttemptId)));
                 NativeSubmitRuntimeSet? candidate = null;
+                var candidateActivated = false;
                 try
                 {
                     if (!ActivatePendingTarget(result))
@@ -347,16 +361,9 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                     candidate = result.PendingProfiles is { } profiles
                         ? _candidateRuntimeFactory(profiles)
                         : _retryRuntimeFactory();
-                    var candidateActivated = candidate is not null
+                    candidateActivated = candidate is not null
                         && _runtime.Reload(candidate, operationalAttemptId);
-                    if (candidateActivated && CommitProfiles(result))
-                    {
-                        _runtime.Publish(ResidentWorkflowPublication.Setup(new PromptProtectionSetupProgress(
-                            "protected", "none", ProfileId(result),
-                            _runtime.State.ProtectedSendBinding, setupAttemptId)));
-                        success = true;
-                    }
-                    else
+                    if (!candidateActivated || !CommitProfiles(result))
                     {
                         activationFailed = true;
                         if (!candidateActivated)
@@ -364,6 +371,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                             StopUnactivatedRuntime(candidate);
                         }
 
+                        candidateActivated = false;
                         RollbackProfiles(result, operationalAttemptId);
                         ReloadPreviousRuntimeAfterSetupRollback(operationalAttemptId);
                     }
@@ -376,6 +384,17 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                     RollbackProfiles(result, operationalAttemptId);
                     ReloadPreviousRuntimeAfterSetupRollback(operationalAttemptId);
                 }
+
+                if (candidateActivated)
+                {
+                    _runtime.Publish(ResidentWorkflowPublication.Setup(new PromptProtectionSetupProgress(
+                        "protected", "none", ProfileId(result),
+                        _runtime.State.ProtectedSendBinding, setupAttemptId)));
+                    success = true;
+                    _runtime.Publish(
+                        ResidentWorkflowPublication.Completed("succeeded", "none"),
+                        operationalAttemptId);
+                }
             }
         }
 
@@ -386,20 +405,27 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                 : activationFailed ? "activation_failed" : "verification_failed";
             _runtime.Publish(ResidentWorkflowPublication.Setup(new PromptProtectionSetupProgress(
                 status, "retry_setup", AttemptId: SetupAttemptId(result))));
-            PublishNotice(
-                result?.Code == "setup_cancelled"
-                    ? "Prompt setup was cancelled. Protected Send remains blocked."
-                    : "Prompt setup could not activate protected Send. Protected Send remains blocked until verification succeeds.",
-                result?.Code != "setup_cancelled");
+            noticeMessage = result?.Code == "setup_cancelled"
+                ? "Prompt setup was cancelled. Protected Send remains blocked."
+                : "Prompt setup could not activate protected Send. Protected Send remains blocked until verification succeeds.";
+            noticeIsError = result?.Code != "setup_cancelled";
         }
 
-        _runtime.Publish(
-            result?.Code == "setup_cancelled"
-                ? ResidentWorkflowPublication.Cancelled()
-                : ResidentWorkflowPublication.Completed(
-                    success ? "succeeded" : "setup_failed",
-                    success ? "none" : "retry_setup"),
-            operationalAttemptId);
+        if (!success)
+        {
+            _runtime.Publish(
+                result?.Code == "setup_cancelled"
+                    ? ResidentWorkflowPublication.Cancelled()
+                    : ResidentWorkflowPublication.Completed("setup_failed", "retry_setup"),
+                operationalAttemptId);
+        }
+
+        operationalLease.Dispose();
+        if (noticeMessage is not null)
+        {
+            PublishNotice(noticeMessage, noticeIsError);
+        }
+
         SetupCompleted?.Invoke(result);
     }
 
@@ -484,6 +510,10 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                 _runtime.Publish(
                     ResidentWorkflowPublication.RetryFailed(operationalAttemptId),
                     operationalAttemptId);
+                _runtime.Publish(
+                    ResidentWorkflowPublication.Completed("setup_failed", "retry_setup"),
+                    operationalAttemptId);
+                _runtime.Stop();
             }
         }
         catch (Exception exception)
@@ -492,11 +522,23 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             _runtime.Publish(
                 ResidentWorkflowPublication.RetryFailed(operationalAttemptId),
                 operationalAttemptId);
+            _runtime.Publish(
+                ResidentWorkflowPublication.Completed("setup_failed", "retry_setup"),
+                operationalAttemptId);
+            _runtime.Stop();
         }
     }
 
     private void CompleteRecovery(LocalProtectionRecoveryResult result, long attemptId)
     {
+        using var attemptLease = _runtime.TryAcquireAttempt(
+            ResidentWorkflowAttempt.Operational(attemptId));
+        if (attemptLease is null)
+        {
+            Interlocked.Exchange(ref _workflowInProgress, 0);
+            return;
+        }
+
         try
         {
             if (!result.Succeeded)
@@ -514,9 +556,9 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             }
 
             var runtime = _recoveredRuntimeFactory();
-            if (runtime.NativeSubmitRuntimeSet is null
+            if ((!_runtime.State.Enabled && !_runtime.Start())
+                || runtime.NativeSubmitRuntimeSet is null
                 || !_runtime.Reload(runtime, attemptId)
-                || (!_runtime.State.Enabled && !_runtime.Start())
                 || !_runtime.Publish(
                     ResidentWorkflowPublication.LocalReady(attemptId),
                     attemptId))
