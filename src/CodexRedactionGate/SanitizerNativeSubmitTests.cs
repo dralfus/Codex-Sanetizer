@@ -5620,7 +5620,7 @@ public class HandleButtonClickTests : SanitizerTests
             controller,
             operation =>
             {
-                if (operation == "publish")
+                if (operation == "acquire_attempt")
                 {
                     publicationGateEntered.Set();
                 }

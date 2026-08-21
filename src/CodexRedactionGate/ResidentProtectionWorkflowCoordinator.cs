@@ -62,8 +62,24 @@ internal sealed class ResidentProtectionWorkflowCoordinator
 
     public void CancelCurrentOperation()
     {
-        var attemptId = _runtime.OperationalAction.AttemptId;
-        _runtime.Publish(ResidentWorkflowPublication.Cancelled(), attemptId);
+        var action = _runtime.OperationalAction;
+        using var attemptLease = _runtime.TryAcquireAttempt(
+            ResidentWorkflowAttempt.Operational(action.AttemptId));
+        if (attemptLease is null)
+        {
+            return;
+        }
+
+        if (string.Equals(action.ActionKind, "local_protection_recovery", StringComparison.Ordinal))
+        {
+            _runtime.Publish(
+                ResidentWorkflowPublication.LocalProtection(
+                    LocalProtectionRecovery.RecoveryRequiredCode,
+                    action.AttemptId),
+                action.AttemptId);
+        }
+
+        _runtime.Publish(ResidentWorkflowPublication.Cancelled(), action.AttemptId);
     }
 
     public void RetryCurrentOperation()
@@ -535,12 +551,6 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             ResidentWorkflowAttempt.Operational(attemptId));
         if (attemptLease is null)
         {
-            // Recovery published an intermediate blocked state before doing
-            // local work. If cancellation or newer work wins before runtime
-            // admission, retire that intermediate state explicitly without
-            // completing or otherwise changing the newer operation.
-            _runtime.Publish(ResidentWorkflowPublication.LocalProtection(
-                LocalProtectionRecovery.RecoveryRequiredCode));
             Interlocked.Exchange(ref _workflowInProgress, 0);
             return;
         }

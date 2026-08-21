@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using CodexRedactionGate;
 using NUnit.Framework;
 
@@ -86,43 +85,14 @@ public partial class SanitizerTests
         Assert.That(SubmitBindingProfileStore.Save(layout, new[] { previousProfile }).Succeeded, Is.True);
 
         var protection = CreateWorkflowProtection(layout);
-        using var cancellationEntered = new ManualResetEventSlim(false);
-        using var concurrentWorkFinished = new ManualResetEventSlim(false);
-        var observePublication = false;
-        var runtime = new ResidentProtectionRuntimeFacade(
-            protection,
-            operation =>
-            {
-                if (observePublication && operation == "publish")
-                {
-                    cancellationEntered.Set();
-                }
-            });
+        using var contender = new WorkflowStartContender();
+        var runtime = new ResidentProtectionRuntimeFacade(protection, contender.ObserveGate);
         var candidateHook = new FakeNativeSubmitHookHost();
-        ResidentProtectionWorkflowCoordinator? coordinator = null;
-        Thread? concurrentWork = null;
-        var cancellationStatus = true;
-        var terminalStatusBeforeNewWork = "unknown";
-        OperationalActionStartResult newerWork = default!;
-        candidateHook.OnStarted = _ =>
-        {
-            observePublication = true;
-            concurrentWork = new Thread(() =>
-            {
-                coordinator!.CancelCurrentOperation();
-                cancellationStatus = runtime.OperationalAction.Status == "cancelled";
-                terminalStatusBeforeNewWork = runtime.OperationalAction.Status;
-                newerWork = runtime.StartAction(new ResidentWorkflowActionRequest(
-                    "newer_setup", "starting", false, "wait_for_result"));
-                concurrentWorkFinished.Set();
-            });
-            concurrentWork.Start();
-            Assert.That(cancellationEntered.Wait(TimeSpan.FromSeconds(1)), Is.True);
-            Assert.That(concurrentWorkFinished.IsSet, Is.False);
-        };
+        runtime.SnapshotChanged += (_, _) => contender.ObserveSnapshot(runtime);
+        candidateHook.OnStarted = _ => contender.StartAndWaitUntilBlocked(runtime, "newer_setup");
 
         var setupResult = SuccessfulSetupResult(previousProfile, candidateProfile);
-        coordinator = CreateWorkflowCoordinator(
+        var coordinator = CreateWorkflowCoordinator(
             runtime,
             layout,
             setupResult,
@@ -137,11 +107,9 @@ public partial class SanitizerTests
 
             coordinator.StartFocusedSetup();
 
-            Assert.That(concurrentWorkFinished.Wait(TimeSpan.FromSeconds(1)), Is.True);
-            concurrentWork!.Join();
-            Assert.That(cancellationStatus, Is.False);
-            Assert.That(terminalStatusBeforeNewWork, Is.EqualTo("succeeded"));
-            Assert.That(newerWork.Started, Is.True);
+            contender.WaitForCompletion();
+            Assert.That(contender.TerminalObserved, Is.True);
+            Assert.That(contender.Result.Started, Is.True);
             Assert.That(candidateHook.Started, Is.True);
             Assert.That(
                 SubmitBindingProfileStore.Load(layout).Profiles[0].SubmitBinding!.DisplayText,
@@ -221,42 +189,13 @@ public partial class SanitizerTests
         var layout = DefaultStorageLayout.Create(directory);
         var profile = CreateWorkflowProfile();
         var protection = CreateWorkflowProtection(layout);
-        using var cancellationEntered = new ManualResetEventSlim(false);
-        using var concurrentWorkFinished = new ManualResetEventSlim(false);
-        var observePublication = false;
-        var runtime = new ResidentProtectionRuntimeFacade(
-            protection,
-            operation =>
-            {
-                if (observePublication && operation == "publish")
-                {
-                    cancellationEntered.Set();
-                }
-            });
+        using var contender = new WorkflowStartContender();
+        var runtime = new ResidentProtectionRuntimeFacade(protection, contender.ObserveGate);
         var recoveredHook = new FakeNativeSubmitHookHost();
-        ResidentProtectionWorkflowCoordinator? coordinator = null;
-        Thread? concurrentWork = null;
-        var cancellationStatus = true;
-        var terminalStatusBeforeNewWork = "unknown";
-        OperationalActionStartResult newerWork = default!;
-        recoveredHook.OnStarted = _ =>
-        {
-            observePublication = true;
-            concurrentWork = new Thread(() =>
-            {
-                coordinator!.CancelCurrentOperation();
-                cancellationStatus = runtime.OperationalAction.Status == "cancelled";
-                terminalStatusBeforeNewWork = runtime.OperationalAction.Status;
-                newerWork = runtime.StartAction(new ResidentWorkflowActionRequest(
-                    "newer_recovery", "starting", false, "wait_for_result"));
-                concurrentWorkFinished.Set();
-            });
-            concurrentWork.Start();
-            Assert.That(cancellationEntered.Wait(TimeSpan.FromSeconds(1)), Is.True);
-            Assert.That(concurrentWorkFinished.IsSet, Is.False);
-        };
+        runtime.SnapshotChanged += (_, _) => contender.ObserveSnapshot(runtime);
+        recoveredHook.OnStarted = _ => contender.StartAndWaitUntilBlocked(runtime, "newer_recovery");
 
-        coordinator = CreateWorkflowCoordinator(
+        var coordinator = CreateWorkflowCoordinator(
             runtime,
             layout,
             setupResult: null,
@@ -272,11 +211,9 @@ public partial class SanitizerTests
 
             coordinator.RepairLocalProtection();
 
-            Assert.That(concurrentWorkFinished.Wait(TimeSpan.FromSeconds(1)), Is.True);
-            concurrentWork!.Join();
-            Assert.That(cancellationStatus, Is.False);
-            Assert.That(terminalStatusBeforeNewWork, Is.EqualTo("succeeded"));
-            Assert.That(newerWork.Started, Is.True);
+            contender.WaitForCompletion();
+            Assert.That(contender.TerminalObserved, Is.True);
+            Assert.That(contender.Result.Started, Is.True);
             Assert.That(recoveredHook.Started, Is.True);
             Assert.That(runtime.State.LocalProtectionStatus, Is.EqualTo(LocalProtectionRecovery.ReadyCode));
         }
@@ -455,18 +392,4 @@ public partial class SanitizerTests
         public bool IsSetupComplete(DefaultStorageLayout layout) => !_result(layout).State.Required;
     }
 
-    internal sealed class WorkflowTestDirectory : IDisposable
-    {
-        private readonly string _path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-
-        internal DefaultStorageLayout Layout => DefaultStorageLayout.Create(_path);
-
-        public void Dispose()
-        {
-            if (Directory.Exists(_path))
-            {
-                Directory.Delete(_path, recursive: true);
-            }
-        }
-    }
 }

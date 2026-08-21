@@ -3411,6 +3411,7 @@ internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkf
     public OperationalActionStartResult StartAction(ResidentWorkflowActionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        _beforeWorkflowGateEnterForTesting?.Invoke("start_action");
         lock (_workflowGate)
         {
             return _controller.StartOperationalAction(
@@ -3423,6 +3424,7 @@ internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkf
 
     public IDisposable? TryAcquireAttempt(ResidentWorkflowAttempt attempt)
     {
+        _beforeWorkflowGateEnterForTesting?.Invoke("acquire_attempt");
         Monitor.Enter(_workflowGate);
         if (!IsCurrentUnderWorkflowGate(attempt))
         {

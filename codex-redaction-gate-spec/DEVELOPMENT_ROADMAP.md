@@ -43,7 +43,7 @@ flowchart TD
     T344["[x] 344\nИзолировать suite от установленного tray"]
     R346["[x] 346\nImmutable admission evidence\nдо native callback"]
     A347["[x] 347\nАтомарный resident workflow transaction"]
-    A348["[x] 348\nSubmit + terminal publication без разрыва"]
+    A348["[>] 348 acceptance pending\nSubmit + terminal publication без разрыва"]
     A349["[x] 349\nSetup/recovery race-матрица"]
     R314["[~] 314\nБезопасный первый mouse Send"]
     Keyboard["Клавиатурная prompt-защита\nповторная release-приёмка"]
@@ -105,8 +105,8 @@ flowchart TD
 | Очерёдность | Тикет | Результат | Зависимости |
 |---:|---|---|---|
 | 1 | **347** `[x]` | Activation, profile commit и terminal publication линеаризованы; race-матрица 349 исключает mixed-state при cancellation/newer operation. Предыдущее завершение сохранено в `tickets.md` как история. | 341, 342, 345, 346 |
-| 2 | **348** `[x]` | Единица side-effect удерживается от write/replay через `sent_safely`; отправленный prompt нельзя затем объявить неотправленным. | 347, 323, 324, 346 |
-| 3 | **349** `[x]` | Детерминированно доказаны setup/recovery cancellation, newer operation и rollback failure; 347 и 348 повторно закрыты. | 347 |
+| 2 | **348** `[>]` acceptance pending | Единица side-effect удерживается от write/replay через `sent_safely`; source-матрица зелёная, но повторное закрытие ждёт release proof от installer, совпадающего с source build. | 347, 323, 324, 346 |
+| 3 | **349** `[x]` | Детерминированно доказаны setup/recovery cancellation, newer operation и rollback failure; 347 повторно закрыт, а 348 ждёт installer-matched release proof. | 347 |
 
 **Gate этапа 1.5:** до начала `283`/`286` и нового file-ingress кода должны быть
 зелёными полный automated suite, `--self-test`, `--product-smoke` и

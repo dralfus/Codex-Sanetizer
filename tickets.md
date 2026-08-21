@@ -2858,7 +2858,7 @@ retry possible.
       terminal result and no duplicate-send ambiguity.
 - [x] Centralize adapter-stage normalization in the protected Send operation so
       Windows adapters cannot independently reinterpret replay/terminal state.
-- [x] Close this ticket again only after focused tests, the full suite,
+- [ ] Close this ticket again only after focused tests, the full suite,
       `--self-test`, `--product-smoke` and the reference-composer matrix pass.
 
 **Remediation implemented (2026-08-16):** One side-effect scope now spans
@@ -2871,11 +2871,11 @@ matrix reported all scenarios and cleanup passed but did not record a release
 proof for the current installed-build mismatch. Reclosure remains gated by 347
 and ticket 349.
 
-**Reclosed (2026-08-21):** Ticket 349 completed the remaining resident
-transaction proof and all release gates passed. The reference-composer matrix
-passed every scenario twice with raw-free traces and cleanup; proof persistence
-remains intentionally false until an installer matching the source build is
-produced.
+**Acceptance pending (2026-08-21):** Ticket 349 completed the remaining
+resident transaction proof. The source-build reference-composer matrix passed
+every scenario twice with raw-free traces and cleanup, but the installed-build
+release proof was not recorded because the installer does not match the source
+build. Keep this ticket open until a matching installer records that proof.
 
 ## 349. Доказать setup/recovery workflow transaction на полной race-матрице
 
