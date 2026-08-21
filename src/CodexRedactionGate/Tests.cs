@@ -8317,7 +8317,7 @@ public class ResidentFirstRunSetupLaunchTests
             var setupAttempts = 0;
             const string retryFailure = "DOMAIN_C195C3D8E8F3";
             SanitizerTests.FakeNativeSubmitHookHost? failedRetryHook = null;
-            var protection = CreateManualOnlyTrayProtection();
+            var protection = CreateManualOnlyTrayProtection(layout);
             var setupController = new TestSetupController(setupLayout =>
             {
                 if (++setupAttempts == 1)
@@ -8762,7 +8762,7 @@ public class ResidentFirstRunSetupLaunchTests
             SubmitBindingProfileStore.Save(layout, new[] { CreateProtectedSetupProfile() });
             var queuedWork = new Queue<Action>();
             var retryFactoryCalls = 0;
-            var protection = CreateManualOnlyTrayProtection();
+            var protection = CreateManualOnlyTrayProtection(layout);
             protection.Start();
             using var context = new WindowsTrayApplicationContext(
                 protection,
@@ -8809,7 +8809,7 @@ public class ResidentFirstRunSetupLaunchTests
             const string rawFailure = "DOMAIN_C195C3D8E8F3";
             var layout = DefaultStorageLayout.Create(tempDirectory);
             SubmitBindingProfileStore.Save(layout, new[] { CreateProtectedSetupProfile() });
-            var protection = CreateManualOnlyTrayProtection();
+            var protection = CreateManualOnlyTrayProtection(layout);
             protection.Start();
             using var context = new WindowsTrayApplicationContext(
                 protection,
@@ -8846,7 +8846,7 @@ public class ResidentFirstRunSetupLaunchTests
             var layout = DefaultStorageLayout.Create(tempDirectory);
             SubmitBindingProfileStore.Save(layout, new[] { CreateProtectedSetupProfile() });
             var queuedWork = new Queue<Action>();
-            var protection = CreateManualOnlyTrayProtection();
+            var protection = CreateManualOnlyTrayProtection(layout);
             protection.Start();
             using var context = new WindowsTrayApplicationContext(
                 protection,
@@ -8884,7 +8884,7 @@ public class ResidentFirstRunSetupLaunchTests
         try
         {
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            var protection = CreateManualOnlyTrayProtection();
+            var protection = CreateManualOnlyTrayProtection(layout);
             var messages = new List<string>();
             TrayProtectionState? stateDuringRecovery = null;
             TrayProtectionState? stateWhenReplacementHookStarted = null;
@@ -8946,7 +8946,7 @@ public class ResidentFirstRunSetupLaunchTests
         {
             const string rawFailureCode = "DOMAIN_C195C3D8E8F3";
             var layout = DefaultStorageLayout.Create(tempDirectory);
-            var protection = CreateManualOnlyTrayProtection();
+            var protection = CreateManualOnlyTrayProtection(layout);
             var messages = new List<string>();
             using var context = new WindowsTrayApplicationContext(
                 protection,

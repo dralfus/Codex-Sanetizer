@@ -5503,6 +5503,7 @@ public class HandleButtonClickTests : SanitizerTests
     [Test]
     public void ResidentProtectionWorkflowPort_RejectsIncompletePublicationWithoutChangingSnapshot()
     {
+        using var directory = new WorkflowTestDirectory();
         var profile = CreateProtectedProfile();
         var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
@@ -5510,7 +5511,8 @@ public class HandleButtonClickTests : SanitizerTests
             new FakeNativeSubmitHookHost(),
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
-            profile);
+            profile,
+            storageLayout: directory.Layout);
         var runtime = new ResidentProtectionRuntimeFacade(controller);
         var before = runtime.Snapshot;
 
@@ -5539,6 +5541,7 @@ public class HandleButtonClickTests : SanitizerTests
     [Test]
     public void ResidentProtectionWorkflowPort_AttemptLeaseLinearizesActivationAndTerminalPublication()
     {
+        using var directory = new WorkflowTestDirectory();
         var profile = CreateProtectedProfile();
         var controller = TrayProtectionController.CreateTest(
             new FakeTrayHotkeyHost(),
@@ -5546,7 +5549,8 @@ public class HandleButtonClickTests : SanitizerTests
             new FakeNativeSubmitHookHost(),
             new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
             () => CreateSubmittedResult(profile.ProfileId),
-            profile);
+            profile,
+            storageLayout: directory.Layout);
         var observePublicationGate = false;
         using var publicationGateEntered = new ManualResetEventSlim(false);
         var runtime = new ResidentProtectionRuntimeFacade(

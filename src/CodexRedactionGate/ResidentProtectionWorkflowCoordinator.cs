@@ -535,6 +535,12 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             ResidentWorkflowAttempt.Operational(attemptId));
         if (attemptLease is null)
         {
+            // Recovery published an intermediate blocked state before doing
+            // local work. If cancellation or newer work wins before runtime
+            // admission, retire that intermediate state explicitly without
+            // completing or otherwise changing the newer operation.
+            _runtime.Publish(ResidentWorkflowPublication.LocalProtection(
+                LocalProtectionRecovery.RecoveryRequiredCode));
             Interlocked.Exchange(ref _workflowInProgress, 0);
             return;
         }

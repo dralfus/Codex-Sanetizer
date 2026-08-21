@@ -2761,10 +2761,10 @@ state that is not represented by the published workflow result.
       must prevent activation and persistence; once the transaction begins,
       cancellation must observe its completed terminal result rather than
       create mixed state.
-- [ ] Add deterministic tests that pause after successful candidate reload and
+- [x] Add deterministic tests that pause after successful candidate reload and
       race cancellation/newer work before profile commit and terminal
       publication, without timers, UIA, desktop focus or cloud access.
-- [ ] Keep the previous completion record above as historical evidence; close
+- [x] Keep the previous completion record above as historical evidence; close
       this ticket again only after the focused race matrix and all product
       verification gates pass.
 
@@ -2775,6 +2775,12 @@ failed setup rollback stops resident protection if the previous runtime cannot
 be restored. Retry/cancellation and port-level contention tests pass. Ticket
 349 tracks the remaining deterministic setup/recovery race matrix before this
 ticket is reclosed.
+
+**Reclosed (2026-08-21):** Ticket 349 added the deterministic setup and
+recovery race matrix. It proves both sides of the admission boundary,
+rollback-runtime failure and terminal ordering. The full `1759/1759` suite,
+`--self-test`, `--product-smoke` and the twice-run reference-composer scenario
+matrix passed.
 
 ## 348. Выделить ядро protected Send из NativeSubmitInterception
 
@@ -2852,7 +2858,7 @@ retry possible.
       terminal result and no duplicate-send ambiguity.
 - [x] Centralize adapter-stage normalization in the protected Send operation so
       Windows adapters cannot independently reinterpret replay/terminal state.
-- [ ] Close this ticket again only after focused tests, the full suite,
+- [x] Close this ticket again only after focused tests, the full suite,
       `--self-test`, `--product-smoke` and the reference-composer matrix pass.
 
 **Remediation implemented (2026-08-16):** One side-effect scope now spans
@@ -2864,6 +2870,12 @@ race proves one submit and exactly one terminal outcome. Verification:
 matrix reported all scenarios and cleanup passed but did not record a release
 proof for the current installed-build mismatch. Reclosure remains gated by 347
 and ticket 349.
+
+**Reclosed (2026-08-21):** Ticket 349 completed the remaining resident
+transaction proof and all release gates passed. The reference-composer matrix
+passed every scenario twice with raw-free traces and cleanup; proof persistence
+remains intentionally false until an installer matching the source build is
+produced.
 
 ## 349. Доказать setup/recovery workflow transaction на полной race-матрице
 
@@ -2893,11 +2905,22 @@ workflow gate and after candidate hook start. Cover setup cancellation, newer
 operation, rollback-runtime failure, recovery cancellation and recovery newer
 operation without sleeps, UIA, desktop focus or cloud access.
 
-- [ ] Prove setup cancellation/newer work cannot interleave after candidate
+- [x] Prove setup cancellation/newer work cannot interleave after candidate
       activation and before persistence/terminal publication.
-- [ ] Prove rollback-runtime failure publishes workflow-owned failure and
+- [x] Prove rollback-runtime failure publishes workflow-owned failure and
       leaves resident protection stopped.
-- [ ] Prove recovery cancellation/newer work cannot interleave between reload
+- [x] Prove recovery cancellation/newer work cannot interleave between reload
       and terminal publication.
-- [ ] Pass the full automated and product verification gates, then use this
+- [x] Pass the full automated and product verification gates, then use this
       evidence to close reopened ticket 347.
+
+**Completed (2026-08-21):** Added deterministic tests for cancellation/newer
+work before admission and after candidate hook activation, plus failed setup
+rollback. The matrix found and fixed a stale recovery state that remained at
+`local_protection_reloading`; stale recovery now returns to explicit
+`local_protection_recovery_required` without completing the newer operation.
+Eight pre-existing resident tests were isolated from the user's default
+operational journal. Verification: `1759/1759`, `--self-test`,
+`--product-smoke`, and all two-pass reference-composer scenarios passed with
+raw-free traces and cleanup. `reference_proof_recorded` remains false only
+because the installed build does not match the source build.

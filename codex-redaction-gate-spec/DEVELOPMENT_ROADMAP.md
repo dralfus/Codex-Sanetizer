@@ -42,9 +42,9 @@ flowchart TD
     R343["[x] 343\nРазделить profile и input adapters"]
     T344["[x] 344\nИзолировать suite от установленного tray"]
     R346["[x] 346\nImmutable admission evidence\nдо native callback"]
-    A347["[>] 347 reopened\nАтомарный resident workflow transaction"]
-    A348["[~] 348 reopened\nSubmit + terminal publication без разрыва"]
-    A349["[~] 349\nSetup/recovery race-матрица"]
+    A347["[x] 347\nАтомарный resident workflow transaction"]
+    A348["[x] 348\nSubmit + terminal publication без разрыва"]
+    A349["[x] 349\nSetup/recovery race-матрица"]
     R314["[~] 314\nБезопасный первый mouse Send"]
     Keyboard["Клавиатурная prompt-защита\nповторная release-приёмка"]
     R323["[x] 323\nOpaque compatibility fingerprints"]
@@ -104,9 +104,9 @@ flowchart TD
 
 | Очерёдность | Тикет | Результат | Зависимости |
 |---:|---|---|---|
-| 1 | **347** `[>]` reopened | Линеаризовать activation, profile commit и terminal publication; исключить mixed-state при cancellation/newer operation. Предыдущее завершение сохранено в `tickets.md` как история. | 341, 342, 345, 346 |
-| 2 | **348** `[~]` reopened | Удерживать единицу side-effect от write/replay через `sent_safely`, чтобы отправленный prompt нельзя было затем объявить неотправленным. | 347, 323, 324, 346 |
-| 3 | **349** `[~]` | Детерминированно доказать setup/recovery cancellation, newer operation и rollback failure; после этого повторно закрыть 347. | 347 |
+| 1 | **347** `[x]` | Activation, profile commit и terminal publication линеаризованы; race-матрица 349 исключает mixed-state при cancellation/newer operation. Предыдущее завершение сохранено в `tickets.md` как история. | 341, 342, 345, 346 |
+| 2 | **348** `[x]` | Единица side-effect удерживается от write/replay через `sent_safely`; отправленный prompt нельзя затем объявить неотправленным. | 347, 323, 324, 346 |
+| 3 | **349** `[x]` | Детерминированно доказаны setup/recovery cancellation, newer operation и rollback failure; 347 и 348 повторно закрыты. | 347 |
 
 **Gate этапа 1.5:** до начала `283`/`286` и нового file-ingress кода должны быть
 зелёными полный automated suite, `--self-test`, `--product-smoke` и
@@ -139,14 +139,14 @@ flowchart TD
 
 ## Что делать прямо сейчас
 
-1. Повторно завершить архитектурное закрепление `347 -> 348` по найденным
-   конкурентным разрывам; `314` сознательно оставить открытой до отдельного
-   этапа добавления mouse Send.
-2. Пересобрать installer и провести одну ограниченную ручную приёмку
-   клавиатурного protected Send.
-3. Если mouse Send входит в объём этой приёмки, сначала завершить `314`.
-4. После прохождения gate этапа 1.5 начинать исследование внешней
+1. Пересобрать installer из текущего source build и провести одну ограниченную
+   ручную приёмку клавиатурного protected Send; `314` сознательно оставить
+   открытой до отдельного этапа добавления mouse Send.
+2. Проверить запись release proof на установленной сборке, совпадающей с source
+   build.
+3. После прохождения ручной keyboard-приёмки начинать исследование внешней
    интеграционной возможности для `283`.
+4. Если mouse Send входит в объём отдельной приёмки, сначала завершить `314`.
 
 ## Границы, которые нельзя размывать
 
