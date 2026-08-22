@@ -2871,11 +2871,11 @@ matrix reported all scenarios and cleanup passed but did not record a release
 proof for the current installed-build mismatch. Reclosure remains gated by 347
 and ticket 349.
 
-**Acceptance pending (2026-08-21):** Ticket 349 completed the remaining
-resident transaction proof. The source-build reference-composer matrix passed
-every scenario twice with raw-free traces and cleanup, but the installed-build
-release proof was not recorded because the installer does not match the source
-build. Keep this ticket open until a matching installer records that proof.
+**Acceptance pending (2026-08-22):** Ticket 349 completed the remaining
+resident transaction proof. A matching installer was built from source commit
+`3622ef22` as `0.1.20260822.t1325`; the source-build reference-composer matrix
+passes every scenario twice with raw-free traces and cleanup. Keep this ticket
+open until the installed candidate records `reference_proof_recorded: true`.
 
 ## 349. Доказать setup/recovery workflow transaction на полной race-матрице
 
