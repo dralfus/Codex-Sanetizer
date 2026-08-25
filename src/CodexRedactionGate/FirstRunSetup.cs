@@ -97,7 +97,15 @@ internal interface IFocusedProfileSetupController
 
 internal interface ISetupVerificationProgressReporter
 {
-    void PublishSetupProgress(string status, string action, string? profileId = null, string binding = "not_configured");
+    long BeginSetupVerification(string binding, int remainingSeconds);
+
+    void PublishSetupProgress(
+        string status,
+        string action,
+        string? profileId = null,
+        string binding = "not_configured",
+        int remainingSeconds = 0,
+        long attemptId = 0);
 }
 
 internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileVerifier, IObservableFocusedFirstRunProfileVerifier
@@ -106,7 +114,7 @@ internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileV
     private readonly Func<TextSurfaceDiscoveryResult> _discoveryFactory;
 
     public FocusedComposerFirstRunProfileVerifier()
-        : this(TimeSpan.FromSeconds(10), () => WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface())
+        : this(SetupVerificationCountdown.DefaultDelay, () => WindowsFocusedComposerDiscovery.CreateDefault().DiscoverActiveSurface())
     {
     }
 
@@ -162,17 +170,26 @@ internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileV
             Thread.Sleep(_verificationDelay);
         }
 
-        var discovery = _discoveryFactory();
+        TextSurfaceDiscoveryResult discovery;
+        try
+        {
+            discovery = _discoveryFactory();
+        }
+        catch (Exception exception)
+        {
+            return VerificationExceptionResult(exception, "surface_discovery");
+        }
         var profileId = discovery.Surface?.ProfileId;
         if (CreateProfile(profileId) is not { } profile)
         {
+            var discoveryDiagnostics = new Dictionary<string, string>(discovery.Diagnostics, StringComparer.Ordinal)
+            {
+                ["surface_status"] = discovery.Status
+            };
             return new FocusedProfileVerificationResult(
                 Profile: null,
                 Code: "focused_surface_unverified",
-                Diagnostics: new Dictionary<string, string>
-                {
-                    ["surface_status"] = discovery.Status
-                });
+                Diagnostics: discoveryDiagnostics);
         }
 
         publishProgress(new PromptProtectionSetupProgress(
@@ -180,16 +197,47 @@ internal sealed class FocusedComposerFirstRunProfileVerifier : IFirstRunProfileV
         publishProgress(new PromptProtectionSetupProgress(
             "verifying_binding", "wait_for_verification", profile.ProfileId, submitBinding));
 
-        var verified = SubmitBindingOnboardingVerifier.VerifyUserBindings(
-            profile.ProfileId,
-            submitBinding,
-            newlineBinding,
-            discovery,
-            profile.CompatibilityEvidence);
+        SubmitBindingProfile verified;
+        try
+        {
+            verified = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+                profile.ProfileId,
+                submitBinding,
+                newlineBinding,
+                discovery,
+                profile.CompatibilityEvidence);
+        }
+        catch (Exception exception)
+        {
+            return VerificationExceptionResult(exception, "binding_verification", profile.ProfileId);
+        }
+        var verificationDiagnostics = new Dictionary<string, string>(verified.Diagnostics, StringComparer.Ordinal)
+        {
+            ["profile_id"] = verified.ProfileId,
+            ["verification_result"] = verified.CapabilityStatus
+        };
         return new FocusedProfileVerificationResult(
             Profile: verified,
             Code: verified.IsProtected ? "focused_profile_verified" : "focused_profile_verification_failed",
-            Diagnostics: verified.Diagnostics);
+            Diagnostics: verificationDiagnostics);
+    }
+
+    private static FocusedProfileVerificationResult VerificationExceptionResult(
+        Exception exception,
+        string stage,
+        string? profileId = null)
+    {
+        LocalCrashDiagnostics.CaptureDefault(exception, "focused_profile_verification", stage);
+        return new FocusedProfileVerificationResult(
+            Profile: null,
+            Code: "focused_profile_verification_failed",
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["verification_exception"] = "true",
+                ["exception_type"] = exception.GetType().FullName ?? exception.GetType().Name,
+                ["exception_stage"] = stage,
+                ["profile_id"] = profileId ?? "not_detected"
+            });
     }
 
     private static SubmitBindingProfile? CreateProfile(string? profileId)
@@ -207,7 +255,9 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
     private readonly IFocusedFirstRunProfileVerifier _focusedProfileVerifier;
     private readonly Func<IReadOnlyList<SubmitBindingProfile>, DefaultStorageLayout, IFirstRunSetupController, bool> _showSetupWindow;
     private readonly Action<PromptProtectionSetupProgress>? _setupProgressPublisher;
+    private readonly object _setupProgressGate = new();
     private long _setupAttemptId;
+    private string _setupProgressStatus = "idle";
     private FirstRunSetupResult? _lastFocusedVerificationResult;
 
     public FirstRunSetupController()
@@ -482,11 +532,16 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
                         progress.Status,
                         progress.Action,
                         progress.ProfileId,
-                        progress.Binding))
+                        progress.Binding,
+                        progress.RemainingSeconds))
                 : VerifyFocusedWithoutProgress(submitBinding, newlineBinding);
         }
-        catch (Exception)
+        catch (Exception exception)
         {
+            LocalCrashDiagnostics.CaptureDefault(
+                exception,
+                "focused_profile_verification",
+                "verification_failed");
             PublishSetupProgress("verification_failed", "retry_setup", binding: submitBinding);
             var currentStatus = GetSetupStatus(layout);
             return new FirstRunSetupResult(
@@ -495,7 +550,9 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
                 State: currentStatus.State,
                 Diagnostics: new Dictionary<string, string>
                 {
-                    ["verification_exception"] = "true"
+                    ["verification_exception"] = "true",
+                    ["exception_type"] = exception.GetType().FullName ?? exception.GetType().Name,
+                    ["exception_stage"] = "focused_verifier_or_progress"
                 });
         }
 
@@ -577,20 +634,72 @@ internal sealed class FirstRunSetupController : IFirstRunSetupController, IFocus
         string status,
         string action,
         string? profileId = null,
-        string binding = "not_configured")
+        string binding = "not_configured",
+        int remainingSeconds = 0,
+        long attemptId = 0)
     {
-        if (status == "waiting_for_focus")
+        lock (_setupProgressGate)
         {
-            _setupAttemptId = Interlocked.Increment(ref _nextSetupAttemptId);
-        }
-        else if (_setupAttemptId == 0)
-        {
-            _setupAttemptId = Interlocked.Increment(ref _nextSetupAttemptId);
-            _setupProgressPublisher?.Invoke(new PromptProtectionSetupProgress(
-                "waiting_for_focus", "focus_message_composer", profileId, binding, _setupAttemptId));
-        }
+            if (status == "waiting_for_focus")
+            {
+                if (_setupAttemptId == 0)
+                {
+                    _setupAttemptId = Interlocked.Increment(ref _nextSetupAttemptId);
+                    _setupProgressStatus = "waiting_for_focus";
+                }
+                else if ((attemptId != 0 && attemptId != _setupAttemptId)
+                    || _setupProgressStatus != "waiting_for_focus")
+                {
+                    return;
+                }
 
-        _setupProgressPublisher?.Invoke(new PromptProtectionSetupProgress(status, action, profileId, binding, _setupAttemptId));
+                _setupProgressPublisher?.Invoke(new PromptProtectionSetupProgress(
+                    status,
+                    action,
+                    profileId,
+                    binding,
+                    _setupAttemptId,
+                    Math.Max(remainingSeconds, 0)));
+                return;
+            }
+
+            if (_setupAttemptId == 0)
+            {
+                _setupAttemptId = Interlocked.Increment(ref _nextSetupAttemptId);
+                _setupProgressStatus = "waiting_for_focus";
+                _setupProgressPublisher?.Invoke(new PromptProtectionSetupProgress(
+                    "waiting_for_focus", "focus_message_composer", profileId, binding, _setupAttemptId));
+            }
+            else if (attemptId != 0 && attemptId != _setupAttemptId)
+            {
+                return;
+            }
+
+            _setupProgressStatus = status;
+            _setupProgressPublisher?.Invoke(new PromptProtectionSetupProgress(
+                status,
+                action,
+                profileId,
+                binding,
+                _setupAttemptId,
+                Math.Max(remainingSeconds, 0)));
+        }
+    }
+
+    public long BeginSetupVerification(string binding, int remainingSeconds)
+    {
+        lock (_setupProgressGate)
+        {
+            _setupAttemptId = Interlocked.Increment(ref _nextSetupAttemptId);
+            _setupProgressStatus = "waiting_for_focus";
+            _setupProgressPublisher?.Invoke(new PromptProtectionSetupProgress(
+                "waiting_for_focus",
+                "focus_message_composer",
+                Binding: binding,
+                AttemptId: _setupAttemptId,
+                RemainingSeconds: Math.Max(remainingSeconds, 0)));
+            return _setupAttemptId;
+        }
     }
 
     public bool IsSetupComplete(DefaultStorageLayout layout)
@@ -737,9 +846,19 @@ internal sealed class FirstRunSetupForm : Form
     private RadioButton? _ctrlEnterSendRadioButton;
     private Label? _bindingPairLabel;
     private Label? _verificationStatusLabel;
+    private ProgressBar? _verificationProgressBar;
+    private System.Windows.Forms.Timer? _verificationCountdownTimer;
+    private SetupVerificationCountdown? _verificationCountdown;
+    private long _verificationAttemptId;
     private long _verificationGeneration;
 
     public bool SetupCompleted => _setupCompleted;
+
+    internal string VerificationStatusText => _verificationStatusLabel?.Text ?? string.Empty;
+
+    internal int VerificationProgressMaximum => _verificationProgressBar?.Maximum ?? 0;
+
+    internal int VerificationProgressValue => _verificationProgressBar?.Value ?? 0;
 
     public FirstRunSetupForm(
         DefaultStorageLayout layout,
@@ -750,77 +869,86 @@ internal sealed class FirstRunSetupForm : Form
 
         Text = "First-Time Setup - Codex Redaction Gate";
         StartPosition = FormStartPosition.CenterScreen;
-        Width = 700;
-        Height = 330;
+        Width = 760;
+        Height = 430;
         MinimizeBox = false;
         MaximizeBox = false;
         TopMost = true;
 
         InitializeComponents();
+        FormClosed += (_, _) => StopVerificationCountdown();
     }
 
     private void InitializeComponents()
     {
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(16),
+            ColumnCount = 1,
+            RowCount = 5
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
         var instructionLabel = new Label
         {
-            Text = "Before you can use protected send, verify the OpenAI Desktop window you use now.",
-            Dock = DockStyle.Top,
-            AutoSize = false,
-            Height = 60,
-            Padding = new Padding(12, 12, 12, 0),
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            Text = "Step 1 of 3: choose the Send key used by OpenAI Desktop.",
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Padding = new Padding(0, 0, 0, 8)
         };
 
         var instructionLabel2 = new Label
         {
-            Text = "Choose the Send key, click Verify active app, then focus its message composer. The app type is detected locally.",
-            Dock = DockStyle.Top,
-            AutoSize = false,
-            Height = 45,
-            Padding = new Padding(12, 0, 12, 12),
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            Text = "Step 2 of 3: click Verify active app, then click inside its message composer before the countdown reaches zero.",
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Padding = new Padding(0, 0, 0, 12)
         };
 
         // Binding pair selection
-        var bindingSelectionPanel = new Panel
+        var bindingSelectionPanel = new FlowLayoutPanel
         {
-            Dock = DockStyle.Top,
-            Height = 60,
-            Padding = new Padding(12, 0, 12, 12),
-            BackColor = SystemColors.Control
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            Padding = new Padding(0, 0, 0, 12)
         };
 
         var bindingLabel = new Label
         {
             Text = "Send key binding:",
-            Dock = DockStyle.Left,
             AutoSize = true,
-            Padding = new Padding(0, 10, 10, 0)
+            Margin = new Padding(0, 6, 12, 0)
         };
 
         _enterSendRadioButton = new RadioButton
         {
             Text = "Enter as Send / Ctrl+Enter as newline",
-            Dock = DockStyle.Left,
             AutoSize = true,
-            Margin = new Padding(0, 8, 10, 0),
+            Margin = new Padding(0, 6, 12, 0),
             Checked = false
         };
 
         _ctrlEnterSendRadioButton = new RadioButton
         {
             Text = "Ctrl+Enter as Send / Enter as newline",
-            Dock = DockStyle.Left,
             AutoSize = true,
-            Margin = new Padding(0, 8, 0, 0)
+            Margin = new Padding(0, 6, 0, 0)
         };
 
         _bindingPairLabel = new Label
         {
             Text = "Select the application's Send key before verification.",
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             AutoSize = true,
-            Padding = new Padding(12, 5, 12, 0),
+            Padding = new Padding(0, 4, 0, 8),
             Font = new Font(Font.FontFamily, 9f, FontStyle.Italic),
             ForeColor = Color.DarkBlue
         };
@@ -832,28 +960,45 @@ internal sealed class FirstRunSetupForm : Form
         bindingSelectionPanel.Controls.Add(bindingLabel);
         bindingSelectionPanel.Controls.Add(_enterSendRadioButton);
         bindingSelectionPanel.Controls.Add(_ctrlEnterSendRadioButton);
-        bindingSelectionPanel.Controls.Add(_bindingPairLabel);
+        var verificationPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(0, 10, 0, 10)
+        };
+        verificationPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        verificationPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        verificationPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        verificationPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         _verificationStatusLabel = new Label
         {
-            Text = "Not verified. Protected Send stays blocked until this step succeeds.",
+            Text = "Stage: waiting to start. Result: not verified. Protected Send remains blocked.",
             Dock = DockStyle.Fill,
-            Padding = new Padding(12, 16, 12, 12),
+            AutoSize = true,
+            Padding = new Padding(0, 8, 0, 8),
             ForeColor = Color.DarkBlue
         };
 
-        var buttonsPanel = new Panel
+        _verificationProgressBar = new ProgressBar
         {
-            Dock = DockStyle.Bottom,
-            Height = 50,
-            Padding = new Padding(12)
+            Dock = DockStyle.Top,
+            Minimum = 0,
+            Maximum = SetupVerificationCountdown.DefaultDelay.Seconds,
+            Value = 0,
+            Height = 18
         };
+        verificationPanel.Controls.Add(_bindingPairLabel, 0, 0);
+        verificationPanel.Controls.Add(_verificationProgressBar, 0, 1);
+        verificationPanel.Controls.Add(_verificationStatusLabel, 0, 2);
 
-        var buttonsFlow = new FlowLayoutPanel
+        var buttonsPanel = new FlowLayoutPanel
         {
-            Dock = DockStyle.Right,
+            Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.RightToLeft,
-            Padding = new Padding(0)
+            WrapContents = false,
+            Padding = new Padding(0, 12, 0, 0)
         };
 
         _verifyFocusedAppButton = new Button
@@ -871,15 +1016,15 @@ internal sealed class FirstRunSetupForm : Form
         };
         _skipButton.Click += (_, _) => OnSkipSetup();
 
-        buttonsFlow.Controls.Add(_verifyFocusedAppButton);
-        buttonsFlow.Controls.Add(_skipButton);
-        buttonsPanel.Controls.Add(buttonsFlow);
+        buttonsPanel.Controls.Add(_verifyFocusedAppButton);
+        buttonsPanel.Controls.Add(_skipButton);
 
-        Controls.Add(bindingSelectionPanel);
-        Controls.Add(instructionLabel);
-        Controls.Add(instructionLabel2);
-        Controls.Add(_verificationStatusLabel);
-        Controls.Add(buttonsPanel);
+        root.Controls.Add(instructionLabel, 0, 0);
+        root.Controls.Add(instructionLabel2, 0, 1);
+        root.Controls.Add(bindingSelectionPanel, 0, 2);
+        root.Controls.Add(verificationPanel, 0, 3);
+        root.Controls.Add(buttonsPanel, 0, 4);
+        Controls.Add(root);
 
         AcceptButton = _verifyFocusedAppButton;
         CancelButton = _skipButton;
@@ -917,6 +1062,12 @@ internal sealed class FirstRunSetupForm : Form
 
     private async void OnVerifyFocusedProfile()
     {
+        if (_setupCompleted)
+        {
+            Close();
+            return;
+        }
+
         var (selectedSubmit, selectedNewline) = GetSelectedBindingPair();
         if (string.IsNullOrEmpty(selectedSubmit) || string.IsNullOrEmpty(selectedNewline))
         {
@@ -939,13 +1090,10 @@ internal sealed class FirstRunSetupForm : Form
         }
 
         var verificationGeneration = Interlocked.Increment(ref _verificationGeneration);
-        _verificationStatusLabel!.Text = "Waiting for focus: click the message composer you use within 10 seconds. This window remains responsive.";
-        _verificationStatusLabel.ForeColor = Color.DarkOrange;
+        StartVerificationCountdown(selectedSubmit);
+        _verificationStatusLabel!.ForeColor = Color.DarkOrange;
         _verifyFocusedAppButton!.Enabled = false;
-        if (_setupController is ISetupVerificationProgressReporter setupProgressReporter)
-        {
-            setupProgressReporter.PublishSetupProgress("waiting_for_focus", "focus_message_composer", binding: selectedSubmit);
-        }
+        _verifyFocusedAppButton.Text = "Verification running...";
         TopMost = false;
         var result = await FocusedProfileVerificationWorker.RunAsync(
             () => focusedSetupController.VerifyFocusedProfile(selectedSubmit, selectedNewline, _layout));
@@ -955,19 +1103,17 @@ internal sealed class FirstRunSetupForm : Form
             return;
         }
 
+        StopVerificationCountdown();
         _verifyFocusedAppButton.Enabled = true;
+        _verifyFocusedAppButton.Text = "Verify active app";
         TopMost = true;
         Activate();
 
         if (!result.Succeeded)
         {
-            _verificationStatusLabel.Text = "The focused window was not verified. Protected Send remains blocked.";
+            var reason = VerificationFailureReason(result.Diagnostics);
+            _verificationStatusLabel.Text = $"Stage: verification complete.{Environment.NewLine}Result: failed ({reason}).{Environment.NewLine}Next: keep this window open, correct the focus, then click Verify active app again. Protected Send remains blocked.";
             _verificationStatusLabel.ForeColor = Color.DarkRed;
-            MessageBox.Show(
-                "Verification did not confirm the focused composer. Focus the OpenAI Desktop message box and try again. Protected Send remains blocked until setup succeeds.",
-                "Codex Redaction Gate - Setup required",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
             return;
         }
 
@@ -980,10 +1126,163 @@ internal sealed class FirstRunSetupForm : Form
             "chatgpt-desktop" => "ChatGPT Desktop",
             _ => "selected desktop app"
         };
-        _verificationStatusLabel.Text = $"Protected: {profileName}";
+        _verificationStatusLabel.Text = $"Stage: verification complete.{Environment.NewLine}Result: {profileName} verified successfully.{Environment.NewLine}Next: click Finish and activate protection.";
         _verificationStatusLabel.ForeColor = Color.DarkGreen;
         _setupCompleted = true;
-        Close();
+        _verifyFocusedAppButton.Text = "Finish and activate";
+        _skipButton!.Enabled = false;
+    }
+
+    private void StartVerificationCountdown(string submitBinding)
+    {
+        StopVerificationCountdown();
+        _verificationCountdown = new SetupVerificationCountdown(SetupVerificationCountdown.DefaultDelay);
+        var remainingSeconds = _verificationCountdown.Start();
+        UpdateVerificationCountdownText(remainingSeconds);
+        _verificationAttemptId = _setupController is ISetupVerificationProgressReporter setupProgressReporter
+            ? setupProgressReporter.BeginSetupVerification(submitBinding, remainingSeconds)
+            : 0;
+        _verificationCountdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _verificationCountdownTimer.Tick += (_, _) =>
+        {
+            if (_verificationCountdown is not null)
+            {
+                var remaining = _verificationCountdown.Tick();
+                UpdateVerificationCountdownText(remaining);
+                PublishWaitingForFocusProgress(submitBinding, remaining, _verificationAttemptId);
+            }
+        };
+        _verificationCountdownTimer.Start();
+    }
+
+    internal void StartVerificationCountdownForAcceptance(string submitBinding) =>
+        StartVerificationCountdown(submitBinding);
+
+    private void PublishWaitingForFocusProgress(string submitBinding, int remainingSeconds, long attemptId)
+    {
+        if (_setupController is ISetupVerificationProgressReporter setupProgressReporter)
+        {
+            setupProgressReporter.PublishSetupProgress(
+                "waiting_for_focus",
+                "focus_message_composer",
+                binding: submitBinding,
+                remainingSeconds: remainingSeconds,
+                attemptId: attemptId);
+        }
+    }
+
+    private void StopVerificationCountdown()
+    {
+        if (_verificationCountdownTimer is not null)
+        {
+            _verificationCountdownTimer.Stop();
+            _verificationCountdownTimer.Dispose();
+            _verificationCountdownTimer = null;
+        }
+
+        _verificationCountdown = null;
+        _verificationAttemptId = 0;
+    }
+
+    private void UpdateVerificationCountdownText(int remainingSeconds)
+    {
+        if (_verificationStatusLabel is null)
+        {
+            return;
+        }
+
+        var unit = remainingSeconds == 1 ? "second" : "seconds";
+        if (_verificationProgressBar is not null && _verificationCountdown is not null)
+        {
+            _verificationProgressBar.Maximum = Math.Max(_verificationCountdown.TotalSeconds, 1);
+            _verificationProgressBar.Value = Math.Clamp(
+                _verificationCountdown.TotalSeconds - remainingSeconds,
+                _verificationProgressBar.Minimum,
+                _verificationProgressBar.Maximum);
+        }
+        _verificationStatusLabel.Text = remainingSeconds > 0
+            ? $"Stage: waiting for focus ({remainingSeconds} {unit} remaining).{Environment.NewLine}Action: click inside the OpenAI Desktop message composer now.{Environment.NewLine}Result: pending; Protected Send remains blocked."
+            : $"Stage: reading focused composer.{Environment.NewLine}Action: wait for the local result.{Environment.NewLine}Result: pending; Protected Send remains blocked.";
+    }
+
+    internal static string BuildVerificationFailureMessage(FirstRunSetupResult result)
+    {
+        var reason = VerificationFailureReason(result.Diagnostics);
+        var profileId = DiagnosticValue(result.Diagnostics, "profile_id");
+        var verificationResult = DiagnosticValue(result.Diagnostics, "verification_result");
+        var compatibility = DiagnosticValue(result.Diagnostics, "compatibility");
+        var profileMatches = DiagnosticValue(result.Diagnostics, "profile_match_count");
+        var controlType = DiagnosticValue(result.Diagnostics, "element_control_type");
+        var framework = DiagnosticValue(result.Diagnostics, "element_framework_id");
+        var hasFocus = DiagnosticValue(result.Diagnostics, "has_keyboard_focus");
+        var textPattern = DiagnosticValue(result.Diagnostics, "can_read_text_pattern");
+        var applicationVersion = DiagnosticValue(result.Diagnostics, "application_version_status");
+        var focusResolution = DiagnosticValue(result.Diagnostics, "focus_resolution_stage");
+        var exceptionType = DiagnosticValue(result.Diagnostics, "exception_type");
+        var exceptionStage = DiagnosticValue(result.Diagnostics, "exception_stage");
+
+        return $"Verification did not confirm the focused composer.\n\n"
+            + $"Reason: {reason}\n"
+            + $"Exception: {exceptionType}\n"
+            + $"Stage: {exceptionStage}\n"
+            + $"Profile: {profileId}\n"
+            + $"Verification result: {verificationResult}\n"
+            + $"Compatibility: {compatibility}\n"
+            + $"Matching OpenAI profiles: {profileMatches}\n"
+            + $"Focused control: {controlType}\n"
+            + $"Framework: {framework}\n"
+            + $"Keyboard focus: {hasFocus}\n"
+            + $"Text access: {textPattern}\n"
+            + $"Application version access: {applicationVersion}\n"
+            + $"Focus resolution: {focusResolution}\n\n"
+            + "Click inside the message composer in Codex or ChatGPT Desktop and try again. "
+            + "Protected Send remains blocked until setup succeeds.";
+    }
+
+    private static string VerificationFailureReason(IReadOnlyDictionary<string, string> diagnostics)
+    {
+        if (diagnostics.TryGetValue("surface_status", out var surfaceStatus)
+            && !string.IsNullOrWhiteSpace(surfaceStatus))
+        {
+            return surfaceStatus;
+        }
+
+        if (diagnostics.TryGetValue("classification_reason", out var classificationReason)
+            && !string.IsNullOrWhiteSpace(classificationReason))
+        {
+            return classificationReason;
+        }
+
+        if (diagnostics.TryGetValue("compatibility", out var compatibility)
+            && !string.IsNullOrWhiteSpace(compatibility))
+        {
+            return compatibility;
+        }
+
+        if (diagnostics.TryGetValue("binding_error", out var bindingError)
+            && !string.IsNullOrWhiteSpace(bindingError))
+        {
+            return bindingError;
+        }
+
+        if (diagnostics.TryGetValue("verification_result", out var verificationResult)
+            && !string.IsNullOrWhiteSpace(verificationResult))
+        {
+            return verificationResult;
+        }
+
+        return "verification_failed";
+    }
+
+    private static string DiagnosticValue(
+        IReadOnlyDictionary<string, string> diagnostics,
+        string key)
+    {
+        return diagnostics.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : diagnostics.TryGetValue($"surface.{key}", out var surfaceValue) && !string.IsNullOrWhiteSpace(surfaceValue)
+                ? surfaceValue
+                : "unknown";
     }
 
     private void OnSkipSetup()
@@ -1001,6 +1300,7 @@ internal sealed class FirstRunSetupForm : Form
         }
 
         _setupCompleted = false;
+        StopVerificationCountdown();
         Close();
     }
 }

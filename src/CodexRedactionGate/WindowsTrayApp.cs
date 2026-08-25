@@ -420,6 +420,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _versionItem;
     private readonly ToolStripMenuItem _emergencyBypassItem;
     private readonly ToolStripMenuItem _repairLocalProtectionItem;
+    private readonly ToolStripMenuItem _openProtectionStatusItem;
     private readonly SingleInstanceEnforcement? _singleInstanceEnforcement;
     private Func<NativeSubmitRuntimeSet?>? _nativeSubmitRuntimeFactory;
     private readonly Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?> _candidateNativeSubmitRuntimeFactory;
@@ -430,10 +431,14 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private readonly Func<bool> _recoveryConfirmation;
     private readonly Action<string, MessageBoxIcon> _recoveryMessagePresenter;
     private readonly Action<Action> _uiDispatcher;
+    private readonly Action _refreshDiagnostics;
+    private readonly Func<Func<LocalProtectionStatusView>, Action<LocalProtectionStatusAction>, LocalProtectionStatusForm> _statusFormFactory;
+    private readonly ProtectionOperationJournal _operationJournal;
     private readonly TrayProtectionIntentDispatcher _intentDispatcher;
     private readonly ResidentProtectionWorkflowCoordinator _residentWorkflowCoordinator;
     private readonly string _instanceId;
     private LocalProtectionStatusForm? _localProtectionStatusForm;
+    private string _lastJournalStateSignature = string.Empty;
 
     internal bool IsTrayIconVisible => _notifyIcon.Visible;
 
@@ -446,6 +451,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     internal bool IsLocalProtectionStatusOpen => _localProtectionStatusForm is { IsDisposed: false, Visible: true };
 
     internal LocalProtectionStatusForm? LocalProtectionStatusForm => _localProtectionStatusForm;
+
+    internal void PerformOpenProtectionStatusMenuClickForAcceptance() => _openProtectionStatusItem.PerformClick();
 
     internal bool IsNativeSubmitHookReady => _residentRuntime.Snapshot.HookReady;
 
@@ -487,7 +494,12 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         Func<bool>? recoveryConfirmation = null,
         Action<string, MessageBoxIcon>? recoveryMessagePresenter = null,
         Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?>? candidateNativeSubmitRuntimeFactory = null,
-        string instanceId = WindowsTrayApp.ProductionInstanceId)
+        string instanceId = WindowsTrayApp.ProductionInstanceId,
+        Action? refreshDiagnostics = null,
+        Func<Func<LocalProtectionStatusView>, Action<LocalProtectionStatusAction>, LocalProtectionStatusForm>? statusFormFactory = null,
+        ProtectionOperationJournal? operationJournal = null,
+        Func<LocalReadinessResult>? localReadinessCheck = null,
+        bool requireResidentReadiness = true)
     {
         var workflowRuntime = new ResidentProtectionRuntimeFacade(
             controller ?? throw new ArgumentNullException(nameof(controller)));
@@ -514,6 +526,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         _localProtectionRecovery = localProtectionRecovery ?? (() => LocalProtectionRecovery.Recover(_layout, confirmed: true));
         _recoveryConfirmation = recoveryConfirmation ?? ConfirmLocalProtectionRepair;
         _recoveryMessagePresenter = recoveryMessagePresenter ?? ShowLocalProtectionRecoveryMessage;
+        _refreshDiagnostics = refreshDiagnostics ?? workflowRuntime.RefreshDiagnostics;
+        _statusFormFactory = statusFormFactory ?? ((viewFactory, runAction) =>
+            new LocalProtectionStatusForm(viewFactory, runAction));
+        _operationJournal = operationJournal ?? new ProtectionOperationJournal(_layout);
         if (!string.Equals(localProtectionStatus, LocalProtectionRecovery.ReadyCode, StringComparison.Ordinal))
         {
             workflowRuntime.Publish(ResidentWorkflowPublication.LocalProtection(localProtectionStatus));
@@ -544,7 +560,11 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             _localProtectionRecovery,
             resolvedBackgroundWorkQueue,
             resolvedUiDispatcher,
-            (exception, component, code) => _crashDiagnostics.Capture(exception, component, code));
+            (exception, component, code) => _crashDiagnostics.Capture(exception, component, code),
+            (action, stage, status, resultCode, attemptId) =>
+                _operationJournal.Append("coordinator", action, stage, status, resultCode, attemptId),
+            localReadinessCheck,
+            requireResidentReadiness);
         _residentWorkflowCoordinator.SetupCompleted += result =>
         {
             try
@@ -582,6 +602,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 LocalProtectionRecovery.RecoveryRequiredCode,
                 StringComparison.Ordinal)
         };
+        _openProtectionStatusItem = new ToolStripMenuItem(
+            "Open protection status",
+            null,
+            (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenProtectionStatus));
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_versionItem);
@@ -589,7 +613,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         menu.Items.Add(_emergencyBypassItem);
         menu.Items.Add(_toggleItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Open protection status", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenProtectionStatus)));
+        menu.Items.Add(_openProtectionStatusItem);
         menu.Items.Add(new ToolStripMenuItem("Open local restore", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenLocalRestore)));
         menu.Items.Add(new ToolStripMenuItem("Open sensitive terms", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenSensitiveTerms)));
         menu.Items.Add(new ToolStripMenuItem("Set up prompt protection", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.SetupPromptProtection)));
@@ -604,8 +628,18 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             Visible = true
         };
 
-        _residentRuntime.SnapshotChanged += (_, _) => RefreshStatusOnUiThread();
-        var started = _residentWorkflowCoordinator.StartResident();
+        _residentRuntime.SnapshotChanged += (_, _) =>
+        {
+            JournalSnapshot(_residentRuntime.Snapshot.State);
+            RefreshStatusOnUiThread();
+        };
+        var started = _residentWorkflowCoordinator.StartResident(scheduleFirstRunSetup);
+        _operationJournal.Append(
+            "resident",
+            "startup",
+            started ? "resident_started" : "resident_start_failed",
+            started ? "succeeded" : "failed",
+            started ? "none" : "hook_or_runtime_unavailable");
         RefreshStatus();
         if (!started)
         {
@@ -622,7 +656,10 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     private void ScheduleFirstRunSetupIfRequired()
     {
-        _residentWorkflowCoordinator.StartInitialSetup();
+        _uiDispatcher(() =>
+        {
+            OpenLocalProtectionStatus();
+        });
     }
 
     protected override void Dispose(bool disposing)
@@ -639,9 +676,30 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         base.Dispose(disposing);
     }
 
-    private void DispatchTrayIntent(TrayProtectionIntent intent)
+    internal bool DispatchTrayIntent(TrayProtectionIntent intent)
     {
-        _intentDispatcher.TryDispatch(intent);
+        var action = IntentAction(intent);
+        _operationJournal.Append("tray", action, "intent_received", "running", "none");
+        try
+        {
+            var accepted = _intentDispatcher.TryDispatch(intent);
+            _operationJournal.Append(
+                "tray",
+                action,
+                accepted ? "intent_dispatched" : "intent_rejected",
+                accepted ? "succeeded" : "failed",
+                accepted ? "none" : "handler_missing");
+            return accepted;
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "tray_intent", "dispatch_failed");
+            _operationJournal.Append("tray", action, "dispatch_failed", "failed", "exception");
+            _recoveryMessagePresenter(
+                "The requested protection action failed. Open protection status for the recorded stage and result.",
+                MessageBoxIcon.Warning);
+            return false;
+        }
     }
 
     private void ToggleProtection()
@@ -824,7 +882,9 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     {
         var message = state.SetupVerificationStatus switch
         {
-            "waiting_for_focus" => "Prompt setup: focus the message composer in the selected app",
+            "waiting_for_focus" => state.SetupVerificationRemainingSeconds > 0
+                ? $"Prompt setup: focus the message composer in the selected app ({state.SetupVerificationRemainingSeconds} seconds remaining)"
+                : "Prompt setup: focus the message composer in the selected app (reading now)",
             "composer_recognized" => $"Prompt setup: {ProfileDisplayName(state)} composer recognized",
             "verifying_binding" => $"Prompt setup: verifying {PromptProtectionSetupLifecycle.SafeBinding(state.SetupVerificationBinding)}",
             "activating_protection" => "Prompt setup: activating protected Send",
@@ -877,30 +937,130 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
 
     internal void OpenLocalProtectionStatus()
     {
-        RefreshProjectFileProtectionStatus();
+        _operationJournal.Append("status", "open_protection_status", "creating_window", "running", "none");
         if (_localProtectionStatusForm is { IsDisposed: false })
         {
-            _localProtectionStatusForm.Activate();
+            if (_localProtectionStatusForm.Visible)
+            {
+                _localProtectionStatusForm.Activate();
+                _localProtectionStatusForm.BringToFront();
+                _operationJournal.Append("status", "open_protection_status", "window_visible", "succeeded", "existing_window_activated");
+                return;
+            }
+
+            _localProtectionStatusForm.Dispose();
+            _localProtectionStatusForm = null;
+        }
+
+        LocalProtectionStatusForm? candidate = null;
+        try
+        {
+            candidate = _statusFormFactory(
+                CreateLocalProtectionStatusView,
+                RunLocalProtectionStatusAction);
+            candidate.FormClosed += (_, _) =>
+            {
+                if (ReferenceEquals(_localProtectionStatusForm, candidate))
+                {
+                    _localProtectionStatusForm = null;
+                }
+            };
+            candidate.Show();
+            candidate.Activate();
+            candidate.BringToFront();
+            _localProtectionStatusForm = candidate;
+            _operationJournal.Append("status", "open_protection_status", "window_visible", "succeeded", "none");
+        }
+        catch (Exception exception)
+        {
+            candidate?.Dispose();
+            _localProtectionStatusForm = null;
+            _crashDiagnostics.Capture(exception, "protection_status", "window_open_failed");
+            _operationJournal.Append("status", "open_protection_status", "window_open_failed", "failed", "exception");
+            _recoveryMessagePresenter(
+                "The protection status window could not be opened. Try again; protected Send remains fail-closed.",
+                MessageBoxIcon.Warning);
             return;
         }
 
-        _localProtectionStatusForm = new LocalProtectionStatusForm(
-            CreateLocalProtectionStatusView,
-            RunLocalProtectionStatusAction);
-        _localProtectionStatusForm.FormClosed += (_, _) => _localProtectionStatusForm = null;
-        _localProtectionStatusForm.Show();
+        try
+        {
+            RefreshProjectFileProtectionStatus();
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "protection_status", "diagnostic_refresh_failed");
+            _operationJournal.Append("status", "refresh_diagnostics", "refresh_failed", "failed", "exception");
+        }
     }
 
     internal void RefreshProjectFileProtectionStatus()
     {
-        _residentRuntime.RefreshDiagnostics();
+        _refreshDiagnostics();
     }
 
     private LocalProtectionStatusView CreateLocalProtectionStatusView()
     {
-        var state = _residentRuntime.Snapshot.State;
-        return LocalProtectionStatusView.Create(state);
+        try
+        {
+            var state = _residentRuntime.Snapshot.State;
+            return LocalProtectionStatusView.Create(state, _operationJournal.ReadRecent(12));
+        }
+        catch (Exception exception)
+        {
+            _crashDiagnostics.Capture(exception, "protection_status", "view_refresh_failed");
+            _operationJournal.Append("status", "refresh_view", "view_refresh_failed", "failed", "exception");
+            return new LocalProtectionStatusView(new[]
+            {
+                new LocalProtectionStatusRow(
+                    "Protection status unavailable",
+                    "Resident status projection",
+                    "failed",
+                    "The status projection could not be rendered. Protected Send remains blocked; see the raw-free operation log.",
+                    LocalProtectionStatusAction.None)
+            });
+        }
     }
+
+    private void JournalSnapshot(TrayProtectionState state)
+    {
+        var action = state.EffectiveOperationalAction;
+        var signature = string.Join('|',
+            action.AttemptId,
+            action.ActionKind,
+            action.Stage,
+            action.Status,
+            action.NextAction,
+            state.SetupVerificationStatus,
+            state.SetupVerificationRemainingSeconds,
+            state.NativeSubmitStatus,
+            state.ComposerProtected);
+        if (string.Equals(signature, _lastJournalStateSignature, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastJournalStateSignature = signature;
+        _operationJournal.Append(
+            "resident",
+            action.ActionKind == "none" ? "state_transition" : action.ActionKind,
+            state.SetupVerificationStatus != "idle" ? state.SetupVerificationStatus : action.Stage,
+            action.Status,
+            action.NextAction,
+            action.AttemptId);
+    }
+
+    private static string IntentAction(TrayProtectionIntent intent) => intent switch
+    {
+        TrayProtectionIntent.OpenProtectionStatus => "open_protection_status",
+        TrayProtectionIntent.SetupPromptProtection => "setup_prompt_protection",
+        TrayProtectionIntent.RepairLocalProtection => "repair_local_protection",
+        TrayProtectionIntent.OpenLocalRestore => "open_local_restore",
+        TrayProtectionIntent.OpenSensitiveTerms => "open_sensitive_terms",
+        TrayProtectionIntent.ToggleProtection => "toggle_protection",
+        TrayProtectionIntent.Exit => "exit",
+        _ => "unknown_intent"
+    };
 
     internal void RunLocalProtectionStatusAction(LocalProtectionStatusAction action)
     {

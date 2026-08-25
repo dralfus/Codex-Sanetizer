@@ -24,6 +24,7 @@ internal sealed class ChatGptDiscoveryFixtureBuilder
             ["package_full_name_hash"] = ChatGptDiscoveryFixture.Fingerprint("package"),
             ["executable_name_hash"] = ChatGptDiscoveryFixture.Fingerprint("executable"),
             ["process_name_hash"] = ChatGptDiscoveryFixture.Fingerprint("process"),
+            ["target_process_hash"] = ChatGptDiscoveryFixture.Fingerprint("process-instance"),
             ["window_identity_hash"] = ChatGptDiscoveryFixture.Fingerprint("window"),
             ["window_class_hash"] = ChatGptDiscoveryFixture.Fingerprint("window-class"),
             ["composer_class_hash"] = ChatGptDiscoveryFixture.Fingerprint("composer"),

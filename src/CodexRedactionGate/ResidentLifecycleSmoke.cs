@@ -163,7 +163,8 @@ internal static class ResidentLifecycleSmokeRunner
                     using var second = new SingleInstanceEnforcement(instanceId);
                     secondInstancePassed = !second.IsFirstInstance;
                     var renderedStatus = TrayStatusFormatter.FormatMenuStatus(protection.State);
-                    protectedStatusPassed = renderedStatus.Contains("protected_send_binding=Enter", StringComparison.Ordinal)
+                    protectedStatusPassed = protectedStatusPassed
+                        && renderedStatus.Contains("protected_send_binding=Enter", StringComparison.Ordinal)
                         && renderedStatus.Contains("newline_binding=Ctrl+Enter", StringComparison.Ordinal)
                         && renderedStatus.Contains("manual_scan_hotkey=Ctrl+Shift+F9", StringComparison.Ordinal)
                         && renderedStatus.Contains(
@@ -172,6 +173,10 @@ internal static class ResidentLifecycleSmokeRunner
                     completed.Set();
                     Application.ExitThread();
                 });
+
+            context.PerformOpenProtectionStatusMenuClickForAcceptance();
+            protectedStatusPassed = context.IsLocalProtectionStatusOpen;
+            context.LocalProtectionStatusForm?.Close();
 
             hookRegistrationPassed = initialHook.IsKeyboardHookRegistered;
             var setupGate = initialController.HandleGesture(new NativeKeyGesture("Enter"));

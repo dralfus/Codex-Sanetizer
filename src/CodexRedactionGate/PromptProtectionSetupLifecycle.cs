@@ -8,7 +8,8 @@ internal sealed record PromptProtectionSetupProgress(
     string Action,
     string? ProfileId = null,
     string Binding = "not_configured",
-    long AttemptId = 0);
+    long AttemptId = 0,
+    int RemainingSeconds = 0);
 
 internal static class PromptProtectionSetupLifecycle
 {

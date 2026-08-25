@@ -31,7 +31,8 @@ public sealed record FocusedElementSnapshot(
     bool IsValueReadOnly,
     bool CanReadTextPattern,
     bool CanUseKeyboardTextInput,
-    string ElementRuntimeIdHash);
+    string ElementRuntimeIdHash,
+    string FocusResolutionStage = "unknown");
 
 public interface IFocusedElementSnapshotProvider
 {
@@ -197,12 +198,13 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
         {
             ["window_title_length"] = snapshot.WindowTitle.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["process_name_length"] = snapshot.ProcessName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["application_identity_hash"] = Hash(snapshot.ProcessName),
+            ["application_identity_hash"] = Hash(OpenAiDesktopIdentity.NormalizeProductId(snapshot.ProcessName)),
             ["application_version_hash"] = Hash(applicationVersion),
             ["application_version_status"] = ApplicationVersionStatus(applicationVersion),
             ["package_full_name_hash"] = Hash($"{snapshot.ProcessName}|{applicationVersion}|{snapshot.WindowClassName}"),
             ["executable_name_hash"] = Hash(snapshot.ProcessName),
-            ["process_name_hash"] = Hash($"{snapshot.ProcessName}|{snapshot.WindowHandle.ToInt64():X}"),
+            ["process_name_hash"] = Hash(snapshot.ProcessName),
+            ["target_process_hash"] = Hash($"{snapshot.ProcessName}|{snapshot.WindowHandle.ToInt64():X}"),
             ["window_identity_hash"] = Hash($"{snapshot.WindowClassName}|{snapshot.WindowHandle.ToInt64():X}"),
             ["window_class_hash"] = Hash(snapshot.WindowClassName),
             ["composer_class_hash"] = Hash(snapshot.ElementClassName),
@@ -220,7 +222,8 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
             ["is_value_read_only"] = snapshot.IsValueReadOnly.ToString().ToLowerInvariant(),
             ["can_read_text_pattern"] = snapshot.CanReadTextPattern.ToString().ToLowerInvariant(),
             ["can_use_keyboard_text_input"] = snapshot.CanUseKeyboardTextInput.ToString().ToLowerInvariant(),
-            ["focused_element_hash"] = snapshot.ElementRuntimeIdHash
+            ["focused_element_hash"] = snapshot.ElementRuntimeIdHash,
+            ["focus_resolution_stage"] = snapshot.FocusResolutionStage
         };
     }
 
@@ -355,6 +358,22 @@ public sealed class UnsupportedFocusedElementSnapshotProvider : IFocusedElementS
 
 public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapshotProvider
 {
+    private readonly Func<AutomationElement?> _focusedElementProvider;
+    private readonly Func<IntPtr> _foregroundWindowProvider;
+
+    public NativeFocusedElementSnapshotProvider()
+        : this(() => AutomationElement.FocusedElement, NativeMethods.GetForegroundWindow)
+    {
+    }
+
+    internal NativeFocusedElementSnapshotProvider(
+        Func<AutomationElement?> focusedElementProvider,
+        Func<IntPtr> foregroundWindowProvider)
+    {
+        _focusedElementProvider = focusedElementProvider ?? throw new ArgumentNullException(nameof(focusedElementProvider));
+        _foregroundWindowProvider = foregroundWindowProvider ?? throw new ArgumentNullException(nameof(foregroundWindowProvider));
+    }
+
     public FocusedElementSnapshot GetFocusedElement()
     {
         if (!OperatingSystem.IsWindows())
@@ -364,16 +383,17 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
 
         try
         {
-            var element = AutomationElement.FocusedElement;
+            var resolution = ResolveFocusedElement();
+            var element = resolution.Element;
             if (element is null)
             {
-                return Failure(OsInteractionStatusIds.UnsupportedSurface);
+                return Failure(OsInteractionStatusIds.FocusLost, resolution.Stage);
             }
 
             var window = FindOwningWindow(element);
             if (window == IntPtr.Zero)
             {
-                return Failure(OsInteractionStatusIds.UnsupportedSurface);
+                return Failure(OsInteractionStatusIds.UnsupportedSurface, "owning_window_unavailable");
             }
 
             var valuePattern = TryGetCurrentPattern<ValuePattern>(element, ValuePattern.Pattern);
@@ -400,23 +420,71 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
                 valuePattern?.Current.IsReadOnly ?? true,
                 textPattern is not null,
                 element.Current.HasKeyboardFocus && element.Current.IsKeyboardFocusable && element.Current.IsEnabled,
-                runtimeHash);
+                runtimeHash,
+                resolution.Stage);
         }
         catch (ElementNotAvailableException)
         {
-            return Failure(OsInteractionStatusIds.UnsupportedSurface);
+            return Failure(OsInteractionStatusIds.UnsupportedSurface, "element_not_available");
         }
         catch (InvalidOperationException)
         {
-            return Failure(OsInteractionStatusIds.UnsupportedSurface);
+            return Failure(OsInteractionStatusIds.UnsupportedSurface, "uia_invalid_operation");
         }
         catch (COMException)
         {
-            return Failure(OsInteractionStatusIds.UnsupportedSurface);
+            return Failure(OsInteractionStatusIds.UnsupportedSurface, "uia_com_error");
         }
     }
 
-    private static FocusedElementSnapshot Failure(string status)
+    private FocusedElementResolution ResolveFocusedElement()
+    {
+        try
+        {
+            var focused = _focusedElementProvider();
+            if (focused is not null)
+            {
+                return new FocusedElementResolution(focused, "global_focused_element");
+            }
+        }
+        catch (Exception exception) when (exception is ElementNotAvailableException or InvalidOperationException or COMException)
+        {
+            // The foreground-window fallback remains bounded to the active window.
+        }
+
+        try
+        {
+            var foregroundWindow = _foregroundWindowProvider();
+            if (foregroundWindow == IntPtr.Zero)
+            {
+                return new FocusedElementResolution(null, "foreground_window_unavailable");
+            }
+
+            var root = AutomationElement.FromHandle(foregroundWindow);
+            if (root is null)
+            {
+                return new FocusedElementResolution(null, "foreground_automation_root_unavailable");
+            }
+
+            if (root.Current.HasKeyboardFocus)
+            {
+                return new FocusedElementResolution(root, "foreground_root_fallback");
+            }
+
+            var focusedDescendant = root.FindFirst(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.HasKeyboardFocusProperty, true));
+            return focusedDescendant is null
+                ? new FocusedElementResolution(null, "foreground_focused_descendant_unavailable")
+                : new FocusedElementResolution(focusedDescendant, "foreground_descendant_fallback");
+        }
+        catch (Exception exception) when (exception is ElementNotAvailableException or InvalidOperationException or COMException)
+        {
+            return new FocusedElementResolution(null, "foreground_fallback_failed");
+        }
+    }
+
+    private static FocusedElementSnapshot Failure(string status, string stage = "unknown")
     {
         return new FocusedElementSnapshot(
             false,
@@ -438,8 +506,11 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
             true,
             false,
             false,
-            "unavailable");
+            "unavailable",
+            stage);
     }
+
+    private sealed record FocusedElementResolution(AutomationElement? Element, string Stage);
 
     private static T? TryGetCurrentPattern<T>(AutomationElement element, AutomationPattern pattern)
         where T : class
@@ -466,9 +537,7 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
 
     private static string HashRuntimeId(int[] runtimeId)
     {
-        var joined = string.Join(".", runtimeId.Select(item => item.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(joined));
-        return Convert.ToHexString(bytes).Substring(0, 16).ToLowerInvariant();
+        return TransientTargetFingerprint.FingerprintRuntimeId(runtimeId).Value;
     }
 
     private static string GetWindowText(IntPtr handle)
@@ -510,6 +579,9 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
 
     internal static class NativeMethods
     {
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
         [DllImport("user32.dll")]
         public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
 
@@ -902,12 +974,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
     {
         try
         {
-            var joined = string.Join(
-                ".",
-                element.GetRuntimeId().Select(item => item.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-            var actual = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(joined)))
-                .Substring(0, 16)
-                .ToLowerInvariant();
+            var actual = TransientTargetFingerprint.FingerprintRuntimeId(element.GetRuntimeId()).Value;
             return string.Equals(actual, expectedRuntimeIdHash, StringComparison.Ordinal);
         }
         catch (InvalidOperationException)

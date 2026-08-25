@@ -178,7 +178,9 @@ dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --os-
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --native-profiles-status
 ```
 
-After installation, Code Sanitizer automatically opens one setup window when no supported desktop app is protected. Select the Send-key pair, click `Verify active app`, and focus the composer you use. The setup detects Codex Desktop or ChatGPT Desktop locally and verifies that one profile. The tray menu offers the same single `Set up prompt protection` action later; it does not require choosing an app name first.
+After installation, Code Sanitizer opens the local protection-status dashboard automatically. When setup is required, select the Send-key pair, click `Verify active app`, and focus the composer you use. The setup window always shows the current stage, the ten-second focus countdown, the required user action, and the terminal result; successful verification remains visible until `Finish and activate` is selected. The tray menu offers the same single `Set up prompt protection` action later; it does not require choosing an app name first.
+
+The dashboard includes a `Recent protection activity` section. The same raw-free lifecycle events are written as JSON Lines to `%LOCALAPPDATA%\CodexRedactionGate\logs\protection-operations.jsonl`. Each event contains a sequence number, source, action, stage, status, result code, and attempt ID; prompt text and detected sensitive values are never recorded there.
 
 If your Codex/ChatGPT Desktop sends with a different shortcut, choose that real Send binding and keep the newline binding as the shortcut that inserts a new line. For example, when `Enter` sends and `Ctrl+Enter` inserts a newline, Code Sanitizer intercepts `Enter` only in the verified composer and passes `Ctrl+Enter` through.
 

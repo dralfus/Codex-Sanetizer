@@ -8205,7 +8205,8 @@ public class ResidentFirstRunSetupLaunchTests
             for (var refresh = 0; refresh < 5; refresh++)
             {
                 context.RefreshStatus();
-                Assert.That(firstForm!.CurrentRows, Has.Count.EqualTo(3));
+                Assert.That(firstForm!.CurrentRows, Has.Count.GreaterThanOrEqualTo(4));
+                Assert.That(firstForm.CurrentRows.Any(row => row.Name == "Recent protection activity"), Is.True);
             }
 
             protection.Stop();
@@ -8229,6 +8230,105 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(secondForm, Is.Not.SameAs(firstForm));
             secondForm!.Close();
             Assert.That(secondForm.IsRefreshTimerDisposed, Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_StatusViewOpensWhenDiagnosticRefreshFails()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var protection = CreateManualOnlyTrayProtection(layout);
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                scheduleFirstRunSetup: false,
+                refreshDiagnostics: () => throw new InvalidOperationException("synthetic diagnostic failure"));
+
+            Assert.DoesNotThrow(context.PerformOpenProtectionStatusMenuClickForAcceptance);
+            Assert.That(context.IsLocalProtectionStatusOpen, Is.True);
+            Assert.That(context.LocalProtectionStatusForm, Is.Not.Null);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_MenuClickPublishesVisibleLifecycleEvidence()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var journal = new ProtectionOperationJournal(layout);
+            using var context = new WindowsTrayApplicationContext(
+                CreateManualOnlyTrayProtection(layout),
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                scheduleFirstRunSetup: false,
+                operationJournal: journal);
+
+            context.PerformOpenProtectionStatusMenuClickForAcceptance();
+
+            Assert.That(context.IsLocalProtectionStatusOpen, Is.True);
+            Assert.That(journal.ReadRecent(10).Any(item =>
+                item.Action == "open_protection_status"
+                && item.Stage == "window_visible"
+                && item.Status == "succeeded"), Is.True);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Test]
+    [Apartment(ApartmentState.STA)]
+    public void WindowsTrayApplicationContext_StatusViewCanRetryAfterTheFirstWindowOpenFails()
+    {
+        var tempDirectory = CreateTempDirectory();
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            var protection = CreateManualOnlyTrayProtection(layout);
+            var formAttempts = 0;
+            using var context = new WindowsTrayApplicationContext(
+                protection,
+                layout,
+                new NoOpTrayLocalCommandLauncher(),
+                new NoOpTrayProtectionDisableConfirmation(),
+                scheduleFirstRunSetup: false,
+                recoveryMessagePresenter: (_, _) => { },
+                statusFormFactory: (viewFactory, runAction) =>
+                {
+                    formAttempts++;
+                    if (formAttempts == 1)
+                    {
+                        throw new InvalidOperationException("synthetic window-factory failure");
+                    }
+
+                    return new LocalProtectionStatusForm(viewFactory, runAction);
+                });
+
+            Assert.DoesNotThrow(() => context.DispatchTrayIntent(TrayProtectionIntent.OpenProtectionStatus));
+            Assert.That(context.IsLocalProtectionStatusOpen, Is.False);
+
+            Assert.DoesNotThrow(() => context.DispatchTrayIntent(TrayProtectionIntent.OpenProtectionStatus));
+            Assert.That(context.IsLocalProtectionStatusOpen, Is.True);
+            Assert.That(formAttempts, Is.EqualTo(2));
         }
         finally
         {
@@ -8362,7 +8462,9 @@ public class ResidentFirstRunSetupLaunchTests
                 backgroundWorkQueue: work => queuedWork.Enqueue(work),
                 uiDispatcher: work => work(),
                 scheduleFirstRunSetup: false,
-                recoveryMessagePresenter: (_, _) => { });
+                recoveryMessagePresenter: (_, _) => { },
+                localReadinessCheck: SuccessfulLocalReadinessResult,
+                requireResidentReadiness: false);
 
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.VerifyProfiles);
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
@@ -8379,7 +8481,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(queuedWork, Is.Empty);
             context.OpenLocalProtectionStatus();
             var form = context.LocalProtectionStatusForm;
-            Assert.That(form!.CurrentRows.Any(row => row.OperationalState == "keyboard Send active"), Is.False);
+            Assert.That(form!.CurrentRows.Any(row => row.OperationalState == "keyboard Send active"), Is.True);
             Assert.That(context.IsNativeSubmitHookReady, Is.True);
 
             var protectedProfiles = SubmitBindingProfileStore.Load(layout).Profiles;
@@ -8468,6 +8570,8 @@ public class ResidentFirstRunSetupLaunchTests
                 backgroundWorkQueue: work => queuedWork.Enqueue(work),
                 uiDispatcher: work => work(),
                 scheduleFirstRunSetup: false,
+                localReadinessCheck: SuccessfulLocalReadinessResult,
+                requireResidentReadiness: false,
                 candidateNativeSubmitRuntimeFactory: profiles =>
                 {
                     profilesAtActivation = SubmitBindingProfileStore.Load(layout).Profiles;
@@ -8498,7 +8602,7 @@ public class ResidentFirstRunSetupLaunchTests
             Assert.That(SubmitBindingProfileStore.Load(layout).Profiles.Single().SubmitBinding!.DisplayText,
                 Is.EqualTo("Ctrl+Enter"));
             Assert.That(protection.State.ProtectedSendBinding, Is.EqualTo("Ctrl+Enter"));
-            Assert.That(protection.State.ComposerProtected, Is.False);
+            Assert.That(protection.State.ComposerProtected, Is.True);
             Assert.That(protection.State.LocalReadinessStatus, Is.Not.EqualTo("passed"));
             Assert.That(File.Exists(Path.Combine(layout.SettingsDirectory, ".first_run_setup_complete")), Is.True);
         }
@@ -8697,6 +8801,7 @@ public class ResidentFirstRunSetupLaunchTests
                 uiDispatcher: work => work(),
                 scheduleFirstRunSetup: false,
                 recoveryMessagePresenter: (_, _) => { },
+                requireResidentReadiness: false,
                 candidateNativeSubmitRuntimeFactory: _ => new NativeSubmitRuntimeSet(
                     candidateHook,
                     new[] { CreateRuntime(candidateHook, oldProfile with
@@ -8776,7 +8881,8 @@ public class ResidentFirstRunSetupLaunchTests
                 },
                 backgroundWorkQueue: work => queuedWork.Enqueue(work),
                 uiDispatcher: _ => throw new InvalidOperationException("dispatcher unavailable"),
-                scheduleFirstRunSetup: false);
+                scheduleFirstRunSetup: false,
+                requireResidentReadiness: false);
 
             Assert.That(protection.State.PromptProtectionRetryFailed, Is.False);
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
@@ -8818,7 +8924,8 @@ public class ResidentFirstRunSetupLaunchTests
                 new NoOpTrayProtectionDisableConfirmation(),
                 backgroundWorkQueue: _ => throw new InvalidOperationException(rawFailure),
                 uiDispatcher: work => work(),
-                scheduleFirstRunSetup: false);
+                scheduleFirstRunSetup: false,
+                requireResidentReadiness: false);
 
             context.OpenLocalProtectionStatus();
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
@@ -8856,7 +8963,8 @@ public class ResidentFirstRunSetupLaunchTests
                 nativeSubmitRuntimeFactory: () => throw new InvalidOperationException(rawFailure),
                 backgroundWorkQueue: work => queuedWork.Enqueue(work),
                 uiDispatcher: work => work(),
-                scheduleFirstRunSetup: false);
+                scheduleFirstRunSetup: false,
+                requireResidentReadiness: false);
 
             context.OpenLocalProtectionStatus();
             context.RunLocalProtectionStatusAction(LocalProtectionStatusAction.RetryPromptProtection);
@@ -9147,6 +9255,14 @@ public class ResidentFirstRunSetupLaunchTests
             .All(text => !text.Contains(OsInteractionStatusIds.NativeSubmitSetupRequired, StringComparison.Ordinal)), Is.True);
     }
 
+    private static LocalReadinessResult SuccessfulLocalReadinessResult()
+    {
+        return new LocalReadinessResult(
+            true,
+            "local_readiness_passed",
+            Array.Empty<ReadinessItem>());
+    }
+
     [Test]
     public void LocalProtectionStatus_ReportsReleaseEvidenceWithoutTrayReleaseActionForChatGptProofMismatch()
     {
@@ -9290,7 +9406,10 @@ public class ResidentFirstRunSetupLaunchTests
             () => throw new InvalidOperationException("Manual scan should not run."));
 
         controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
-            "waiting_for_focus", "focus_message_composer", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 2));
+            "waiting_for_focus", "focus_message_composer", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 2, RemainingSeconds: 9));
+        controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+            "waiting_for_focus", "focus_message_composer", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 2, RemainingSeconds: 4));
+        Assert.That(controller.State.SetupVerificationRemainingSeconds, Is.EqualTo(4));
         controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
             "composer_recognized", "wait_for_verification", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 2));
         controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
@@ -9300,6 +9419,7 @@ public class ResidentFirstRunSetupLaunchTests
 
         Assert.That(controller.State.SetupVerificationStatus, Is.EqualTo("verifying_binding"));
         Assert.That(controller.State.SetupVerificationAttemptId, Is.EqualTo(2));
+        Assert.That(controller.State.SetupVerificationRemainingSeconds, Is.EqualTo(0));
     }
 
     private static TrayProtectionState CreateReadableProtectionState()

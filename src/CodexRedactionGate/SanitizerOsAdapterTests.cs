@@ -264,6 +264,26 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void WindowsFocusedComposerDiscovery_NormalizesMixedCodexChatGptInstallationIdentity()
+    {
+        var discovery = new WindowsFocusedComposerDiscovery(
+            SurfaceProfileCatalog.Default,
+            new FakeFocusedElementSnapshotProvider(CreateFocusedElementSnapshot(
+                windowTitle: "Codex",
+                processName: "ChatGPT",
+                controlType: "ControlType.Edit",
+                canReadValue: true,
+                canWriteValue: true)));
+
+        var result = discovery.DiscoverActiveSurface();
+
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(
+            result.Diagnostics["application_identity_hash"],
+            Is.EqualTo(OpaqueFingerprint.FromSource(OpenAiDesktopIdentity.ProductId).Value));
+    }
+
+    [Test]
     public void WindowsFocusedComposerDiscovery_RejectsNonComposerFocusedElement()
     {
         var discovery = new WindowsFocusedComposerDiscovery(
@@ -350,6 +370,9 @@ public partial class SanitizerTests
         Assert.That(result.Succeeded, Is.True);
         Assert.That(result.Surface!.ProfileId, Is.EqualTo("redaction-gate-demo"));
         Assert.That(result.Surface.CanSubmit, Is.False);
+        Assert.That(
+            result.Diagnostics["application_identity_hash"],
+            Is.EqualTo(OpaqueFingerprint.FromSource("CodexRedactionGate").Value));
     }
 
     [Test]

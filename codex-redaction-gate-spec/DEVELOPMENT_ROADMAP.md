@@ -1,6 +1,6 @@
 # Ближайший план разработки Code Sanitizer
 
-**Актуально на:** 2026-08-16
+**Актуально на:** 2026-08-23
 **Назначение:** показать последовательность работ после приёмки основного
 prompt-защитного пути и до начала расширения защиты файлов.
 
@@ -45,6 +45,7 @@ flowchart TD
     A347["[x] 347\nАтомарный resident workflow transaction"]
     A348["[>] 348 acceptance pending\nSubmit + terminal publication без разрыва"]
     A349["[x] 349\nSetup/recovery race-матрица"]
+    A350["[x] 350\nЕдиная OpenAI Desktop identity\nstable compatibility / transient target"]
     R314["[~] 314\nБезопасный первый mouse Send"]
     Keyboard["Клавиатурная prompt-защита\nповторная release-приёмка"]
     R323["[x] 323\nOpaque compatibility fingerprints"]
@@ -66,6 +67,8 @@ flowchart TD
     A347 --> A348
     A347 --> A349
     A349 --> A348
+    A349 --> A350
+    A350 --> A348
     T344 -. "нужен для честной\nполной проверки" .-> Keyboard
     R342 --> Keyboard
     R346 --> Keyboard
@@ -107,11 +110,18 @@ Desktop composer.
 | 1 | **347** `[x]` | Activation, profile commit и terminal publication линеаризованы; race-матрица 349 исключает mixed-state при cancellation/newer operation. Предыдущее завершение сохранено в `tickets.md` как история. | 341, 342, 345, 346 |
 | 2 | **348** `[>]` acceptance pending | Единица side-effect удерживается от write/replay через `sent_safely`; source-матрица зелёная, но повторное закрытие ждёт release proof от installer, совпадающего с source build. | 347, 323, 324, 346 |
 | 3 | **349** `[x]` | Детерминированно доказаны setup/recovery cancellation, newer operation и rollback failure; 347 повторно закрыт, а 348 ждёт installer-matched release proof. | 347 |
+| 4 | **350** `[x]` | Store-пакет `OpenAI.Codex` с `ChatGPT.exe` и окном Codex представлен одной стабильной identity; handle окна и UIA runtime ID отделены в transient target и не инвалидируют профиль после перезапуска. | 323, 324, 346, 349 |
 
 **Gate этапа 1.5:** до начала `283`/`286` и нового file-ingress кода должны быть
 зелёными полный automated suite, `--self-test`, `--product-smoke` и
 детерминированная reference-composer матрица. `314` остаётся отдельной задачей
 для mouse Send и не является условием запуска 347/348.
+
+**Текущее доказательство после 350:** `1782/1782`, `--self-test`,
+`--product-smoke` и Release build без предупреждений и ошибок. Installer
+`0.1.20260822.t1325` остаётся в истории как предыдущий candidate и не содержит
+ремонт 350. Для следующей ручной release-приёмки опубликована и запущена
+сборка `0.1.20260823.t1841` из `artifacts/publish`.
 
 ### Этап 2. Закрыть оставшиеся точечные риски prompt-защиты
 
@@ -139,9 +149,8 @@ Desktop composer.
 
 ## Что делать прямо сейчас
 
-1. Установить candidate `0.1.20260822.t1325` и провести одну ограниченную
-   ручную приёмку клавиатурного protected Send; `314` сознательно оставить
-   открытой до отдельного этапа добавления mouse Send.
+1. Запустить текущую Release-сборку с ремонтом 350 и повторить setup на
+   фактическом Store-приложении `OpenAI.Codex`/`ChatGPT.exe`.
 2. Запустить release proof из установленной сборки и проверить
    `reference_proof_recorded: true`.
 3. После прохождения ручной keyboard-приёмки начинать исследование внешней

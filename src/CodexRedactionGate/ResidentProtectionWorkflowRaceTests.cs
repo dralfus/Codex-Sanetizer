@@ -8,6 +8,148 @@ using NUnit.Framework;
 public partial class SanitizerTests
 {
     [Test]
+    public void ResidentWorkflow_StartResidentAutomaticallyRunsReadinessAndSetup()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = CreateWorkflowProfile() with { ProfileId = "chatgpt-desktop" };
+        Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
+        Assert.That(ActivePromptProtectionTargetStore.Save(layout, profile.ProfileId).Succeeded, Is.True);
+
+        var initialHook = new FakeNativeSubmitHookHost();
+        var initialController = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
+        var initialRuntime = NativeSubmitRuntime.CreateTest(
+            initialHook,
+            initialController,
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile);
+        var protection = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => CreateSubmittedResult(profile.ProfileId),
+            initialHook,
+            initialController,
+            profile,
+            storageLayout: layout,
+            nativeSubmitRuntimes: new[] { initialRuntime });
+        var runtime = new ResidentProtectionRuntimeFacade(protection);
+        var order = new List<string>();
+        var candidateHook = new FakeNativeSubmitHookHost();
+        var setupResult = new FirstRunSetupResult(
+            Succeeded: true,
+            Code: "setup_complete",
+            State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", false, true),
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["profile_id"] = profile.ProfileId
+            });
+        var coordinator = new ResidentProtectionWorkflowCoordinator(
+            runtime,
+            layout,
+            () => new WorkflowSetupController(_ =>
+            {
+                order.Add("setup");
+                return setupResult;
+            }),
+            _ => null,
+            () => CreateRuntimeSet(candidateHook, profile),
+            () => throw new InvalidOperationException("Recovery should not run."),
+            () => throw new InvalidOperationException("Recovery should not run."),
+            action => action(),
+            action => action(),
+            (_, _, _) => { },
+            localReadinessCheck: () =>
+            {
+                order.Add("readiness");
+                return new LocalReadinessResult(true, "local_readiness_passed", Array.Empty<ReadinessItem>());
+            });
+
+        try
+        {
+            Assert.That(coordinator.StartResident(), Is.True);
+
+            Assert.That(order, Is.EqualTo(new[] { "readiness", "setup" }));
+            Assert.That(runtime.State.LocalReadinessStatus, Is.EqualTo("passed"));
+            Assert.That(runtime.State.NativeSubmitEnabled, Is.True);
+            Assert.That(runtime.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+            Assert.That(runtime.State.ReadinessStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+            Assert.That(runtime.State.ComposerProtected, Is.True);
+        }
+        finally
+        {
+            protection.Stop();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void ResidentWorkflow_ReloadThatLeavesSetupRequiredCannotPublishSetupComplete()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var protectedProfile = CreateWorkflowProfile() with { ProfileId = "chatgpt-desktop" };
+        var unverifiedProfile = CreateWorkflowProfile() with
+        {
+            ProfileId = "codex-desktop",
+            BindingSource = "not_verified",
+            SubmitBinding = null,
+            NewlineBinding = null,
+            CapabilityStatus = OsInteractionStatusIds.BindingUnknown
+        };
+        var setupResult = new FirstRunSetupResult(
+            Succeeded: true,
+            Code: "setup_complete",
+            State: new FirstRunSetupState(false, Array.Empty<string>(), "complete", false, true),
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["profile_id"] = protectedProfile.ProfileId
+            });
+        var protection = CreateWorkflowProtection(layout);
+        var runtime = new ResidentProtectionRuntimeFacade(protection);
+        var candidateHook = new FakeNativeSubmitHookHost();
+        var events = new List<(string Stage, string Status, string Result)>();
+        var coordinator = new ResidentProtectionWorkflowCoordinator(
+            runtime,
+            layout,
+            () => new WorkflowSetupController(_ => setupResult),
+            _ => null,
+            () => CreateRuntimeSet(candidateHook, protectedProfile, unverifiedProfile),
+            () => throw new InvalidOperationException("Recovery should not run."),
+            () => throw new InvalidOperationException("Recovery should not run."),
+            action => action(),
+            action => action(),
+            (_, _, _) => { },
+            (_, stage, status, result, _) => events.Add((stage, status, result)));
+
+        try
+        {
+            Assert.That(protection.Start(), Is.True);
+
+            coordinator.StartInitialSetup();
+
+            Assert.That(runtime.State.SetupRequired, Is.True);
+            Assert.That(runtime.OperationalAction.Status, Is.EqualTo("failed"));
+            Assert.That(events, Does.Not.Contain(("protected", "succeeded", "setup_complete")));
+            Assert.That(events, Does.Contain((
+                "activation_failed",
+                "failed",
+                "resident_not_protected_after_reload")));
+        }
+        finally
+        {
+            protection.Stop();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
     public void ResidentWorkflow_SetupCancelledBeforeAdmissionDoesNotActivateOrPersistCandidate()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -337,16 +479,17 @@ public partial class SanitizerTests
 
     private static NativeSubmitRuntimeSet CreateRuntimeSet(
         FakeNativeSubmitHookHost hook,
-        SubmitBindingProfile profile)
+        params SubmitBindingProfile[] profiles)
     {
-        var runtime = NativeSubmitRuntime.CreateTest(
-            hook,
-            new NativeSubmitInterceptionController(
-                profile,
-                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
-            () => CreateSubmittedResult(profile.ProfileId),
-            profile);
-        return new NativeSubmitRuntimeSet(hook, new[] { runtime });
+        var runtimes = profiles.Select(profile => NativeSubmitRuntime.CreateTest(
+                hook,
+                new NativeSubmitInterceptionController(
+                    profile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                () => CreateSubmittedResult(profile.ProfileId),
+                profile))
+            .ToArray();
+        return new NativeSubmitRuntimeSet(hook, runtimes);
     }
 
     private static TrayProtectionController CreateWorkflowProtection(DefaultStorageLayout layout)

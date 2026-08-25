@@ -269,7 +269,7 @@ public sealed class OperationalActionTests
     }
 
     [Test]
-    public void LocalReadinessAndReleaseEvidenceRemainSeparateInStatus()
+    public void CompletedLocalReadinessRevealsActivePromptProtectionStatus()
     {
         var state = new TrayProtectionState(
             Enabled: true,
@@ -281,7 +281,10 @@ public sealed class OperationalActionTests
             LastProfileId: "chatgpt-desktop",
             LastApplied: false,
             LastSubmitted: false,
-            ComposerProtected: false,
+            NativeSubmitEnabled: true,
+            NativeSubmitStatus: OsInteractionStatusIds.Protected,
+            ReadinessStatus: OsInteractionStatusIds.Protected,
+            ComposerProtected: true,
             ConfiguredProfileId: "chatgpt-desktop",
             ProtectedClaimStatus: "degraded",
             ReferenceAcceptanceStatus: "missing",
@@ -289,9 +292,9 @@ public sealed class OperationalActionTests
             LocalReadinessStatus: "passed");
 
         var rows = LocalProtectionStatusView.Create(state).Rows;
-        var readiness = rows.Single(item => item.Name == "Automatic local readiness");
-        Assert.That(readiness.OperationalState, Is.EqualTo("completed"));
-        Assert.That(readiness.Consequence, Does.Not.Contain("release/CI"));
+        var prompt = rows.Single(item => item.Name == "Automatic prompt protection");
+        Assert.That(prompt.OperationalState, Is.EqualTo("keyboard Send active"));
+        Assert.That(rows.Any(item => item.Name == "Automatic local readiness"), Is.False);
     }
 
     [Test]

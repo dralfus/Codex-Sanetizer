@@ -73,6 +73,7 @@ public sealed record TrayProtectionState(
     string? SetupVerificationProfileId = null,
     string SetupVerificationBinding = "not_configured",
     long SetupVerificationAttemptId = 0,
+    int SetupVerificationRemainingSeconds = 0,
     string ProtectedClaimStatus = OsInteractionStatusIds.NotConfigured,
     string ReferenceAcceptanceStatus = "not_applicable",
     string LiveContractStatus = "not_applicable",
@@ -118,6 +119,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
     private readonly object _snapshotPublicationGate = new();
     private readonly ResidentOperationalActionLifecycle _operationalActionLifecycle;
     private bool _residentReadinessAdmissionEnabled;
+    private ResidentReadinessAdmission? _residentReadinessAdmission;
     private bool _snapshotInitialized;
     private readonly ConditionalWeakTable<NativeSubmitInterceptionResult, NativeSubmitExecutionContext> _classificationSnapshots = new();
     private ResidentProtectedSendOperation? _activeProtectedSendOperation;
@@ -227,7 +229,12 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         ITrayHotkeyHost hotkeyHost,
         Func<OsInteractionResult> applyOnlyRunner)
     {
-        return new TrayProtectionController(hotkeyHost, applyOnlyRunner);
+        return new TrayProtectionController(
+            hotkeyHost,
+            applyOnlyRunner,
+            nativeSubmitHookHost: null,
+            nativeSubmitController: null,
+            storageLayout: CreateIsolatedTestStorageLayout());
     }
 
     // Explicit test seam for tests that already own traced runtime fixtures.
@@ -248,6 +255,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         IDisposable? nativeSubmitRuntimeOwner = null,
         Action? beforeProtectedSendTracePublishForTesting = null)
     {
+        storageLayout ??= CreateIsolatedTestStorageLayout();
         return new TrayProtectionController(
             hotkeyHost,
             applyOnlyRunner,
@@ -287,6 +295,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         ArgumentNullException.ThrowIfNull(nativeSubmitHookHost);
         ArgumentNullException.ThrowIfNull(nativeSubmitController);
         ArgumentNullException.ThrowIfNull(nativeSubmitRunner);
+        storageLayout ??= CreateIsolatedTestStorageLayout();
 
         var profile = nativeProfile ?? nativeSubmitController.Profile;
         var runtime = NativeSubmitRuntime.CreateTest(
@@ -312,6 +321,14 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             beforeProtectedSendTracePublishForTesting);
     }
 
+    private static DefaultStorageLayout CreateIsolatedTestStorageLayout()
+    {
+        return DefaultStorageLayout.Create(Path.Combine(
+            Path.GetTempPath(),
+            "codex-redaction-gate-controller-tests",
+            Guid.NewGuid().ToString("N")));
+    }
+
     public event EventHandler? StateChanged;
 
     public TrayProtectionState State => ReadSnapshot().State;
@@ -321,6 +338,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
     internal void EnableResidentReadinessAdmission()
     {
         _residentReadinessAdmissionEnabled = true;
+        Volatile.Write(ref _residentReadinessAdmission, null);
         PublishOperationalActionState();
     }
 
@@ -383,13 +401,21 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             return false;
         }
 
-        return ResidentOperationalReadinessProofStore.TryRecord(
+        var recorded = ResidentOperationalReadinessProofStore.TryRecord(
             _storageLayout,
             BuildVersion.Current,
             action.CorrelationId,
             action.AttemptId,
             passed: true,
             terminalStatus: "succeeded");
+        if (recorded)
+        {
+            Volatile.Write(
+                ref _residentReadinessAdmission,
+                new ResidentReadinessAdmission(action.CorrelationId, action.AttemptId, BuildVersion.Current));
+        }
+
+        return recorded;
     }
 
     private void PublishOperationalActionState(bool notifyStateChanged = true)
@@ -618,13 +644,28 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         while (true)
         {
             var snapshot = ReadSnapshot();
+            var protectionReady = !snapshot.State.SetupRequired
+                && snapshot.State.NativeSubmitEnabled
+                && string.Equals(
+                    snapshot.State.NativeSubmitStatus,
+                    OsInteractionStatusIds.Protected,
+                    StringComparison.Ordinal);
             var replacement = snapshot with
             {
                 State = snapshot.State with
                 {
                     PromptProtectionRetryFailed = false,
                     PromptProtectionRetryInProgress = false,
-                    LastProtectedSendInterruption = null
+                    LastProtectedSendInterruption = null,
+                    SetupVerificationStatus = protectionReady
+                        ? "protected"
+                        : snapshot.State.SetupVerificationStatus,
+                    SetupVerificationAction = protectionReady
+                        ? "none"
+                        : snapshot.State.SetupVerificationAction,
+                    SetupVerificationRemainingSeconds = protectionReady
+                        ? 0
+                        : snapshot.State.SetupVerificationRemainingSeconds
                 }
             };
             if (PublishSnapshotIfCurrent(snapshot, replacement))
@@ -1113,7 +1154,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                     SetupVerificationAction = current.State.SetupVerificationAction,
                     SetupVerificationProfileId = current.State.SetupVerificationProfileId,
                     SetupVerificationBinding = current.State.SetupVerificationBinding,
-                    SetupVerificationAttemptId = current.State.SetupVerificationAttemptId
+                    SetupVerificationAttemptId = current.State.SetupVerificationAttemptId,
+                    SetupVerificationRemainingSeconds = current.State.SetupVerificationRemainingSeconds
                 };
             if (!string.Equals(
                     state.LocalProtectionStatus,
@@ -1166,9 +1208,12 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             var attemptId = progress.AttemptId;
             if (status == "waiting_for_focus")
             {
-                if (attemptId <= current.State.SetupVerificationAttemptId
+                var isCurrentCountdownUpdate = attemptId == current.State.SetupVerificationAttemptId
+                    && current.State.SetupVerificationStatus == "waiting_for_focus";
+                if (!isCurrentCountdownUpdate
+                    && (attemptId <= current.State.SetupVerificationAttemptId
                     || current.State.SetupVerificationStatus is "waiting_for_focus" or "composer_recognized"
-                        or "verifying_binding" or "activating_protection")
+                        or "verifying_binding" or "activating_protection"))
                 {
                     return;
                 }
@@ -1188,7 +1233,10 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                     SetupVerificationAction = PromptProtectionSetupLifecycle.SafeAction(progress.Action),
                     SetupVerificationProfileId = PromptProtectionSetupLifecycle.SafeProfileId(progress.ProfileId),
                     SetupVerificationBinding = PromptProtectionSetupLifecycle.SafeBinding(progress.Binding),
-                    SetupVerificationAttemptId = attemptId
+                    SetupVerificationAttemptId = attemptId,
+                    SetupVerificationRemainingSeconds = status == "waiting_for_focus"
+                        ? Math.Max(progress.RemainingSeconds, 0)
+                        : 0
                 }
             };
             if (PublishSnapshotIfCurrent(current, replacement))
@@ -1251,7 +1299,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 SetupVerificationAction = previous.State.SetupVerificationAction,
                 SetupVerificationProfileId = previous.State.SetupVerificationProfileId,
                 SetupVerificationBinding = previous.State.SetupVerificationBinding,
-                SetupVerificationAttemptId = previous.State.SetupVerificationAttemptId
+                SetupVerificationAttemptId = previous.State.SetupVerificationAttemptId,
+                SetupVerificationRemainingSeconds = previous.State.SetupVerificationRemainingSeconds
             };
 
             return new ProtectionSnapshot(
@@ -1343,6 +1392,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             SetupVerificationProfileId: snapshot.State.SetupVerificationProfileId,
             SetupVerificationBinding: snapshot.State.SetupVerificationBinding,
             SetupVerificationAttemptId: snapshot.State.SetupVerificationAttemptId,
+            SetupVerificationRemainingSeconds: snapshot.State.SetupVerificationRemainingSeconds,
             ProtectedClaimStatus: snapshot.State.ProtectedClaimStatus,
             ReferenceAcceptanceStatus: snapshot.State.ReferenceAcceptanceStatus,
             LiveContractStatus: snapshot.State.LiveContractStatus,
@@ -1792,6 +1842,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 SetupVerificationProfileId: current.State.SetupVerificationProfileId,
                 SetupVerificationBinding: current.State.SetupVerificationBinding,
                 SetupVerificationAttemptId: current.State.SetupVerificationAttemptId,
+                SetupVerificationRemainingSeconds: current.State.SetupVerificationRemainingSeconds,
                 ProtectedClaimStatus: current.State.ProtectedClaimStatus,
                 ReferenceAcceptanceStatus: current.State.ReferenceAcceptanceStatus,
                 LiveContractStatus: current.State.LiveContractStatus,
@@ -2529,11 +2580,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 
     private bool IsResidentReadinessAdmitted()
     {
-        var action = _operationalActionLifecycle.State;
-        if (action.ActionKind != "local_readiness"
-            || action.Status != "succeeded"
-            || action.OutcomeCode != "succeeded"
-            || _operationalActionLifecycle.LocalReadinessStatus != "passed")
+        var admission = Volatile.Read(ref _residentReadinessAdmission);
+        if (admission is null)
         {
             return false;
         }
@@ -2541,10 +2589,16 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         var proof = ResidentOperationalReadinessProofStore.Load(_storageLayout);
         return proof.Available
             && proof.Proof is not null
-            && proof.Proof.AttemptId == action.AttemptId
-            && proof.Proof.CorrelationId == action.CorrelationId
+            && proof.Proof.AttemptId == admission.AttemptId
+            && proof.Proof.CorrelationId == admission.CorrelationId
+            && proof.Proof.BuildVersion == admission.BuildVersion
             && proof.Proof.BuildVersion == BuildVersion.Current;
     }
+
+    private sealed record ResidentReadinessAdmission(
+        string CorrelationId,
+        long AttemptId,
+        string BuildVersion);
 
     private bool EnterprisePolicyBlocksDisable()
     {
@@ -2877,29 +2931,35 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 
     private SetupReadiness ReadSelectedProfileSetupReadiness(NativeSubmitRuntimeSet runtimeSet)
     {
-        var setupRequired = false;
-        foreach (var runtime in runtimeSet.Runtimes)
+        var target = ActivePromptProtectionTargetStore.Load(_storageLayout);
+        if (!target.Succeeded)
         {
-            var status = runtime.Controller.ProfileSnapshot.SetupStatus;
-            if (status == OsInteractionStatusIds.ProfilesUnavailable)
-            {
-                return new SetupReadiness(
-                    SetupRequired: false,
-                    Status: OsInteractionStatusIds.ProfilesUnavailable);
-            }
-
-            if (status == OsInteractionStatusIds.NativeSubmitSetupRequired)
-            {
-                setupRequired = true;
-            }
-
+            return new SetupReadiness(
+                SetupRequired: false,
+                Status: OsInteractionStatusIds.ProfilesUnavailable);
         }
 
-        return new SetupReadiness(
-            SetupRequired: setupRequired,
-            Status: setupRequired
-                ? OsInteractionStatusIds.NativeSubmitSetupRequired
-                : OsInteractionStatusIds.Protected);
+        var selectedRuntime = target.ProfileId is not null
+            ? runtimeSet.Runtimes.FirstOrDefault(runtime => string.Equals(
+                runtime.Profile.ProfileId,
+                target.ProfileId,
+                StringComparison.Ordinal))
+            : runtimeSet.Runtimes.Count == 1 ? runtimeSet.Runtimes[0] : null;
+        if (selectedRuntime is null)
+        {
+            return new SetupReadiness(
+                SetupRequired: true,
+                Status: OsInteractionStatusIds.NativeSubmitSetupRequired);
+        }
+
+        var status = selectedRuntime.Controller.ProfileSnapshot.SetupStatus;
+        return status == OsInteractionStatusIds.Protected
+            ? new SetupReadiness(SetupRequired: false, Status: OsInteractionStatusIds.Protected)
+            : status == OsInteractionStatusIds.ProfilesUnavailable
+                ? new SetupReadiness(SetupRequired: false, Status: OsInteractionStatusIds.ProfilesUnavailable)
+                : new SetupReadiness(
+                    SetupRequired: true,
+                    Status: OsInteractionStatusIds.NativeSubmitSetupRequired);
     }
 
     private ProtectionSnapshot ReadSnapshot()

@@ -18,6 +18,8 @@ public sealed class ChatGptDesktopCompatibilityTests
 
         Assert.That(profile.IsProtected, Is.True);
         Assert.That(profile.CompatibilityEvidence, Is.Not.Null);
+        Assert.That(profile.CompatibilityEvidence!.DesktopIdentity?.IsComplete, Is.True);
+        Assert.That(profile.CompatibilityEvidence.VerifiedTargetFingerprint?.IsComplete, Is.True);
         foreach (var key in profile.CompatibilityEvidence!.ToComparisonDiagnostics().Keys)
         {
             var changed = new Dictionary<string, string>(profile.CompatibilityEvidence.ToComparisonDiagnostics(), StringComparer.Ordinal)
@@ -81,6 +83,52 @@ public sealed class ChatGptDesktopCompatibilityTests
 
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
         Assert.That(result.Diagnostics["mismatch_reason"], Does.Contain("send_control"));
+    }
+
+    [Test]
+    public void CompatibilityEvidence_RemainsValidWhenOnlyTheRuntimeTargetChanges()
+    {
+        var discovery = VerifiedChatGptDiscovery();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", discovery);
+        var nextRuntimeTarget = ChatGptDiscoveryFixture.CreateBuilder()
+            .WithWindowIdentityFingerprint(ChatGptDiscoveryFixture.Fingerprint("next-window-instance"))
+            .WithFocusedElementFingerprint(ChatGptDiscoveryFixture.Fingerprint("next-composer-instance"))
+            .Build();
+
+        var result = SurfaceCompatibilityEvaluator.Evaluate(
+            profile,
+            nextRuntimeTarget.Surface,
+            ChatGptDesktopCompatibility.ActiveEvidence(profile, nextRuntimeTarget));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Protected));
+    }
+
+    [Test]
+    public void TransientTargetFingerprint_UsesTheOpaqueFingerprintContractForRuntimeIds()
+    {
+        var fingerprint = TransientTargetFingerprint.FingerprintRuntimeId(new[] { 42, 7, 9 });
+
+        Assert.That(fingerprint.IsValid, Is.True);
+        Assert.That(fingerprint.Value, Has.Length.EqualTo(64));
+    }
+
+    [Test]
+    public void VerifyUserBindings_DoesNotTreatALegacyShortRuntimeHashAsCompatibilityEvidence()
+    {
+        var discovery = VerifiedChatGptDiscovery();
+        var diagnostics = new Dictionary<string, string>(discovery.Diagnostics, StringComparer.Ordinal)
+        {
+            ["focused_element_hash"] = "2a2ebfde8f642871"
+        };
+        var nativeShapedDiscovery = discovery with { Diagnostics = diagnostics };
+
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", nativeShapedDiscovery);
+
+        Assert.That(profile.IsProtected, Is.True);
+        Assert.That(profile.CompatibilityEvidence, Is.Not.Null);
+        Assert.That(profile.CompatibilityEvidence!.VerifiedTargetFingerprint, Is.Null);
     }
 
     [Test]
@@ -187,6 +235,7 @@ public sealed class ChatGptDesktopCompatibilityTests
             Assert.That(saved.Succeeded, Is.True);
             Assert.That(loaded.Succeeded, Is.True);
             Assert.That(loaded.Profiles.Single().CompatibilityEvidence, Is.Not.Null);
+            Assert.That(loaded.Profiles.Single().CompatibilityEvidence!.VerifiedTargetFingerprint, Is.Null);
             Assert.That(
                 loaded.Profiles.Single().CompatibilityEvidence!.ToComparisonDiagnostics(),
                 Is.EqualTo(profile.CompatibilityEvidence!.ToComparisonDiagnostics()));

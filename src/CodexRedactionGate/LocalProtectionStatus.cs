@@ -28,7 +28,8 @@ internal sealed record LocalProtectionStatusRow(
 internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionStatusRow> Rows)
 {
     public static LocalProtectionStatusView Create(
-        TrayProtectionState trayState)
+        TrayProtectionState trayState,
+        IReadOnlyList<ProtectionOperationEvent>? recentEvents = null)
     {
         ArgumentNullException.ThrowIfNull(trayState);
 
@@ -43,7 +44,26 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
             rows.Add(operationalRow);
         }
 
+        if (recentEvents is { Count: > 0 })
+        {
+            rows.Add(CreateRecentActivityRow(recentEvents));
+        }
+
         return new LocalProtectionStatusView(rows);
+    }
+
+    private static LocalProtectionStatusRow CreateRecentActivityRow(
+        IReadOnlyList<ProtectionOperationEvent> events)
+    {
+        var latest = events[^1];
+        var lines = events.TakeLast(8).Select(item =>
+            $"#{item.Sequence} {item.Action}: {item.Stage} -> {item.Status} ({item.ResultCode})");
+        return new LocalProtectionStatusRow(
+            "Recent protection activity",
+            "Raw-free resident operation log",
+            latest.Status,
+            string.Join(Environment.NewLine, lines),
+            LocalProtectionStatusAction.None);
     }
 
     public string RenderText()
@@ -214,7 +234,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
         {
             "waiting_for_focus" => new LocalProtectionStatusRow(
                 "Automatic prompt protection", "Selected-app send interception", "waiting for focus",
-                "Focus an OpenAI Desktop message composer to continue verification.", LocalProtectionStatusAction.None),
+                WaitingForFocusConsequence(state), LocalProtectionStatusAction.None),
             "composer_recognized" => new LocalProtectionStatusRow(
                 "Automatic prompt protection", "Selected-app send interception", "composer recognized",
                 "The selected app composer was recognized; binding verification is continuing.", LocalProtectionStatusAction.None),
@@ -241,6 +261,13 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
         };
     }
 
+    private static string WaitingForFocusConsequence(TrayProtectionState state)
+    {
+        return state.SetupVerificationRemainingSeconds > 0
+            ? $"Focus the OpenAI Desktop message composer to continue verification. {state.SetupVerificationRemainingSeconds} seconds remaining."
+            : "Focus the OpenAI Desktop message composer to continue verification. Reading the focused composer...";
+    }
+
     private static LocalProtectionStatusRow? CreateLocalReadinessRow(TrayProtectionState state)
     {
         if (state.LocalReadinessStatus == "not_run"
@@ -260,12 +287,7 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 $"checking {state.EffectiveOperationalAction.Stage}",
                 "This check started automatically. Wait for the terminal result; protected Send remains fail-closed while it runs.",
                 LocalProtectionStatusAction.None),
-            "passed" => new LocalProtectionStatusRow(
-                "Automatic local readiness",
-                "Resident prerequisite checks",
-                "completed",
-                "The current resident readiness check completed. Protected Send is enabled only while its matching resident proof remains current.",
-                LocalProtectionStatusAction.None),
+            "passed" => null,
             "cancelled" => new LocalProtectionStatusRow(
                 "Automatic local readiness",
                 "Resident prerequisite checks",
@@ -577,7 +599,10 @@ internal sealed class LocalProtectionStatusForm : Form
             TabStop = true,
             ShortcutsEnabled = true,
             Dock = DockStyle.Fill,
-            Height = 72,
+            Height = Math.Clamp(72 + (row.Consequence.Count(character => character == '\n') * 18), 72, 220),
+            ScrollBars = row.Consequence.Contains(Environment.NewLine, StringComparison.Ordinal)
+                ? ScrollBars.Vertical
+                : ScrollBars.None,
             Text = $"{row.Name}{Environment.NewLine}Capability: {row.Capability}{Environment.NewLine}Status: {row.OperationalState}{Environment.NewLine}{row.Consequence}"
         };
         panel.Controls.Add(text, 0, 0);

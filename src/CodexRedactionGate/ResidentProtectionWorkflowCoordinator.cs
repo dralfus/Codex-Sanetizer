@@ -21,8 +21,12 @@ internal sealed class ResidentProtectionWorkflowCoordinator
     private readonly Action<Action> _backgroundQueue;
     private readonly Action<Action> _uiDispatcher;
     private readonly Action<Exception, string, string> _captureFailure;
+    private readonly Action<string, string, string, string, long> _publishOperationEvent;
+    private readonly Func<LocalReadinessResult> _localReadinessCheck;
+    private readonly bool _requireResidentReadiness;
     private int _setupScheduled;
     private int _workflowInProgress;
+    private int _residentStarted;
 
     public ResidentProtectionWorkflowCoordinator(
         IResidentProtectionWorkflowPort runtime,
@@ -34,7 +38,10 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         Func<LocalProtectionRecoveryResult> localProtectionRecovery,
         Action<Action> backgroundQueue,
         Action<Action> uiDispatcher,
-        Action<Exception, string, string> captureFailure)
+        Action<Exception, string, string> captureFailure,
+        Action<string, string, string, string, long>? publishOperationEvent = null,
+        Func<LocalReadinessResult>? localReadinessCheck = null,
+        bool requireResidentReadiness = true)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
@@ -46,16 +53,29 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         _backgroundQueue = backgroundQueue ?? throw new ArgumentNullException(nameof(backgroundQueue));
         _uiDispatcher = uiDispatcher ?? throw new ArgumentNullException(nameof(uiDispatcher));
         _captureFailure = captureFailure ?? throw new ArgumentNullException(nameof(captureFailure));
+        _publishOperationEvent = publishOperationEvent ?? ((_, _, _, _, _) => { });
+        _localReadinessCheck = localReadinessCheck ?? (() => LocalReadinessWorkflow.Run(_layout));
+        _requireResidentReadiness = requireResidentReadiness;
     }
 
     public event Action<FirstRunSetupResult?>? SetupCompleted;
 
     public event Action<string, bool>? Notice;
 
-    public bool StartResident()
+    public bool StartResident(bool startInitialSetup = true)
     {
-        _runtime.EnableResidentReadinessAdmission();
-        return _runtime.Start();
+        if (_requireResidentReadiness)
+        {
+            _runtime.EnableResidentReadinessAdmission();
+        }
+        var started = _runtime.Start();
+        Volatile.Write(ref _residentStarted, started ? 1 : 0);
+        if (started && startInitialSetup)
+        {
+            StartInitialSetup();
+        }
+
+        return started;
     }
 
     public void RefreshOperationalState() => _runtime.RefreshOperationalState();
@@ -95,21 +115,34 @@ internal sealed class ResidentProtectionWorkflowCoordinator
 
     public void StartLocalReadiness()
     {
+        StartLocalReadiness(onCompleted: null);
+    }
+
+    private bool StartLocalReadiness(Action<LocalReadinessResult>? onCompleted)
+    {
         if (string.Equals(_runtime.State.LocalReadinessStatus, "passed", StringComparison.Ordinal))
         {
-            return;
+            onCompleted?.Invoke(new LocalReadinessResult(
+                true,
+                "local_readiness_passed",
+                Array.Empty<ReadinessItem>()));
+            return true;
         }
 
         var started = _runtime.StartAction(new ResidentWorkflowActionRequest(
             "local_readiness", "starting", false, "wait_for_result"));
         if (!started.Started)
         {
-            return;
+            return false;
         }
 
         Queue(
-            () => LocalReadinessWorkflow.Run(_layout),
-            result => CompleteLocalReadiness(result, started.AttemptId),
+            _localReadinessCheck,
+            result =>
+            {
+                CompleteLocalReadiness(result, started.AttemptId);
+                onCompleted?.Invoke(result);
+            },
             exception =>
             {
                 _captureFailure(exception, "local_readiness", "check_failed");
@@ -117,6 +150,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                     ResidentWorkflowPublication.Completed("local_readiness_check_failed", "retry_local_readiness"),
                     started.AttemptId);
             });
+        return true;
     }
 
     public void StartInitialSetup()
@@ -126,16 +160,66 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             return;
         }
 
+        if (_requireResidentReadiness
+            && Volatile.Read(ref _residentStarted) != 0
+            && !string.Equals(_runtime.State.LocalReadinessStatus, "passed", StringComparison.Ordinal))
+        {
+            if (!StartLocalReadiness(result =>
+                {
+                    if (result.Succeeded)
+                    {
+                        StartInitialSetupAfterReadiness();
+                    }
+                    else
+                    {
+                        Interlocked.Exchange(ref _setupScheduled, 0);
+                    }
+                }))
+            {
+                Interlocked.Exchange(ref _setupScheduled, 0);
+            }
+
+            return;
+        }
+
+        StartInitialSetupAfterReadiness();
+    }
+
+    private void StartInitialSetupAfterReadiness()
+    {
         StartSetup(
             () => FirstRunSetupBackgroundRunner.Run(
                 _layout,
                 _setupControllerFactory,
                 exception => _captureFailure(exception, "first_run_setup", "setup_failed")),
-            resetScheduled: true);
+            resetScheduled: true,
+            initialStage: "checking_setup_status",
+            userInputRequired: false,
+            nextAction: "wait_for_result");
     }
 
     public void StartFocusedSetup()
     {
+        if (_requireResidentReadiness
+            && Volatile.Read(ref _residentStarted) != 0
+            && !string.Equals(_runtime.State.LocalReadinessStatus, "passed", StringComparison.Ordinal))
+        {
+            StartLocalReadiness(result =>
+            {
+                if (result.Succeeded)
+                {
+                    StartFocusedSetupAfterReadiness();
+                }
+            });
+            return;
+        }
+
+        StartFocusedSetupAfterReadiness();
+    }
+
+    private void StartFocusedSetupAfterReadiness()
+    {
+        _publishOperationEvent("focused_setup", "requested", "running", "none", 0);
         StartSetup(
             () =>
             {
@@ -156,10 +240,32 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                         new Dictionary<string, string>());
                 }
             },
-            resetScheduled: false);
+            resetScheduled: false,
+            initialStage: "awaiting_user_focus",
+            userInputRequired: true,
+            nextAction: "focus_message_composer");
     }
 
     public void RetryPromptProtection()
+    {
+        if (_requireResidentReadiness
+            && Volatile.Read(ref _residentStarted) != 0
+            && !string.Equals(_runtime.State.LocalReadinessStatus, "passed", StringComparison.Ordinal))
+        {
+            StartLocalReadiness(result =>
+            {
+                if (result.Succeeded)
+                {
+                    RetryPromptProtectionAfterReadiness();
+                }
+            });
+            return;
+        }
+
+        RetryPromptProtectionAfterReadiness();
+    }
+
+    private void RetryPromptProtectionAfterReadiness()
     {
         if (Interlocked.Exchange(ref _workflowInProgress, 1) != 0)
         {
@@ -205,7 +311,8 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                 try
                 {
                     activated = runtimeSet is not null
-                        && _runtime.Reload(runtimeSet, started.AttemptId);
+                        && _runtime.Reload(runtimeSet, started.AttemptId)
+                        && IsPublishedProtectionActive();
                 }
                 catch (Exception exception)
                 {
@@ -281,10 +388,16 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         }
     }
 
-    private void StartSetup(Func<FirstRunSetupResult?> worker, bool resetScheduled)
+    private void StartSetup(
+        Func<FirstRunSetupResult?> worker,
+        bool resetScheduled,
+        string initialStage,
+        bool userInputRequired,
+        string nextAction)
     {
         if (Interlocked.Exchange(ref _workflowInProgress, 1) != 0)
         {
+            _publishOperationEvent("focused_setup", "request_rejected", "failed", "operation_already_running", 0);
             return;
         }
 
@@ -292,9 +405,9 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         var attemptId = action.Status == "running"
             ? action.AttemptId
             : _runtime.StartAction(new ResidentWorkflowActionRequest(
-                "first_run_setup", "starting", false, "focus_message_composer")).AttemptId;
+                "first_run_setup", "starting", userInputRequired, nextAction)).AttemptId;
         if (attemptId <= 0 || !_runtime.Publish(
-                ResidentWorkflowPublication.ForStage("awaiting_user_focus", true, "focus_message_composer"),
+                ResidentWorkflowPublication.ForStage(initialStage, userInputRequired, nextAction),
                 attemptId))
         {
             if (resetScheduled)
@@ -303,9 +416,12 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             }
 
             Interlocked.Exchange(ref _workflowInProgress, 0);
+            _publishOperationEvent("focused_setup", "start_failed", "failed", "attempt_not_started", attemptId);
 
             return;
         }
+
+        _publishOperationEvent("focused_setup", initialStage, "running", nextAction, attemptId);
 
         Queue(
             worker,
@@ -379,6 +495,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                         : _retryRuntimeFactory();
                     candidateActivated = candidate is not null
                         && _runtime.Reload(candidate, operationalAttemptId);
+                    candidateActivated = candidateActivated && IsPublishedProtectionActive();
                     if (!candidateActivated || !CommitProfiles(result))
                     {
                         activationFailed = true;
@@ -427,6 +544,17 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             noticeIsError = result?.Code != "setup_cancelled";
         }
 
+        _publishOperationEvent(
+            "focused_setup",
+            success
+                ? "protected"
+                : result?.Code == "setup_cancelled"
+                    ? "cancelled"
+                    : activationFailed ? "activation_failed" : "verification_failed",
+            success ? "succeeded" : result?.Code == "setup_cancelled" ? "cancelled" : "failed",
+            activationFailed ? "resident_not_protected_after_reload" : result?.Code ?? "no_result",
+            operationalAttemptId);
+
         if (!success)
         {
             _runtime.Publish(
@@ -443,6 +571,17 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         }
 
         SetupCompleted?.Invoke(result);
+    }
+
+    private bool IsPublishedProtectionActive()
+    {
+        var state = _runtime.State;
+        return state.Enabled
+            && state.NativeSubmitEnabled
+            && state.ComposerProtected
+            && !state.SetupRequired
+            && string.Equals(state.NativeSubmitStatus, OsInteractionStatusIds.Protected, StringComparison.Ordinal)
+            && string.Equals(state.ReadinessStatus, OsInteractionStatusIds.Protected, StringComparison.Ordinal);
     }
 
     private void CompleteLocalReadiness(LocalReadinessResult result, long attemptId)

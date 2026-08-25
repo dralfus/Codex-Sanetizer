@@ -2780,8 +2780,126 @@ public partial class SanitizerTests
         Assert.That(source, Does.Contain("Verify active app"));
         Assert.That(source, Does.Contain("VerifyFocusedProfile"));
         Assert.That(source, Does.Not.Contain("Protect this app:"));
-        Assert.That(source, Does.Contain("Waiting for focus:"));
+        Assert.That(source, Does.Contain("Stage: waiting for focus"));
+        Assert.That(source, Does.Contain("Result: pending"));
+        Assert.That(source, Does.Contain("Finish and activate"));
         Assert.That(source, Does.Not.Contain("Select Codex Desktop or ChatGPT Desktop before verification."));
+    }
+
+    [Test]
+    public void SetupVerificationCountdown_ReportsRemainingSecondsUntilZero()
+    {
+        var countdown = new SetupVerificationCountdown(TimeSpan.FromSeconds(10));
+
+        Assert.That(countdown.TotalSeconds, Is.EqualTo(10));
+        Assert.That(countdown.Start(), Is.EqualTo(10));
+        Assert.That(countdown.Tick(), Is.EqualTo(9));
+
+        for (var expected = 8; expected >= 0; expected--)
+        {
+            Assert.That(countdown.Tick(), Is.EqualTo(expected));
+        }
+
+        Assert.That(countdown.Tick(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void FirstRunSetupController_LateCountdownTickCannotReopenCompletedAttempt()
+    {
+        var progress = new List<PromptProtectionSetupProgress>();
+        var controller = new FirstRunSetupController(
+            new StaticFirstRunProfileVerifier(CreateVerifiedChatGptDiscovery()),
+            (_, _, _) => throw new InvalidOperationException("Setup window should not be shown."),
+            setupProgressPublisher: progress.Add);
+
+        controller.PublishSetupProgress(
+            "waiting_for_focus",
+            "focus_message_composer",
+            binding: "Ctrl+Enter",
+            remainingSeconds: 10);
+        var attemptId = progress[^1].AttemptId;
+
+        controller.PublishSetupProgress(
+            "waiting_for_focus",
+            "focus_message_composer",
+            binding: "Ctrl+Enter",
+            remainingSeconds: 9);
+
+        Assert.That(progress[^1].AttemptId, Is.EqualTo(attemptId),
+            "Countdown updates must remain in the attempt that started them.");
+
+        controller.PublishSetupProgress(
+            "verification_failed",
+            "retry_setup",
+            binding: "Ctrl+Enter");
+        controller.PublishSetupProgress(
+            "waiting_for_focus",
+            "focus_message_composer",
+            binding: "Ctrl+Enter",
+            remainingSeconds: 8);
+
+        Assert.That(progress[^1].Status, Is.EqualTo("verification_failed"),
+            "A late timer tick must not reopen a terminal setup attempt.");
+
+        var retryAttemptId = controller.BeginSetupVerification("Ctrl+Enter", remainingSeconds: 10);
+
+        Assert.That(retryAttemptId, Is.GreaterThan(attemptId));
+        Assert.That(progress[^1].Status, Is.EqualTo("waiting_for_focus"));
+        Assert.That(progress[^1].AttemptId, Is.EqualTo(retryAttemptId));
+    }
+
+    [Test]
+    public void FocusedComposerVerifier_PreservesSafeDiscoveryDiagnosticsWhenSurfaceIsNotRecognized()
+    {
+        var discovery = TextSurfaceDiscoveryResult.Failure(
+            "unsupported_surface",
+            new Dictionary<string, string>
+            {
+                ["profile_match_count"] = "0",
+                ["element_control_type"] = "Group",
+                ["element_framework_id"] = "Chrome"
+            });
+        var verifier = new FocusedComposerFirstRunProfileVerifier(
+            TimeSpan.Zero,
+            () => discovery);
+
+        var result = verifier.VerifyFocused("Ctrl+Enter", "Enter");
+
+        Assert.That(result.Code, Is.EqualTo("focused_surface_unverified"));
+        Assert.That(result.Diagnostics["surface_status"], Is.EqualTo("unsupported_surface"));
+        Assert.That(result.Diagnostics["profile_match_count"], Is.EqualTo("0"));
+        Assert.That(result.Diagnostics["element_control_type"], Is.EqualTo("Group"));
+    }
+
+    [Test]
+    public void SetupFailureMessageReadsPrefixedSurfaceDiagnosticsAndSpecificReason()
+    {
+        var result = new FirstRunSetupResult(
+            Succeeded: false,
+            Code: "focused_profile_verification_failed",
+            State: new FirstRunSetupState(true, new[] { "chatgpt-desktop" }, "pending", false, false),
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["profile_id"] = "chatgpt-desktop",
+                ["verification_result"] = OsInteractionStatusIds.SurfaceUnverified,
+                ["compatibility"] = "fingerprint_incomplete",
+                ["surface.profile_match_count"] = "1",
+                ["surface.element_control_type"] = "ControlType.Group",
+                ["surface.element_framework_id"] = "Chrome",
+                ["surface.has_keyboard_focus"] = "true",
+                ["surface.can_read_text_pattern"] = "true",
+                ["surface.application_version_status"] = "unavailable",
+                ["surface.focus_resolution_stage"] = "foreground_descendant_fallback"
+            });
+
+        var message = FirstRunSetupForm.BuildVerificationFailureMessage(result);
+
+        Assert.That(message, Does.Contain("Reason: fingerprint_incomplete"));
+        Assert.That(message, Does.Contain("Profile: chatgpt-desktop"));
+        Assert.That(message, Does.Contain("Focused control: ControlType.Group"));
+        Assert.That(message, Does.Contain("Framework: Chrome"));
+        Assert.That(message, Does.Contain("Application version access: unavailable"));
+        Assert.That(message, Does.Contain("Focus resolution: foreground_descendant_fallback"));
     }
 
     [Test]
@@ -2888,6 +3006,7 @@ public partial class SanitizerTests
             Assert.That(result.Succeeded, Is.False);
             Assert.That(result.Code, Is.EqualTo("focused_profile_verification_failed"));
             Assert.That(result.Diagnostics["verification_exception"], Is.EqualTo("true"));
+            Assert.That(result.Diagnostics["exception_type"], Does.Contain("InvalidOperationException"));
         }
         finally
         {
@@ -5060,6 +5179,82 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(hook.LastClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
         Assert.That(chatGptCalls, Is.EqualTo(1));
         Assert.That(controller.State.LastProfileId, Is.EqualTo("chatgpt-desktop"));
+    }
+
+    [Test]
+    public void TrayProtectionController_UsesPersistedActiveTargetReadinessWhenOtherProfileRequiresSetup()
+    {
+        var tempDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var layout = DefaultStorageLayout.Create(tempDirectory);
+            Assert.That(ActivePromptProtectionTargetStore.Save(layout, "chatgpt-desktop").Succeeded, Is.True);
+            var hook = new FakeNativeSubmitHookHost();
+            var codexProfile = CreateProtectedProfile() with
+            {
+                ProfileId = "codex-desktop",
+                BindingSource = "not_verified",
+                SubmitBinding = null,
+                NewlineBinding = null,
+                CapabilityStatus = OsInteractionStatusIds.BindingUnknown
+            };
+            var chatGptProfile = CreateVerifiedChatGptProfile();
+            var runtimes = new[]
+            {
+                NativeSubmitRuntime.CreateTest(
+                    hook,
+                    new NativeSubmitInterceptionController(codexProfile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+                    () => CreateSubmittedResult("codex-desktop"),
+                    codexProfile),
+                NativeSubmitRuntime.CreateTest(
+                    hook,
+                    new NativeSubmitInterceptionController(
+                        chatGptProfile,
+                        new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                        activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery),
+                    () => CreateSubmittedResult("chatgpt-desktop"),
+                    chatGptProfile)
+            };
+            var controller = TrayProtectionController.CreateTest(
+                new FakeTrayHotkeyHost(),
+                () => throw new InvalidOperationException("Manual scan should not run."),
+                hook,
+                runtimes[0].Controller,
+                runtimes[0].Profile,
+                storageLayout: layout,
+                nativeSubmitRuntimes: runtimes,
+                activeSurfaceDiscovery: CreateVerifiedChatGptDiscovery);
+
+            Assert.That(controller.Start(), Is.True);
+            Assert.That(controller.State.SetupRequired, Is.False);
+            Assert.That(controller.State.NativeSubmitEnabled, Is.True);
+            Assert.That(controller.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+
+            controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "waiting_for_focus", "focus_message_composer", AttemptId: 1));
+            controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "composer_recognized", "wait_for_verification", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 1));
+            controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "verifying_binding", "wait_for_verification", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 1));
+            controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "activating_protection", "wait_for_verification", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 1));
+            controller.PublishSetupVerificationProgress(new PromptProtectionSetupProgress(
+                "activation_failed", "retry_setup", "chatgpt-desktop", "Ctrl+Enter", AttemptId: 1));
+            Assert.That(controller.State.SetupVerificationStatus, Is.EqualTo("activation_failed"));
+
+            controller.PublishPromptProtectionRetryStarted();
+            controller.PublishPromptProtectionRetrySucceeded();
+
+            Assert.That(controller.State.SetupVerificationStatus, Is.EqualTo("protected"));
+            Assert.That(controller.State.SetupVerificationAction, Is.EqualTo("none"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDirectory))
+            {
+                Directory.Delete(tempDirectory, recursive: true);
+            }
+        }
     }
 
     [Test]

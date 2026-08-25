@@ -2924,3 +2924,63 @@ operational journal. Verification: `1759/1759`, `--self-test`,
 `--product-smoke`, and all two-pass reference-composer scenarios passed with
 raw-free traces and cleanup. `reference_proof_recorded` remains false only
 because the installed build does not match the source build.
+
+## 350. Unify OpenAI Desktop compatibility identity and separate runtime target evidence
+
+**What to build:** Treat the installed Store application as one stable OpenAI
+Desktop product identity even when its package is `OpenAI.Codex`, executable is
+`ChatGPT.exe`, window is branded `Codex`, and helper process is `codex.exe`.
+Persist only installation/surface compatibility evidence. Keep process-instance,
+window-handle and UIA runtime-id fingerprints transient and scoped to the
+current protected Send target.
+
+**Blocked by:** 323. Make compatibility fingerprints explicitly opaque; 324.
+Centralize the verified discovery fixture; 346. Publish immutable resident
+admission evidence before native callbacks; 349. Complete the resident
+setup/recovery race proof.
+
+**State owner:** `OpenAiDesktopIdentity` owns stable installation and composer
+shape evidence. `TransientTargetFingerprint` and the verified Windows surface
+adapter own the active process/window/UIA element identity for one resident
+target. The persisted profile does not own or retain transient target state.
+
+**Fail-closed state:** Missing or malformed stable compatibility evidence keeps
+the profile `surface_unverified`. Missing, stale or changed transient target
+evidence blocks the current write/replay operation, but a normal window or UIA
+element recreation does not invalidate the persisted installation identity.
+
+**Allowed transitions:** `discovered installation -> verified stable identity
+-> persisted profile`; independently, each Send uses `captured transient target
+-> revalidated target -> write/replay | blocked`. A new window creates a new
+transient target without rewriting stable compatibility evidence. An actual
+application version or composer-shape change requires re-verification.
+
+**Deterministic proof:** Use native-shaped raw-free diagnostics and synthetic
+runtime target changes. Prove that mixed Codex/ChatGPT branding normalizes to
+one product identity, runtime IDs satisfy the 64-character opaque fingerprint
+contract, changing only window/element identity preserves compatibility, legacy
+short runtime hashes do not poison stable setup, and transient evidence is not
+persisted. No timers, live desktop focus or cloud access are required.
+
+- [x] Add one `OpenAiDesktopIdentity` compatibility model for the installed
+      Codex/ChatGPT Store application aliases.
+- [x] Add a separate `TransientTargetFingerprint` for process-instance,
+      window and focused UIA element evidence.
+- [x] Remove window handle and focused runtime ID from persisted compatibility
+      comparison and verification IDs.
+- [x] Generate full 64-character runtime fingerprints and retain same-target
+      checks before write/replay.
+- [x] Preserve fail-closed loading of legacy profiles and prevent the
+      `CodexRedactionGate` process from matching the OpenAI Desktop identity.
+- [x] Pass focused tests, the full suite, `--self-test`, `--product-smoke` and
+      a warning-free Release build.
+
+**Completed (2026-08-23):** Added `OpenAiDesktopIdentity` and
+`TransientTargetFingerprint`, normalized exact `Codex`/`ChatGPT` process aliases
+to the stable `openai-desktop` identity, and separated persisted compatibility
+from active target evidence. The original `fingerprint_incomplete` path caused
+by a 16-character UIA runtime hash is covered by regression tests. Verification:
+`1782/1782`, `--self-test`, `--product-smoke`, and Release build with zero
+warnings/errors. Manual-test release `0.1.20260823.t1841` was published to
+`artifacts/publish` and launched as the only resident tray process on
+2026-08-23.

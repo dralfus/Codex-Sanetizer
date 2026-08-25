@@ -185,34 +185,27 @@ public sealed record SurfaceCompatibilityEvidence(
     OpaqueFingerprint PackageFullNameFingerprint,
     OpaqueFingerprint ExecutableNameFingerprint,
     OpaqueFingerprint ProcessNameFingerprint,
-    OpaqueFingerprint WindowIdentityFingerprint,
+    [property: JsonIgnore] OpaqueFingerprint WindowIdentityFingerprint,
     OpaqueFingerprint WindowClassFingerprint,
     OpaqueFingerprint FrameworkFingerprint,
     OpaqueFingerprint ControlTypeFingerprint,
     OpaqueFingerprint ComposerClassFingerprint,
-    OpaqueFingerprint FocusedElementFingerprint,
+    [property: JsonIgnore] OpaqueFingerprint FocusedElementFingerprint,
     OpaqueFingerprint VerificationFingerprint,
     DateTimeOffset VerifiedAtUtc,
     string SubmitBinding = "unknown",
     string NewlineBinding = "unknown",
     OpaqueFingerprint? SendControlEvidenceFingerprint = null)
 {
+    public OpenAiDesktopIdentity? DesktopIdentity { get; init; }
+
+    [JsonIgnore]
+    public TransientTargetFingerprint? VerifiedTargetFingerprint { get; init; }
+
     [JsonIgnore]
     public string VerificationId => FingerprintValue(VerificationFingerprint);
 
-    public bool IsComplete =>
-        ApplicationIdentityFingerprint.IsValid
-        && ApplicationVersionFingerprint.IsValid
-        && string.Equals(ApplicationVersionStatus, "available", StringComparison.Ordinal)
-        && PackageFullNameFingerprint.IsValid
-        && ExecutableNameFingerprint.IsValid
-        && ProcessNameFingerprint.IsValid
-        && WindowIdentityFingerprint.IsValid
-        && WindowClassFingerprint.IsValid
-        && FrameworkFingerprint.IsValid
-        && ControlTypeFingerprint.IsValid
-        && ComposerClassFingerprint.IsValid
-        && FocusedElementFingerprint.IsValid
+    public bool IsComplete => EffectiveDesktopIdentity?.IsComplete == true
         && VerificationFingerprint.IsValid
         && SendControlEvidenceFingerprint?.IsValid == true;
 
@@ -228,27 +221,41 @@ public sealed record SurfaceCompatibilityEvidence(
 
     public IReadOnlyDictionary<string, string> ToComparisonDiagnostics()
     {
-        return new Dictionary<string, string>(StringComparer.Ordinal)
+        var diagnostics = EffectiveDesktopIdentity is { } identity
+            ? new Dictionary<string, string>(identity.ToComparisonDiagnostics(), StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+        diagnostics["submit_binding"] = SubmitBinding;
+        diagnostics["newline_binding"] = NewlineBinding;
+        diagnostics["send_control_evidence_hash"] = SendControlEvidenceFingerprint is { } sendControl
+            ? FingerprintValue(sendControl)
+            : string.Empty;
+        diagnostics["verification_id"] = FingerprintValue(VerificationFingerprint);
+        return diagnostics;
+    }
+
+    [JsonIgnore]
+    private OpenAiDesktopIdentity? EffectiveDesktopIdentity
+    {
+        get
         {
-            ["application_identity_hash"] = FingerprintValue(ApplicationIdentityFingerprint),
-            ["application_version_hash"] = FingerprintValue(ApplicationVersionFingerprint),
-            ["application_version_status"] = ApplicationVersionStatus ?? "unknown",
-            ["package_full_name_hash"] = FingerprintValue(PackageFullNameFingerprint),
-            ["executable_name_hash"] = FingerprintValue(ExecutableNameFingerprint),
-            ["process_name_hash"] = FingerprintValue(ProcessNameFingerprint),
-            ["window_identity_hash"] = FingerprintValue(WindowIdentityFingerprint),
-            ["window_class_hash"] = FingerprintValue(WindowClassFingerprint),
-            ["element_framework_id"] = FingerprintValue(FrameworkFingerprint),
-            ["element_control_type"] = FingerprintValue(ControlTypeFingerprint),
-            ["composer_class_hash"] = FingerprintValue(ComposerClassFingerprint),
-            ["focused_element_hash"] = FingerprintValue(FocusedElementFingerprint),
-            ["submit_binding"] = SubmitBinding,
-            ["newline_binding"] = NewlineBinding,
-            ["send_control_evidence_hash"] = SendControlEvidenceFingerprint is { } sendControl
-                ? FingerprintValue(sendControl)
-                : string.Empty,
-            ["verification_id"] = FingerprintValue(VerificationFingerprint)
-        };
+            if (DesktopIdentity is not null)
+            {
+                return DesktopIdentity;
+            }
+
+            var legacy = new OpenAiDesktopIdentity(
+                ApplicationIdentityFingerprint,
+                ApplicationVersionFingerprint,
+                ApplicationVersionStatus ?? "unknown",
+                PackageFullNameFingerprint,
+                ExecutableNameFingerprint,
+                ProcessNameFingerprint,
+                WindowClassFingerprint,
+                FrameworkFingerprint,
+                ControlTypeFingerprint,
+                ComposerClassFingerprint);
+            return legacy.IsComplete ? legacy : null;
+        }
     }
 
     private static string FingerprintValue(OpaqueFingerprint fingerprint)

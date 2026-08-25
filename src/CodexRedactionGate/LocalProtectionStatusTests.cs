@@ -287,7 +287,8 @@ public sealed class LocalProtectionStatusTests
             ComposerProtected = false,
             SetupVerificationStatus = "waiting_for_focus",
             SetupVerificationAction = "focus_message_composer",
-            SetupVerificationBinding = "Ctrl+Enter"
+            SetupVerificationBinding = "Ctrl+Enter",
+            SetupVerificationRemainingSeconds = 7
         });
         var policyBlocked = LocalProtectionStatusView.Create(ProtectedTrayState() with
         {
@@ -296,7 +297,8 @@ public sealed class LocalProtectionStatusTests
         });
 
         Assert.That(waiting.Rows[1].OperationalState, Is.EqualTo("waiting for focus"));
-        Assert.That(waiting.Rows[1].Consequence, Does.Contain("Focus an OpenAI Desktop message composer"));
+        Assert.That(waiting.Rows[1].Consequence, Does.Contain("Focus the OpenAI Desktop message composer"));
+        Assert.That(waiting.Rows[1].Consequence, Does.Contain("7 seconds remaining"));
         Assert.That(policyBlocked.Rows[1].OperationalState, Is.EqualTo("Send blocked by policy"));
         Assert.That(policyBlocked.Rows[1].Consequence, Does.Contain("contact the administrator"));
     }
