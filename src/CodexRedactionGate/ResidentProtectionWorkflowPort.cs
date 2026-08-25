@@ -166,6 +166,8 @@ internal interface IResidentProtectionWorkflowPort
 
     OperationalActionState OperationalAction { get; }
 
+    bool IsNativeSubmitHookReady { get; }
+
     bool Start();
 
     void Stop();

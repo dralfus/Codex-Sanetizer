@@ -69,6 +69,21 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             _runtime.EnableResidentReadinessAdmission();
         }
         var started = _runtime.Start();
+        if (started && startInitialSetup && !_runtime.IsNativeSubmitHookReady)
+        {
+            try
+            {
+                var runtimeSet = _retryRuntimeFactory();
+                started = runtimeSet is not null
+                    && _runtime.Reload(runtimeSet);
+            }
+            catch (Exception exception)
+            {
+                _captureFailure(exception, "resident_start", "runtime_restore_failed");
+                started = false;
+            }
+        }
+
         Volatile.Write(ref _residentStarted, started ? 1 : 0);
         if (started && startInitialSetup)
         {
@@ -118,9 +133,12 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         StartLocalReadiness(onCompleted: null);
     }
 
-    private bool StartLocalReadiness(Action<LocalReadinessResult>? onCompleted)
+    private bool StartLocalReadiness(
+        Action<LocalReadinessResult>? onCompleted,
+        bool force = false)
     {
-        if (string.Equals(_runtime.State.LocalReadinessStatus, "passed", StringComparison.Ordinal))
+        if (!force
+            && string.Equals(_runtime.State.LocalReadinessStatus, "passed", StringComparison.Ordinal))
         {
             onCompleted?.Invoke(new LocalReadinessResult(
                 true,
@@ -161,8 +179,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         }
 
         if (_requireResidentReadiness
-            && Volatile.Read(ref _residentStarted) != 0
-            && !string.Equals(_runtime.State.LocalReadinessStatus, "passed", StringComparison.Ordinal))
+            && Volatile.Read(ref _residentStarted) != 0)
         {
             if (!StartLocalReadiness(result =>
                 {
@@ -174,7 +191,8 @@ internal sealed class ResidentProtectionWorkflowCoordinator
                     {
                         Interlocked.Exchange(ref _setupScheduled, 0);
                     }
-                }))
+                },
+                force: true))
             {
                 Interlocked.Exchange(ref _setupScheduled, 0);
             }

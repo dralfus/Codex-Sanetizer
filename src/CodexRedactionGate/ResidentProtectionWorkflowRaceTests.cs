@@ -75,6 +75,15 @@ public partial class SanitizerTests
             Assert.That(runtime.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
             Assert.That(runtime.State.ReadinessStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
             Assert.That(runtime.State.ComposerProtected, Is.True);
+
+            order.Clear();
+            protection.Stop();
+
+            Assert.That(coordinator.StartResident(), Is.True);
+            Assert.That(order, Is.EqualTo(new[] { "readiness", "setup" }));
+            Assert.That(runtime.State.NativeSubmitEnabled, Is.True);
+            Assert.That(runtime.State.NativeSubmitStatus, Is.EqualTo(OsInteractionStatusIds.Protected));
+            Assert.That(runtime.State.ComposerProtected, Is.True);
         }
         finally
         {
