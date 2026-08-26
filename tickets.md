@@ -3049,12 +3049,21 @@ contract.
 **Evidence target:** `locally_verified`, bound to the current commit and schema
 version. Live product evidence is not required for this process-only ticket.
 
-- [ ] Add the typed evidence-state vocabulary and raw-free record schema.
-- [ ] Add a validator usable from local development and release smoke.
-- [ ] Add a ticket template requiring state owner, fail-closed state, allowed
+- [x] Add the typed evidence-state vocabulary and raw-free record schema.
+- [x] Add a validator usable from local development and release smoke.
+- [x] Add a ticket template requiring state owner, fail-closed state, allowed
       transitions, red reproduction, highest seam, and evidence target.
-- [ ] Update status/reporting vocabulary so `implemented` is not rendered as
+- [x] Update status/reporting vocabulary so `implemented` is not rendered as
       `fixed` or `released`.
+
+**Completed (2026-08-26):** Added the typed evidence-state vocabulary,
+raw-free build-bound record validator, snake_case JSON serialization, and the
+`--evidence-contract-smoke` local command. `ReleaseReadinessSmoke` now includes
+the contract smoke result. Tests prove adjacent-only transitions, premature
+`fixed` rejection, build mismatch rejection, unsafe-field rejection, stable
+serialization, and SDK informational versions containing `+`. Verification:
+the focused contract tests pass (`8/8`), the CLI contract smoke passes, and the
+full suite is the final gate for this slice.
 
 ## 352. Add a resident-owned installed keyboard protected-Send canary
 

@@ -151,7 +151,7 @@ Desktop composer.
 
 | Очерёдность | Тикет | Результат | Зависимости |
 |---:|---|---|---|
-| 1 | **351** `[>]` | Единая шкала `proposed -> reproduced_red -> implemented -> locally_verified -> live_verified -> released`; слово fixed запрещено без требуемого proof. | Нет |
+| 1 | **351** `[x]` | Единая шкала `proposed -> reproduced_red -> implemented -> locally_verified -> live_verified -> released`; validator и CLI smoke запрещают преждевременный fixed claim. | Нет |
 | 2 | **352** `[ ]` | Resident-owned canary проходит реальный hook/UIA/overlay/write/replay и связывает raw-free результат с точной installed build. Сначала фиксирует текущий красный сценарий. | 351 |
 | 3 | **353** `[ ]` | `ProtectedComposerSession` скрывает target-scoped UIA/STA/focus/read/write/verify/replay за компактным контрактом. | 352 |
 | 4 | **354** `[ ]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. | 353 |
@@ -196,13 +196,12 @@ production state machine.
 
 ## Что делать прямо сейчас
 
-1. Реализовать 351: формальный evidence contract и его validator.
-2. Реализовать 352 на текущем коде и получить сохранённый красный результат
+1. Реализовать 352 на текущем коде и получить сохранённый красный результат
    реального installed keyboard пути.
-3. Выполнить 353-356 маленькими последовательными срезами; после каждого
+2. Выполнить 353-356 маленькими последовательными срезами; после каждого
    запускать нижние уровни доказательств, а после 356 превратить тот же canary в
    зелёный.
-4. Выполнить 357-358, собрать совпадающий installer и только затем повторно
+3. Выполнить 357-358, собрать совпадающий installer и только затем повторно
    закрыть 348 и возобновить расширение file ingress.
 
 ## Границы, которые нельзя размывать

@@ -1,0 +1,144 @@
+using System;
+using System.Text.Json;
+using NUnit.Framework;
+
+namespace CodexRedactionGate;
+
+[TestFixture]
+public sealed class DevelopmentEvidenceContractTests
+{
+    [Test]
+    public void EvidenceStateTokens_AreStableAndRoundTrip()
+    {
+        Assert.That(DevelopmentEvidenceStateTokens.ToToken(DevelopmentEvidenceState.ReproducedRed), Is.EqualTo("reproduced_red"));
+        Assert.That(
+            DevelopmentEvidenceStateTokens.TryParse("live_verified", out var state),
+            Is.True);
+        Assert.That(state, Is.EqualTo(DevelopmentEvidenceState.LiveVerified));
+        Assert.That(DevelopmentEvidenceStateTokens.TryParse("fixed", out _), Is.False);
+    }
+
+    [Test]
+    public void EvidenceStateTransitions_AllowOnlyTheNextEvidenceLevel()
+    {
+        Assert.That(
+            DevelopmentEvidenceStateTokens.TryAdvance(
+                DevelopmentEvidenceState.Implemented,
+                DevelopmentEvidenceState.LocallyVerified),
+            Is.True);
+        Assert.That(
+            DevelopmentEvidenceStateTokens.TryAdvance(
+                DevelopmentEvidenceState.Implemented,
+                DevelopmentEvidenceState.LiveVerified),
+            Is.False);
+        Assert.That(
+            DevelopmentEvidenceStateTokens.TryAdvance(
+                DevelopmentEvidenceState.LiveVerified,
+                DevelopmentEvidenceState.Implemented),
+            Is.False);
+    }
+
+    [Test]
+    public void Validator_AcceptsAnImplementedRecordWithMatchingBuildIdentity()
+    {
+        var result = ProtectedSendEvidenceValidator.Validate(
+            CreateRecord(DevelopmentEvidenceState.Implemented),
+            BuildVersion.Current,
+            SourceCommit,
+            DevelopmentEvidenceState.Implemented);
+
+        Assert.That(result.Valid, Is.True);
+        Assert.That(result.Code, Is.EqualTo("valid"));
+    }
+
+    [Test]
+    public void Validator_RejectsFixedClaimBeforeLiveVerification()
+    {
+        var result = ProtectedSendEvidenceValidator.Validate(
+            CreateRecord(DevelopmentEvidenceState.Implemented) with { Claim = "fixed" },
+            BuildVersion.Current,
+            SourceCommit,
+            DevelopmentEvidenceState.Implemented);
+
+        Assert.That(result.Valid, Is.False);
+        Assert.That(result.Code, Is.EqualTo("fixed_claim_requires_live_verified"));
+    }
+
+    [Test]
+    public void Validator_RejectsMismatchedBuildIdentity()
+    {
+        var result = ProtectedSendEvidenceValidator.Validate(
+            CreateRecord(DevelopmentEvidenceState.LiveVerified),
+            "0.1.other-build",
+            SourceCommit,
+            DevelopmentEvidenceState.LiveVerified);
+
+        Assert.That(result.Valid, Is.False);
+        Assert.That(result.Code, Is.EqualTo("evidence_build_mismatch"));
+    }
+
+    [Test]
+    public void Validator_AcceptsSdkInformationalVersionWithCommitSuffix()
+    {
+        var record = CreateRecord(DevelopmentEvidenceState.Implemented) with
+        {
+            BuildVersion = "1.0.0+0123456789abcdef"
+        };
+
+        var result = ProtectedSendEvidenceValidator.Validate(
+            record,
+            record.BuildVersion,
+            SourceCommit,
+            DevelopmentEvidenceState.Implemented);
+
+        Assert.That(result.Valid, Is.True);
+    }
+
+    [Test]
+    public void Validator_RejectsRawOrUnsafeEvidenceFields()
+    {
+        var result = ProtectedSendEvidenceValidator.Validate(
+            CreateRecord(DevelopmentEvidenceState.Implemented) with
+            {
+                ReproductionId = "prompt=secret value"
+            },
+            BuildVersion.Current,
+            SourceCommit,
+            DevelopmentEvidenceState.Implemented);
+
+        Assert.That(result.Valid, Is.False);
+        Assert.That(result.Code, Is.EqualTo("invalid_reproduction_id"));
+    }
+
+    [Test]
+    public void EvidenceSerialization_UsesTokensAndContainsNoPromptField()
+    {
+        var json = ProtectedSendEvidenceValidator.Serialize(
+            CreateRecord(DevelopmentEvidenceState.LocallyVerified));
+
+        Assert.That(json, Does.Contain("\"state\":\"locally_verified\""));
+        Assert.That(json, Does.Not.Contain("raw_prompt"));
+        Assert.That(json, Does.Not.Contain("original_value"));
+        Assert.That(json, Does.Not.Contain("secret value"));
+        Assert.That(JsonDocument.Parse(json).RootElement.GetProperty("claim").GetString(), Is.EqualTo("unverified"));
+    }
+
+    private const string SourceCommit = "0123456789abcdef0123456789abcdef01234567";
+    private const string Hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    private static ProtectedSendEvidenceRecord CreateRecord(DevelopmentEvidenceState state)
+    {
+        return new ProtectedSendEvidenceRecord(
+            TicketId: "ticket_351",
+            BehaviorId: "protected_send_evidence",
+            State: state,
+            ReproductionId: "repro_protected_send",
+            HighestRequiredSeam: "deterministic_transaction",
+            BuildVersion: BuildVersion.Current,
+            SourceCommit: SourceCommit,
+            ExecutableSha256: Hash,
+            InstallerIdentity: "installer_candidate",
+            CompatibilityFingerprint: Hash,
+            SubmitBinding: "ctrl_enter");
+    }
+}

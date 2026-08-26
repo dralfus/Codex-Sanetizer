@@ -6579,6 +6579,19 @@ public class CliTests
     }
 
     [Test]
+    public void Main_EvidenceContractSmoke_ReturnsRawFreeContractResult()
+    {
+        var (exitCode, stdout, stderr) = CaptureProgramOutput(() =>
+            Program.Main(new[] { "--evidence-contract-smoke" }, TestSanitizers.Create));
+
+        Assert.That(exitCode, Is.EqualTo(0));
+        Assert.That(stderr, Is.Empty);
+        Assert.That(stdout, Does.Contain("evidence_contract: passed"));
+        Assert.That(stdout, Does.Contain("evidence_state_model: proposed,reproduced_red,implemented,locally_verified,live_verified,released"));
+        Assert.That(stdout, Does.Contain("raw_free: true"));
+    }
+
+    [Test]
     public void Main_SelfTest_IsolatedFromProductionDpapiFailure()
     {
         var (exitCode, stdout, stderr) = CaptureProgramOutput(() =>
@@ -6698,6 +6711,7 @@ public class CliTests
         Assert.That(stdout, Does.Contain("--tray-app"));
         Assert.That(stdout, Does.Contain("--os-compatibility-matrix"));
         Assert.That(stdout, Does.Contain("--product-smoke"));
+        Assert.That(stdout, Does.Contain("--evidence-contract-smoke"));
         Assert.That(stdout, Does.Contain("--native-profile-verify-delay profile-id submit-binding newline-binding seconds"));
         Assert.That(stdout, Does.Contain("--self-test"));
     }

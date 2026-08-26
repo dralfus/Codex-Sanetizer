@@ -13,7 +13,8 @@ public sealed record ReleaseReadinessSmokeReport(
     bool AttachmentIntakePassed,
     bool GatewayHandoffPassed,
     bool RestorationHandoffPassed,
-    bool OsAdapterDemoPassed);
+    bool OsAdapterDemoPassed,
+    bool EvidenceContractPassed);
 
 public static class ReleaseReadinessSmokeRunner
 {
@@ -36,6 +37,7 @@ public static class ReleaseReadinessSmokeRunner
         var gatewayPassed = GatewayHandoffPass(hmacSecret);
         var restorationPassed = RestorationHandoffPass(hmacSecret);
         var osAdapterPassed = OsAdapterDemoRunner.RunSmoke(hmacSecret).Passed;
+        var evidenceContractPassed = DevelopmentEvidenceContractSmoke.Run();
 
         return new ReleaseReadinessSmokeReport(
             Passed: policyPassed
@@ -44,14 +46,16 @@ public static class ReleaseReadinessSmokeRunner
                 && attachmentPassed
                 && gatewayPassed
                 && restorationPassed
-                && osAdapterPassed,
+                && osAdapterPassed
+                && evidenceContractPassed,
             PolicyActivationAndPrecedencePassed: policyPassed,
             AuditChainVerificationPassed: auditPassed,
             ScannerPackageValidationPassed: scannerPassed,
             AttachmentIntakePassed: attachmentPassed,
             GatewayHandoffPassed: gatewayPassed,
             RestorationHandoffPassed: restorationPassed,
-            OsAdapterDemoPassed: osAdapterPassed);
+            OsAdapterDemoPassed: osAdapterPassed,
+            EvidenceContractPassed: evidenceContractPassed);
     }
 
     private static bool PolicyActivationAndPrecedencePass(string policyDirectory)

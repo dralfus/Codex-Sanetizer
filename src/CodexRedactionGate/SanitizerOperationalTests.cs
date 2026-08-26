@@ -774,6 +774,7 @@ public partial class SanitizerTests
             Assert.That(report.GatewayHandoffPassed, Is.True);
             Assert.That(report.RestorationHandoffPassed, Is.True);
             Assert.That(report.OsAdapterDemoPassed, Is.True);
+            Assert.That(report.EvidenceContractPassed, Is.True);
         }
         finally
         {

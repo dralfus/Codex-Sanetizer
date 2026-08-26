@@ -55,6 +55,12 @@ Run the product smoke:
 dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --product-smoke
 ```
 
+Validate the evidence-state contract used by local and release checks:
+
+```powershell
+dotnet run --project .\src\CodexRedactionGate\CodexRedactionGate.csproj -- --evidence-contract-smoke
+```
+
 Build the installable release:
 
 ```powershell

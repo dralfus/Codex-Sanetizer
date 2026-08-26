@@ -446,6 +446,16 @@ public static class Program
             return RunProductSmoke();
         }
 
+        if (args.Length == 1 && args[0] == "--evidence-contract-smoke")
+        {
+            var passed = DevelopmentEvidenceContractSmoke.Run();
+            Console.WriteLine($"evidence_contract: {(passed ? "passed" : "failed")}");
+            Console.WriteLine(
+                "evidence_state_model: proposed,reproduced_red,implemented,locally_verified,live_verified,released");
+            Console.WriteLine("raw_free: true");
+            return passed ? 0 : 1;
+        }
+
         if (args.Length == 1 && args[0] == "--reference-composer-release-acceptance")
         {
             return RunReferenceComposerReleaseAcceptance(layoutFactory: runtime.LayoutFactory);
@@ -1967,6 +1977,7 @@ public static class Program
         Console.WriteLine("  --os-demo-dry-run \"text\"");
         Console.WriteLine("  --os-demo-smoke");
         Console.WriteLine("  --product-smoke");
+        Console.WriteLine("  --evidence-contract-smoke");
         Console.WriteLine("  --reference-composer-release-acceptance");
         Console.WriteLine("  --native-profiles-status");
         Console.WriteLine("  --native-profile-verify profile-id submit-binding newline-binding");
