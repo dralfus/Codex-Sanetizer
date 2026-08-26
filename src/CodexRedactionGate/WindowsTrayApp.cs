@@ -223,6 +223,10 @@ public static class WindowsTrayApp
         var runtime = runtimeSet?.Runtimes.FirstOrDefault();
         var nativeProfile = runtime?.Profile;
         var activeSurfaceDiscovery = WindowsFocusedComposerDiscovery.CreateDefault();
+        var canaryRunner = new ResidentCanaryProductionRunner(
+            resolvedLayout,
+            activeSurfaceDiscovery,
+            new WindowsConfirmationOverlay());
 
         return new TrayProtectionController(
             settings.Usable
@@ -236,8 +240,12 @@ public static class WindowsTrayApp
             sendControlDiscovery: WindowsSendControlDiscovery.CreateDefault(resolvedLayout),
             nativeSubmitRuntimes: runtimeSet?.Runtimes,
             activeSurfaceDiscovery: activeSurfaceDiscovery.DiscoverActiveSurface,
-            residentRuntimeOwner: residentRuntime.ApplyOnlyResourceOwner,
-            nativeSubmitRuntimeOwner: runtimeSet?.ResourceOwner);
+            residentRuntimeOwner: new ResidentCanaryResourceOwner(
+                residentRuntime.ApplyOnlyResourceOwner,
+                canaryRunner),
+            nativeSubmitRuntimeOwner: runtimeSet?.ResourceOwner,
+            residentCanaryRunner: (runtime, target, arm, traceStage, executionGuard, executionLease) =>
+                canaryRunner.Run(target, arm, traceStage, executionGuard, executionLease));
     }
 
     internal static ResidentProtectionRuntime CreateResidentProtectionRuntime(
@@ -590,6 +598,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
                 [TrayProtectionIntent.OpenSensitiveTerms] = OpenDictionaryManagement,
                 [TrayProtectionIntent.SetupPromptProtection] = VerifyProfilesFromTray,
                 [TrayProtectionIntent.RepairLocalProtection] = RepairLocalProtection,
+                [TrayProtectionIntent.ResidentCanary] = StartResidentCanary,
                 [TrayProtectionIntent.Exit] = Exit
             });
 
@@ -620,6 +629,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         menu.Items.Add(new ToolStripMenuItem("Open local restore", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenLocalRestore)));
         menu.Items.Add(new ToolStripMenuItem("Open sensitive terms", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.OpenSensitiveTerms)));
         menu.Items.Add(new ToolStripMenuItem("Set up prompt protection", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.SetupPromptProtection)));
+        menu.Items.Add(new ToolStripMenuItem("Run resident Send canary", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.ResidentCanary)));
         menu.Items.Add(_repairLocalProtectionItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Exit", null, (_, _) => DispatchTrayIntent(TrayProtectionIntent.Exit)));
@@ -997,6 +1007,12 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         }
     }
 
+    internal void StartResidentCanary()
+    {
+        OpenLocalProtectionStatus();
+        _residentWorkflowCoordinator.StartResidentCanary();
+    }
+
     internal void RefreshProjectFileProtectionStatus()
     {
         _refreshDiagnostics();
@@ -1080,6 +1096,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
         TrayProtectionIntent.OpenLocalRestore => "open_local_restore",
         TrayProtectionIntent.OpenSensitiveTerms => "open_sensitive_terms",
         TrayProtectionIntent.ToggleProtection => "toggle_protection",
+        TrayProtectionIntent.ResidentCanary => "resident_canary",
         TrayProtectionIntent.Exit => "exit",
         _ => "unknown_intent"
     };

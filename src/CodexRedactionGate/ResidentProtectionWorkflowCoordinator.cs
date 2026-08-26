@@ -105,6 +105,12 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             return;
         }
 
+        if (string.Equals(action.ActionKind, "resident_canary", StringComparison.Ordinal))
+        {
+            _runtime.CancelResidentCanary(action.AttemptId);
+            return;
+        }
+
         if (string.Equals(action.ActionKind, "local_protection_recovery", StringComparison.Ordinal))
         {
             _runtime.Publish(
@@ -119,6 +125,12 @@ internal sealed class ResidentProtectionWorkflowCoordinator
 
     public void RetryCurrentOperation()
     {
+        if (string.Equals(_runtime.OperationalAction.ActionKind, "resident_canary", StringComparison.Ordinal))
+        {
+            StartResidentCanary();
+            return;
+        }
+
         if (string.Equals(_runtime.OperationalAction.ActionKind, "local_readiness", StringComparison.Ordinal))
         {
             StartLocalReadiness();
@@ -126,6 +138,51 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         }
 
         StartFocusedSetup();
+    }
+
+    public void StartResidentCanary()
+    {
+        if (Interlocked.Exchange(ref _workflowInProgress, 1) != 0)
+        {
+            return;
+        }
+
+        var started = _runtime.StartAction(new ResidentWorkflowActionRequest(
+            "resident_canary",
+            "requested",
+            true,
+            "focus_composer_and_send_marker"));
+        if (!started.Started)
+        {
+            Interlocked.Exchange(ref _workflowInProgress, 0);
+            PublishNotice("The resident canary could not start. Protected Send remains unchanged.", true);
+            return;
+        }
+
+        var armed = _runtime.ArmResidentCanary(
+            started.AttemptId,
+            result => Dispatch(() => CompleteResidentCanary(result)));
+        if (!armed.Started || armed.Arm is null
+            || !_runtime.Publish(
+                ResidentWorkflowPublication.ForStage(
+                    "armed",
+                    true,
+                    "focus_composer_and_send_marker"),
+                started.AttemptId))
+        {
+            _runtime.Publish(
+                ResidentWorkflowPublication.Completed("failed", "retry_canary"),
+                started.AttemptId);
+            Interlocked.Exchange(ref _workflowInProgress, 0);
+            PublishNotice(
+                $"The resident canary could not be armed ({armed.Code}). Protected Send remains unchanged.",
+                true);
+            return;
+        }
+
+        PublishNotice(
+            $"Resident canary armed. Paste marker {armed.Arm.Marker} into the selected OpenAI Desktop composer and press its protected Send key.",
+            false);
     }
 
     public void StartLocalReadiness()
@@ -619,6 +676,45 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         }
 
         _runtime.RefreshOperationalState();
+    }
+
+    private void CompleteResidentCanary(ResidentCanaryExecutionResult result)
+    {
+        using var attemptLease = _runtime.TryAcquireAttempt(
+            ResidentWorkflowAttempt.Operational(result.AttemptId));
+        if (attemptLease is null)
+        {
+            return;
+        }
+
+        var outcome = result.Code == "cancelled"
+            ? "cancelled"
+            : result.Succeeded ? "succeeded" : "failed";
+        if (result.Code == "cancelled")
+        {
+            _runtime.Publish(ResidentWorkflowPublication.Cancelled(), result.AttemptId);
+        }
+        else
+        {
+            _runtime.Publish(
+                ResidentWorkflowPublication.ForStage(
+                    result.Succeeded ? "terminal_passed" : "terminal_failed",
+                    false,
+                    result.Succeeded ? "none" : "retry_canary"),
+                result.AttemptId);
+            _runtime.Publish(
+                ResidentWorkflowPublication.Completed(
+                    outcome,
+                    result.Succeeded ? "none" : "retry_canary"),
+                result.AttemptId);
+        }
+
+        Interlocked.Exchange(ref _workflowInProgress, 0);
+        PublishNotice(
+            result.Succeeded
+                ? "Resident canary passed. The installed keyboard protected-Send path completed and cleanup was verified without cloud submission."
+                : $"Resident canary failed ({result.Code}). Protected Send remains fail-closed; inspect the resident-canary evidence and activity log.",
+            !result.Succeeded);
     }
 
     private bool CommitProfiles(FirstRunSetupResult result)

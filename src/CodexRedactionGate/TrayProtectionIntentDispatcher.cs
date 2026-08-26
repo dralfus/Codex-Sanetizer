@@ -11,6 +11,7 @@ internal enum TrayProtectionIntent
     OpenSensitiveTerms,
     SetupPromptProtection,
     RepairLocalProtection,
+    ResidentCanary,
     Exit
 }
 

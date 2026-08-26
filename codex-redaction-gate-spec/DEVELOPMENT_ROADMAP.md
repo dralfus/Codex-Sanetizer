@@ -49,7 +49,7 @@ flowchart TD
     A349["[x] 349\nSetup/recovery race-матрица"]
     A350["[x] 350\nЕдиная OpenAI Desktop identity\nstable compatibility / transient target"]
     E351["[>] 351\nКонтракт уровней доказательств"]
-    C352["[ ] 352\nResident live canary\nна текущем production-пути"]
+    C352["[>] 352\nResident live canary\nдетерминированно реализован; live red pending"]
     S353["[ ] 353\nProtectedComposerSession"]
     T354["[ ] 354\nProtectedSendTransaction\nрядом с legacy"]
     R355["[ ] 355\nReference через production UIA"]
@@ -179,6 +179,7 @@ production state machine.
 |---|---:|---|---|
 | 2026-08-26 | **351** | Typed evidence-state contract, schema и transition history, raw-free сериализация, внешняя проверка artifact binding, отдельный validator smoke в release publish. | `[x]` `1846/1846`, contract CLI passed, release publish validator smoke passed, final review без замечаний |
 | 2026-08-26 | **352** | Следующий новый рабочий пункт: resident-owned canary должен сначала воспроизвести текущий установленный keyboard Send-путь на том же production seam. | `[ ]` реализация не начиналась |
+| 2026-08-26 | **352** | Resident-owned canary, lifecycle, target-generation guard, production UIA/write wiring, overlay trace, raw-free evidence и installer identity sidecar добавлены; ложный green replay запрещён. | `[>]` deterministic `1856/1856`, build и installer smoke прошли; installed red artifact и безопасный production replay ещё не доказаны |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от
@@ -213,8 +214,9 @@ evidence теперь требует внешнего build/target binding, hist
 
 ## Что делать прямо сейчас
 
-1. Реализовать 352 на текущем коде и получить сохранённый красный результат
-   реального installed keyboard пути.
+1. Запустить установленный resident canary и получить сохранённый красный
+   результат текущего keyboard-пути; результат deterministic smoke не заменяет
+   live evidence.
 2. Выполнить 353-356 маленькими последовательными срезами; после каждого
    запускать нижние уровни доказательств, а после 356 превратить тот же canary в
    зелёный.

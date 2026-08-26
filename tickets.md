@@ -3128,6 +3128,22 @@ canary becoming `live_verified`.
 - [ ] Record the current user-visible replacement/write/replay failure as red
       before protected-Send architecture migration begins.
 
+**Implementation update (2026-08-26):** The resident-owned canary path is now
+wired through the active resident, native hook admission, target generation
+checks, production UIA capture/write adapters, confirmation overlay, terminal
+publication, and raw-free evidence storage. The installer writes an identity
+sidecar so installed evidence can be bound to the setup executable. Deterministic
+tests cover lifecycle transitions, stale profile/generation rejection, evidence
+validation, and controller routing; the full suite passes (`1856/1856`).
+
+The installed canary intentionally returns `replay_unavailable` until the
+production replay seam can prove that its replay key is safely observed without
+cloud submission. It must not claim success from a no-op submit. Therefore 352
+is implemented as a red-capable slice, but its installed `reproduced_red`
+artifact remains pending and 353/356 own the work required to turn that signal
+green. No manual release claim is made from the deterministic tests or installer
+smoke alone.
+
 ## 353. Deepen composer access behind ProtectedComposerSession
 
 **What to build:** Introduce a target-scoped `ProtectedComposerSession`

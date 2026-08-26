@@ -176,6 +176,12 @@ internal interface IResidentProtectionWorkflowPort
 
     OperationalActionStartResult StartAction(ResidentWorkflowActionRequest request);
 
+    ResidentCanaryStartResult ArmResidentCanary(
+        long attemptId,
+        Action<ResidentCanaryExecutionResult> completed);
+
+    bool CancelResidentCanary(long attemptId);
+
     IDisposable? TryAcquireAttempt(ResidentWorkflowAttempt attempt);
 
     bool Publish(

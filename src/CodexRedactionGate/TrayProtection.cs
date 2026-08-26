@@ -118,6 +118,10 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
     private readonly object _reloadGate = new();
     private readonly object _snapshotPublicationGate = new();
     private readonly ResidentOperationalActionLifecycle _operationalActionLifecycle;
+    private readonly ResidentCanarySession _residentCanary = new();
+    private readonly ResidentCanaryRunDelegate? _residentCanaryRunner;
+    private readonly object _residentCanaryCompletionGate = new();
+    private Action<ResidentCanaryExecutionResult>? _residentCanaryCompleted;
     private bool _residentReadinessAdmissionEnabled;
     private ResidentReadinessAdmission? _residentReadinessAdmission;
     private bool _snapshotInitialized;
@@ -147,7 +151,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         IDisposable? residentRuntimeOwner = null,
         IDisposable? nativeSubmitRuntimeOwner = null,
         Action? beforeProtectedSendTracePublishForTesting = null,
-        INativeSubmitInputAdapter? nativeSubmitInputAdapter = null)
+        INativeSubmitInputAdapter? nativeSubmitInputAdapter = null,
+        ResidentCanaryRunDelegate? residentCanaryRunner = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
@@ -160,6 +165,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         _protectedSendStageObserver = protectedSendStageObserver;
         _beforeProtectedSendTracePublishForTesting = beforeProtectedSendTracePublishForTesting;
         _nativeSubmitInputAdapter = nativeSubmitInputAdapter ?? NativeSubmitInputAdapter.Instance;
+        _residentCanaryRunner = residentCanaryRunner;
         _residentRuntimeOwner = residentRuntimeOwner;
         var surfaceDiscovery = activeSurfaceDiscovery ?? (() => TextSurfaceDiscoveryResult.Failure(
             OsInteractionStatusIds.NotComposer,
@@ -256,7 +262,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         Action<string>? protectedSendStageObserver = null,
         IDisposable? residentRuntimeOwner = null,
         IDisposable? nativeSubmitRuntimeOwner = null,
-        Action? beforeProtectedSendTracePublishForTesting = null)
+        Action? beforeProtectedSendTracePublishForTesting = null,
+        ResidentCanaryRunDelegate? residentCanaryRunner = null)
     {
         storageLayout ??= CreateIsolatedTestStorageLayout();
         return new TrayProtectionController(
@@ -274,7 +281,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             protectedSendStageObserver,
             residentRuntimeOwner,
             nativeSubmitRuntimeOwner,
-            beforeProtectedSendTracePublishForTesting);
+            beforeProtectedSendTracePublishForTesting,
+            residentCanaryRunner: residentCanaryRunner);
     }
 
     // Explicit test seam for controller tests that do not construct the Windows orchestrator.
@@ -293,7 +301,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         Action<string>? protectedSendStageObserver = null,
         IDisposable? residentRuntimeOwner = null,
         IDisposable? nativeSubmitRuntimeOwner = null,
-        Action? beforeProtectedSendTracePublishForTesting = null)
+        Action? beforeProtectedSendTracePublishForTesting = null,
+        ResidentCanaryRunDelegate? residentCanaryRunner = null)
     {
         ArgumentNullException.ThrowIfNull(nativeSubmitHookHost);
         ArgumentNullException.ThrowIfNull(nativeSubmitController);
@@ -321,7 +330,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             protectedSendStageObserver,
             residentRuntimeOwner,
             nativeSubmitRuntimeOwner,
-            beforeProtectedSendTracePublishForTesting);
+            beforeProtectedSendTracePublishForTesting,
+            residentCanaryRunner: residentCanaryRunner);
     }
 
     private static DefaultStorageLayout CreateIsolatedTestStorageLayout()
@@ -352,6 +362,66 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         string nextAction)
     {
         return _operationalActionLifecycle.Start(actionKind, stage, userInputRequired, nextAction);
+    }
+
+    internal ResidentCanaryStartResult ArmResidentCanary(
+        long attemptId,
+        Action<ResidentCanaryExecutionResult> completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        if (_residentCanaryRunner is null)
+        {
+            return new ResidentCanaryStartResult(false, "canary_runner_unavailable", null);
+        }
+
+        var snapshot = ReadSnapshot();
+        var profileId = snapshot.State.ConfiguredProfileId
+            ?? snapshot.RuntimeSet?.Runtimes.FirstOrDefault()?.Profile.ProfileId;
+        var runtime = profileId is null
+            ? null
+            : snapshot.RuntimeSet?.Runtimes.FirstOrDefault(runtime =>
+                string.Equals(runtime.Profile.ProfileId, profileId, StringComparison.Ordinal));
+        if (runtime is null || !snapshot.State.Enabled || !snapshot.HookReady)
+        {
+            return new ResidentCanaryStartResult(false, "profile_unavailable", null);
+        }
+
+        lock (_residentCanaryCompletionGate)
+        {
+            var result = _residentCanary.Arm(
+                attemptId,
+                runtime.Profile.ProfileId,
+                snapshot.Generation);
+            if (result.Started)
+            {
+                _residentCanaryCompleted = completed;
+            }
+
+            return result;
+        }
+    }
+
+    internal bool CancelResidentCanary(long attemptId)
+    {
+        if (!_residentCanary.TryCancel(attemptId, out var arm) || arm is null)
+        {
+            return false;
+        }
+
+        var completed = ResidentCanaryExecutionResult.Failed(
+            arm,
+            "cancelled",
+            _residentCanary.Stages(attemptId),
+            cleanupSucceeded: true);
+        var runtime = ReadSnapshot().RuntimeSet?.Runtimes.FirstOrDefault(candidate =>
+            string.Equals(candidate.Profile.ProfileId, arm.ProfileId, StringComparison.Ordinal));
+        if (runtime is null || !SaveResidentCanaryEvidence(runtime, arm, completed))
+        {
+            completed = completed with { Code = "evidence_write_failed" };
+        }
+
+        CompleteResidentCanary(completed);
+        return true;
     }
 
     internal bool PublishOperationalActionStage(
@@ -3243,7 +3313,67 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         }
     }
 
-    internal static OsInteractionResult RunNativeSubmitFlow(
+    internal OsInteractionResult RunNativeSubmitFlow(
+        NativeSubmitRuntime runtime,
+        NativeSubmitTargetIdentity? target,
+        Func<string, string, bool> traceStage,
+        Func<bool> executionGuard,
+        Func<IDisposable?> executionLease)
+    {
+        var canaryAttemptId = _residentCanaryAttemptId();
+        if (canaryAttemptId > 0)
+        {
+            if (target is not null
+                && _residentCanary.TryObserveSend(
+                    canaryAttemptId,
+                    runtime.Profile.ProfileId,
+                    target.SnapshotGeneration,
+                    out var arm))
+            {
+                PublishOperationalActionStage(
+                    "send_observed",
+                    true,
+                    "run_canary",
+                    canaryAttemptId);
+                return RunResidentCanary(runtime, target, arm, traceStage, executionGuard, executionLease);
+            }
+
+            if (_residentCanary.TryFail(
+                    canaryAttemptId,
+                    target is null ? "target_unavailable" : "target_mismatch",
+                    out var failedCanary))
+            {
+                PublishOperationalActionStage(
+                    "target_verification_failed",
+                    false,
+                    "retry_canary",
+                    canaryAttemptId);
+                return CompleteFailedResidentCanary(runtime, failedCanary, target);
+            }
+
+            return new OsInteractionResult(
+                OsInteractionStatusIds.FailedClosed,
+                target?.CapturedSurface,
+                null,
+                null,
+                false,
+                false,
+                new Dictionary<string, string>
+                {
+                    ["canary_code"] = "canary_state_unavailable",
+                    ["cloud_submission"] = "false"
+                });
+        }
+
+        return RunNativeSubmitFlowCore(
+            runtime,
+            target,
+            traceStage,
+            executionGuard,
+            executionLease);
+    }
+
+    private static OsInteractionResult RunNativeSubmitFlowCore(
         NativeSubmitRuntime runtime,
         NativeSubmitTargetIdentity? target,
         Func<string, string, bool> traceStage,
@@ -3263,6 +3393,220 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         }
 
         return TraceRunnerUnavailableResult();
+    }
+
+    private long _residentCanaryAttemptId()
+    {
+        var state = ReadSnapshot().State;
+        return state.EffectiveOperationalAction.ActionKind == "resident_canary"
+            && string.Equals(state.EffectiveOperationalAction.Status, "running", StringComparison.Ordinal)
+            ? state.EffectiveOperationalAction.AttemptId
+            : 0;
+    }
+
+    private OsInteractionResult CompleteFailedResidentCanary(
+        NativeSubmitRuntime runtime,
+        ResidentCanaryExecutionResult completed,
+        NativeSubmitTargetIdentity? target)
+    {
+        var result = new OsInteractionResult(
+            OsInteractionStatusIds.FailedClosed,
+            target?.CapturedSurface,
+            null,
+            null,
+            false,
+            false,
+            new Dictionary<string, string>
+            {
+                ["canary_code"] = completed.Code,
+                ["canary_cleanup"] = "true",
+                ["cloud_submission"] = "false"
+            });
+        var evidenceSaved = SaveResidentCanaryEvidence(
+            runtime,
+            new ResidentCanaryArm(
+                completed.AttemptId,
+                completed.ProfileId,
+                "unbound",
+                completed.TargetGeneration),
+            completed);
+        if (!evidenceSaved)
+        {
+            result = result with
+            {
+                Diagnostics = MergeDiagnostics(result.Diagnostics, ("canary_code", "evidence_write_failed"))
+            };
+        }
+
+        CompleteResidentCanary(completed);
+        return result;
+    }
+
+    private OsInteractionResult RunResidentCanary(
+        NativeSubmitRuntime runtime,
+        NativeSubmitTargetIdentity target,
+        ResidentCanaryArm arm,
+        Func<string, string, bool> traceStage,
+        Func<bool> executionGuard,
+        Func<IDisposable?> executionLease)
+    {
+        _residentCanary.TryRecordStage(arm.AttemptId, "transaction_started");
+        PublishOperationalActionStage(
+            "transaction_started",
+            false,
+            "confirm_canary",
+            arm.AttemptId);
+        bool TraceStage(string stage, string resultCode)
+        {
+            if (stage == "overlay_created")
+            {
+                _residentCanary.TryRecordStage(arm.AttemptId, "overlay_created");
+                PublishOperationalActionStage(
+                    "overlay_created",
+                    true,
+                    "confirm_canary",
+                    arm.AttemptId);
+            }
+
+            return traceStage(stage, resultCode);
+        }
+
+        OsInteractionResult result;
+        try
+        {
+            result = _residentCanaryRunner!(runtime, target, arm, TraceStage, executionGuard, executionLease);
+        }
+        catch (Exception exception)
+        {
+            result = new OsInteractionResult(
+                OsInteractionStatusIds.FailedClosed,
+                target.CapturedSurface,
+                null,
+                null,
+                false,
+                false,
+                new Dictionary<string, string>
+                {
+                    ["canary_code"] = "runner_exception",
+                    ["exception_type"] = exception.GetType().FullName ?? exception.GetType().Name,
+                    ["canary_cleanup"] = "false",
+                    ["cloud_submission"] = "false"
+                });
+        }
+
+        if (result.Applied)
+        {
+            _residentCanary.TryRecordStage(arm.AttemptId, "sanitized_written");
+            PublishOperationalActionStage(
+                "sanitized_written",
+                false,
+                "verify_canary_write",
+                arm.AttemptId);
+        }
+
+        if (result.Submitted)
+        {
+            _residentCanary.TryRecordStage(arm.AttemptId, "replay_verified");
+            PublishOperationalActionStage(
+                "replay_verified",
+                false,
+                "complete_canary",
+                arm.AttemptId);
+        }
+
+        var cleanupSucceeded = result.Diagnostics.TryGetValue("canary_cleanup", out var cleanup)
+            && string.Equals(cleanup, "true", StringComparison.Ordinal);
+        var succeeded = result.Submitted
+            && cleanupSucceeded
+            && result.Diagnostics.TryGetValue("cloud_submission", out var cloudSubmission)
+            && string.Equals(cloudSubmission, "false", StringComparison.Ordinal);
+        var code = succeeded
+            ? "passed"
+            : result.Diagnostics.TryGetValue("canary_code", out var failureCode)
+                ? failureCode
+                : result.Status;
+        var completed = _residentCanary.Complete(arm, succeeded, code, cleanupSucceeded);
+        var evidenceSaved = SaveResidentCanaryEvidence(runtime, arm, completed);
+        if (!evidenceSaved)
+        {
+            result = result with
+            {
+                Status = OsInteractionStatusIds.FailedClosed,
+                Applied = false,
+                Submitted = false,
+                Diagnostics = MergeDiagnostics(result.Diagnostics, ("canary_code", "evidence_write_failed"))
+            };
+            completed = completed with { Succeeded = false, Code = "evidence_write_failed" };
+        }
+
+        CompleteResidentCanary(completed);
+        return result;
+    }
+
+    private bool SaveResidentCanaryEvidence(
+        NativeSubmitRuntime runtime,
+        ResidentCanaryArm arm,
+        ResidentCanaryExecutionResult result)
+    {
+        var evidence = result.Succeeded
+            ? ResidentCanaryEvidence.Passed(
+                arm.AttemptId,
+                arm.ProfileId,
+                arm.TargetGeneration,
+                ResidentCanaryBuildIdentity.SafeBinding(runtime.Profile),
+                result.Stages,
+                result.CleanupSucceeded,
+                BuildVersion.Current,
+                ResidentCanaryBuildIdentity.SourceCommit(),
+                ResidentCanaryBuildIdentity.ExecutableSha256(),
+                ResidentCanaryBuildIdentity.InstallerIdentity(),
+                runtime.Profile.CompatibilityEvidence?.VerificationId
+                    ?? OpaqueFingerprint.FromSource(runtime.Profile.ProfileId).Value)
+            : ResidentCanaryEvidence.Failed(
+                arm.AttemptId,
+                arm.ProfileId,
+                arm.TargetGeneration,
+                ResidentCanaryBuildIdentity.SafeBinding(runtime.Profile),
+                result.Stages,
+                result.Code,
+                result.CleanupSucceeded,
+                BuildVersion.Current,
+                ResidentCanaryBuildIdentity.SourceCommit(),
+                ResidentCanaryBuildIdentity.ExecutableSha256(),
+                ResidentCanaryBuildIdentity.InstallerIdentity(),
+                runtime.Profile.CompatibilityEvidence?.VerificationId
+                    ?? OpaqueFingerprint.FromSource(runtime.Profile.ProfileId).Value);
+        return new ResidentCanaryEvidenceStore(_storageLayout).TrySave(evidence);
+    }
+
+    private void CompleteResidentCanary(ResidentCanaryExecutionResult result)
+    {
+        Action<ResidentCanaryExecutionResult>? completed;
+        lock (_residentCanaryCompletionGate)
+        {
+            completed = _residentCanaryCompleted;
+            _residentCanaryCompleted = null;
+        }
+
+        try
+        {
+            completed?.Invoke(result);
+        }
+        catch (Exception exception)
+        {
+            LocalCrashDiagnostics.CaptureDefault(exception, "resident_canary", "completion_callback_failed");
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> MergeDiagnostics(
+        IReadOnlyDictionary<string, string> diagnostics,
+        (string Key, string Value) value)
+    {
+        var merged = new Dictionary<string, string>(diagnostics, StringComparer.Ordinal)
+        {
+            [value.Key] = value.Value
+        };
+        return merged;
     }
 
     internal static OsInteractionResult TraceRunnerUnavailableResult()
@@ -3432,6 +3776,25 @@ internal sealed class ResidentProtectionRuntimeFacade : IResidentProtectionWorkf
     public OperationalActionState OperationalAction => _controller.OperationalAction;
 
     public bool IsNativeSubmitHookReady => _controller.IsNativeSubmitHookReady;
+
+    public ResidentCanaryStartResult ArmResidentCanary(
+        long attemptId,
+        Action<ResidentCanaryExecutionResult> completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        lock (_workflowGate)
+        {
+            return _controller.ArmResidentCanary(attemptId, completed);
+        }
+    }
+
+    public bool CancelResidentCanary(long attemptId)
+    {
+        lock (_workflowGate)
+        {
+            return _controller.CancelResidentCanary(attemptId);
+        }
+    }
 
     public bool Start()
     {

@@ -48,6 +48,26 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\CodexRedactionGate.Tray.exe"; Description: "Launch Codex Redaction Gate"; Flags: nowait postinstall skipifsilent
 
 [Code]
+procedure WriteInstallIdentity();
+var
+  IdentityPath: String;
+begin
+  IdentityPath := ExpandConstant('{app}\install-identity.txt');
+  SaveStringToFile(
+    IdentityPath,
+    'installer_identity=' + ExtractFileName(ExpandConstant('{srcexe}')) + #13#10 +
+    'product_version={#MyAppVersion}' + #13#10,
+    False);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    WriteInstallIdentity();
+  end;
+end;
+
 function RunPowerShell(Command: String; var ResultCode: Integer): Boolean;
 begin
   Result := Exec(
