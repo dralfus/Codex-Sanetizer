@@ -726,8 +726,14 @@ internal sealed class NativeVerifiedComposerReplay : IVerifiedComposerReplay
 public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAccess
 {
     private const int MaxTextPatternCaptureLength = 65536;
+    private const int MaxRuntimeIdSearchElements = 512;
+    private const int FocusVerificationAttempts = 8;
+    private const int FocusVerificationDelayMilliseconds = 25;
     private readonly Func<TextSurfaceDiscoveryResult> _surfaceDiscovery;
     private readonly IVerifiedComposerReplay _replay;
+    private readonly object _capturedElementGate = new();
+    private AutomationElement? _capturedElement;
+    private string? _capturedSurfaceId;
 
     public NativeVerifiedComposerTextAccess()
         : this(
@@ -769,6 +775,41 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
 
                     text = textPattern.DocumentRange.GetText(MaxTextPatternCaptureLength) ?? string.Empty;
                     captureStrategy = "text-pattern";
+
+                    if (CanUseKeyboardWriteFallback(surface, element))
+                    {
+                        var clipboardText = CaptureFormattedKeyboardText(element);
+                        if (clipboardText is null)
+                        {
+                            return new TextCaptureResult(
+                                false,
+                                OsInteractionStatusIds.CaptureFailed,
+                                null,
+                                new Dictionary<string, string>
+                                {
+                                    ["capture_strategy"] = "verified-keyboard-copy",
+                                    ["format_capture_status"] = "unavailable",
+                                    ["format_preserved"] = "false"
+                                });
+                        }
+
+                        if (!ComposerTextFormatting.HasSameContentIgnoringWhitespace(text, clipboardText))
+                        {
+                            return new TextCaptureResult(
+                                false,
+                                OsInteractionStatusIds.CaptureFailed,
+                                null,
+                                new Dictionary<string, string>
+                                {
+                                    ["capture_strategy"] = "verified-keyboard-copy",
+                                    ["format_capture_status"] = "source_mismatch",
+                                    ["format_preserved"] = "false"
+                                });
+                        }
+
+                        text = clipboardText;
+                        captureStrategy = "verified-keyboard-copy";
+                    }
                 }
 
                 if (string.IsNullOrEmpty(text))
@@ -776,15 +817,13 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                     return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
                 }
 
+                var normalizedText = ComposerTextFormatting.NormalizeLineEndings(text);
+
                 return new TextCaptureResult(
                     true,
                     "captured",
-                    text,
-                    new Dictionary<string, string>
-                    {
-                        ["captured_length"] = text.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        ["capture_strategy"] = captureStrategy
-                    });
+                    normalizedText,
+                    ComposerTextFormatting.Diagnostics(text, normalizedText, captureStrategy));
             });
         }
         catch (InvalidOperationException)
@@ -796,6 +835,10 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
         }
         catch (System.ComponentModel.Win32Exception)
+        {
+            return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
+        }
+        catch (ExternalException)
         {
             return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
         }
@@ -834,14 +877,28 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                     return new TextReplacementResult(false, OsInteractionStatusIds.WriteFailed, new Dictionary<string, string>());
                 }
 
-                PasteIntoVerifiedFocusedElement(text);
+                if (!TryPasteIntoVerifiedElement(element, text))
+                {
+                    return new TextReplacementResult(
+                        false,
+                        OsInteractionStatusIds.WriteFailed,
+                        new Dictionary<string, string>
+                        {
+                            ["write_strategy"] = "verified-keyboard-paste",
+                            ["write_focus"] = "not_verified",
+                            ["write_verification"] = "pasted_text_mismatch"
+                        });
+                }
+
                 return new TextReplacementResult(
                     true,
                     OsInteractionStatusIds.Applied,
                     new Dictionary<string, string>
                     {
                         ["write_length"] = text.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        ["write_strategy"] = "verified-keyboard-paste"
+                        ["write_strategy"] = "verified-keyboard-paste",
+                        ["write_focus"] = "restored_and_verified",
+                        ["write_verification"] = "exact_keyboard_round_trip"
                     });
             });
         }
@@ -854,6 +911,10 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             return new TextReplacementResult(false, OsInteractionStatusIds.WriteFailed, new Dictionary<string, string>());
         }
         catch (System.ComponentModel.Win32Exception)
+        {
+            return new TextReplacementResult(false, OsInteractionStatusIds.WriteFailed, new Dictionary<string, string>());
+        }
+        catch (ExternalException)
         {
             return new TextReplacementResult(false, OsInteractionStatusIds.WriteFailed, new Dictionary<string, string>());
         }
@@ -905,6 +966,23 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
 
     private AutomationElement? GetCurrentVerifiedElement(TextSurfaceDescriptor surface)
     {
+        var expectedWindowHandle = surface.Metadata.TryGetValue("window_handle");
+        var expectedRuntimeIdHash = surface.Metadata.TryGetValue("focused_element_hash");
+        var requireCapturedIdentity = !string.Equals(
+            surface.ProfileId,
+            ReferenceOnlyInputSource.ProfileId,
+            StringComparison.Ordinal);
+
+        if (IntPtr.TryParse(
+                expectedWindowHandle,
+                System.Globalization.NumberStyles.HexNumber,
+                null,
+                out var cachedWindowHandle)
+            && TryGetCapturedElement(surface, cachedWindowHandle, expectedRuntimeIdHash, requireCapturedIdentity, out var capturedElement))
+        {
+            return capturedElement;
+        }
+
         var discovery = _surfaceDiscovery();
         if (!discovery.Succeeded || discovery.Surface is null)
         {
@@ -917,7 +995,6 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         }
 
         // Extract window handle from surface metadata and verify it matches
-        var expectedWindowHandle = surface.Metadata.TryGetValue("window_handle");
         var actualWindowHandle = discovery.Surface.Metadata.TryGetValue("window_handle");
         if (expectedWindowHandle == null || actualWindowHandle == null
             || !string.Equals(expectedWindowHandle, actualWindowHandle, StringComparison.Ordinal))
@@ -925,11 +1002,6 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             return null;
         }
 
-        var expectedRuntimeIdHash = surface.Metadata.TryGetValue("focused_element_hash");
-        var requireCapturedIdentity = !string.Equals(
-            surface.ProfileId,
-            ReferenceOnlyInputSource.ProfileId,
-            StringComparison.Ordinal);
         if (requireCapturedIdentity && string.IsNullOrWhiteSpace(expectedRuntimeIdHash))
         {
             return null;
@@ -947,7 +1019,16 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                 if (element is not null
                     && (!requireCapturedIdentity || MatchesCapturedRuntimeId(element, expectedRuntimeIdHash!)))
                 {
-                    return element;
+                    return RememberCapturedElement(surface, element);
+                }
+            }
+
+            if (requireCapturedIdentity)
+            {
+                var fingerprintMatch = FindElementByRuntimeIdHash(windowHandle, expectedRuntimeIdHash!);
+                if (fingerprintMatch is not null)
+                {
+                    return RememberCapturedElement(surface, fingerprintMatch);
                 }
             }
 
@@ -962,12 +1043,97 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                 if (MatchesVerifiedSurfaceWindow(windowHandle, fallbackHandle, fallbackOwningWindow)
                     && (!requireCapturedIdentity || MatchesCapturedRuntimeId(fallback, expectedRuntimeIdHash!)))
                 {
-                    return fallback;
+                    return RememberCapturedElement(surface, fallback);
                 }
             }
         }
 
         return null; // Fail closed if we cannot verify the element
+    }
+
+    private bool TryGetCapturedElement(
+        TextSurfaceDescriptor surface,
+        IntPtr expectedWindowHandle,
+        string? expectedRuntimeIdHash,
+        bool requireCapturedIdentity,
+        out AutomationElement? element)
+    {
+        element = null;
+        AutomationElement? captured;
+        string? capturedSurfaceId;
+        lock (_capturedElementGate)
+        {
+            captured = _capturedElement;
+            capturedSurfaceId = _capturedSurfaceId;
+        }
+
+        if (captured is null
+            || !string.Equals(capturedSurfaceId, surface.SurfaceId, StringComparison.Ordinal)
+            || !IsExpectedWindowForeground(expectedWindowHandle))
+        {
+            return false;
+        }
+
+        try
+        {
+            var elementWindow = new IntPtr(captured.Current.NativeWindowHandle);
+            var owningWindow = FindOwningWindow(captured);
+            if (!MatchesVerifiedSurfaceWindow(expectedWindowHandle, elementWindow, owningWindow)
+                || (requireCapturedIdentity
+                    && (string.IsNullOrWhiteSpace(expectedRuntimeIdHash)
+                        || !MatchesCapturedRuntimeId(captured, expectedRuntimeIdHash)))
+                || !captured.Current.IsEnabled
+                || !captured.Current.IsKeyboardFocusable)
+            {
+                return false;
+            }
+
+            element = captured;
+            return true;
+        }
+        catch (ElementNotAvailableException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (COMException)
+        {
+            return false;
+        }
+    }
+
+    private AutomationElement RememberCapturedElement(TextSurfaceDescriptor surface, AutomationElement element)
+    {
+        lock (_capturedElementGate)
+        {
+            _capturedSurfaceId = surface.SurfaceId;
+            _capturedElement = element;
+        }
+
+        return element;
+    }
+
+    private static bool IsExpectedWindowForeground(IntPtr expectedWindow)
+    {
+        if (!OperatingSystem.IsWindows() || expectedWindow == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var root = NativeMethods.GetAncestor(foreground, 2);
+        return MatchesVerifiedSurfaceWindow(
+            expectedWindow,
+            foreground,
+            root == IntPtr.Zero ? foreground : root);
     }
 
     private static bool MatchesCapturedRuntimeId(AutomationElement element, string expectedRuntimeIdHash)
@@ -1028,25 +1194,95 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
     {
         var fallback = surface.Metadata.TryGetValue("keyboard_write_fallback");
         return fallback == "true"
-            && element.Current.HasKeyboardFocus
             && element.Current.IsKeyboardFocusable
             && element.Current.IsEnabled;
     }
 
-    private static void PasteIntoVerifiedFocusedElement(string text)
+    private static bool TryPasteIntoVerifiedElement(AutomationElement element, string text)
     {
-        var clipboardBackup = ClipboardSnapshot.Capture();
+        if (!TryFocusVerifiedElement(element))
+        {
+            return false;
+        }
+
+        ClipboardSnapshot? clipboardBackup = null;
         try
         {
+            clipboardBackup = ClipboardSnapshot.Capture();
             Clipboard.SetText(text);
             SendKeys.SendWait("^a");
             SendKeys.SendWait("^v");
-            Thread.Sleep(120);
+            return WaitForPastedText(element, text);
+        }
+        catch (ExternalException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
         finally
         {
-            clipboardBackup.Restore();
+            clipboardBackup?.Restore();
         }
+    }
+
+    private static bool WaitForPastedText(AutomationElement element, string expectedText)
+    {
+        var expected = ComposerTextFormatting.NormalizeLineEndings(expectedText);
+        for (var attempt = 0; attempt < FocusVerificationAttempts; attempt++)
+        {
+            var actual = CaptureFormattedKeyboardText(element);
+            if (actual is not null
+                && string.Equals(
+                    ComposerTextFormatting.NormalizeLineEndings(actual),
+                    expected,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            Thread.Sleep(FocusVerificationDelayMilliseconds);
+        }
+
+        return false;
+    }
+
+    private static bool TryFocusVerifiedElement(AutomationElement element)
+    {
+        try
+        {
+            if (!element.Current.IsKeyboardFocusable || !element.Current.IsEnabled)
+            {
+                return false;
+            }
+
+            element.SetFocus();
+            for (var attempt = 0; attempt < FocusVerificationAttempts; attempt++)
+            {
+                if (element.Current.HasKeyboardFocus)
+                {
+                    return true;
+                }
+
+                Thread.Sleep(FocusVerificationDelayMilliseconds);
+            }
+        }
+        catch (ElementNotAvailableException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (COMException)
+        {
+            return false;
+        }
+
+        return false;
     }
 
     private static T RunSta<T>(Func<T> action)
@@ -1096,8 +1332,78 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         }
     }
 
+    private static AutomationElement? FindElementByRuntimeIdHash(IntPtr windowHandle, string expectedRuntimeIdHash)
+    {
+        try
+        {
+            var windowElement = AutomationElement.FromHandle(windowHandle);
+            if (windowElement is null)
+            {
+                return null;
+            }
+
+            var candidates = windowElement.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            var inspected = Math.Min(candidates.Count, MaxRuntimeIdSearchElements);
+            for (var index = 0; index < inspected; index++)
+            {
+                var candidate = candidates[index];
+                if (MatchesCapturedRuntimeId(candidate, expectedRuntimeIdHash))
+                {
+                    return candidate;
+                }
+            }
+        }
+        catch (ElementNotAvailableException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        catch (COMException)
+        {
+        }
+
+        return null;
+    }
+
+    private static string? CaptureFormattedKeyboardText(AutomationElement element)
+    {
+        if (!TryFocusVerifiedElement(element))
+        {
+            return null;
+        }
+
+        ClipboardSnapshot? clipboardBackup = null;
+        try
+        {
+            clipboardBackup = ClipboardSnapshot.Capture();
+            Clipboard.Clear();
+            SendKeys.SendWait("^a");
+            SendKeys.SendWait("^c");
+            Thread.Sleep(120);
+            return Clipboard.ContainsText()
+                ? Clipboard.GetText(TextDataFormat.UnicodeText)
+                : null;
+        }
+        catch (ExternalException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        finally
+        {
+            clipboardBackup?.Restore();
+        }
+    }
+
     private static class NativeMethods
     {
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
         [DllImport("user32.dll")]
         public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
     }

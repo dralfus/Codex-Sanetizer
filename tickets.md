@@ -8,14 +8,28 @@ Work the **frontier**: any ticket whose blockers are all done. For a purely line
 
 ## Required Contract For Every New Ticket
 
-Every ticket added after this section must state these four items before implementation begins:
+Every ticket added after this section must state these items before implementation begins:
 
 - **State owner:** the one component that publishes the authoritative state for this behavior. UI and persisted records may project it, but cannot independently decide protection.
 - **Fail-closed state:** the exact externally visible state and cloud-submission behavior when evidence, activation, recovery, or storage is uncertain.
 - **Allowed transitions:** the permitted state changes, their triggering commands/events, and the condition for publishing each new state.
 - **Deterministic proof:** the highest available test seam and the assertions that prove the transition without timer polling, foreground focus, or a live cloud submission.
+- **Red-capable reproduction:** for a bug or safety regression, the exact command
+  or resident action that fails before the change and must pass afterward. If no
+  current seam can reproduce it, diagnostics/acceptance work is the first
+  ticket and production logic is not changed yet.
+- **Highest required seam:** deterministic transaction, production-access
+  reference composer, installed resident canary, or another explicitly named
+  product boundary. A lower seam cannot substitute for a required higher seam.
+- **Evidence target:** the required next state from `proposed`,
+  `reproduced_red`, `implemented`, `locally_verified`, `live_verified`, and
+  `released`, including the build identity fields that make the evidence
+  current.
 
-If one of these cannot be stated, the work is an architecture-discovery ticket and must be resolved before a feature ticket is implemented.
+If one of these cannot be stated, the work is an architecture-discovery ticket
+and must be resolved before a feature ticket is implemented. `Implemented` is
+not reported as `fixed`; fixed requires the original reproduction to be green
+at the highest required seam.
 
 ## 273. Publish atomic resident protection snapshots
 
@@ -2877,6 +2891,18 @@ resident transaction proof. A matching installer was built from source commit
 passes every scenario twice with raw-free traces and cleanup. Keep this ticket
 open until the installed candidate records `reference_proof_recorded: true`.
 
+**Architecturally reopened (2026-08-26):** The extracted
+`ProtectedSendPipeline` is still a shallow orchestration interface. Its caller
+continues to understand stage order through a broad host contract, while
+`OsInteractionOrchestrator` owns a second read/sanitize/overlay/write/replay
+state machine. In addition, the current reference acceptance can write directly
+to its fixture TextBox instead of exercising production
+`NativeVerifiedComposerTextAccess`; that proof cannot detect production UIA,
+STA, focus, write-verification, or replay failures. Preserve the previous
+implementation and evidence above as history, but do not close 348 until the
+evidence-gated transaction migration in 351-358 is complete and the matching
+installed resident proof is green.
+
 ## 349. Доказать setup/recovery workflow transaction на полной race-матрице
 
 **What to build:** The reopened resident workflow fix receives deterministic
@@ -2984,3 +3010,342 @@ by a 16-character UIA runtime hash is covered by regression tests. Verification:
 warnings/errors. Manual-test release `0.1.20260823.t1841` was published to
 `artifacts/publish` and launched as the only resident tray process on
 2026-08-23.
+
+## 351. Enforce an evidence-state contract for product fixes
+
+**What to build:** Add a repository-wide development contract and machine-
+checkable evidence record for protected behavior. Every bug fix and safety
+ticket declares its red-capable reproduction, highest required seam, build
+identity, and current evidence state: `proposed`, `reproduced_red`,
+`implemented`, `locally_verified`, `live_verified`, or `released`. Product and
+ticket text must not use `fixed` before the required live reproduction is green.
+
+**Blocked by:** None. This is the first convergence task.
+
+**State owner:** The evidence record for a ticket owns its evidence state. Test
+runners and installers publish immutable evidence; UI and documentation only
+project it.
+
+**Fail-closed state:** Missing, stale, mismatched, or incomplete evidence leaves
+the change at its last proven state and blocks release claims. It does not
+disable an already-safe resident runtime.
+
+**Allowed transitions:** `proposed -> reproduced_red -> implemented ->
+locally_verified -> live_verified -> released`. A failed later check moves the
+candidate back to the last evidence state it still satisfies; transitions may
+not skip a required level.
+
+**Deterministic proof:** Validate representative evidence records and reject
+missing reproduction commands, unknown states, stale commit/version/hash,
+skipped levels, and a `fixed` claim without required proof. No timers, desktop
+focus, UIA, or cloud access.
+
+**Red-capable reproduction:** A validator fixture that currently accepts an
+`implemented`-only record carrying a `fixed` claim must fail after enforcement.
+
+**Highest required seam:** Repository evidence validator and release-smoke
+contract.
+
+**Evidence target:** `locally_verified`, bound to the current commit and schema
+version. Live product evidence is not required for this process-only ticket.
+
+- [ ] Add the typed evidence-state vocabulary and raw-free record schema.
+- [ ] Add a validator usable from local development and release smoke.
+- [ ] Add a ticket template requiring state owner, fail-closed state, allowed
+      transitions, red reproduction, highest seam, and evidence target.
+- [ ] Update status/reporting vocabulary so `implemented` is not rendered as
+      `fixed` or `released`.
+
+## 352. Add a resident-owned installed keyboard protected-Send canary
+
+**What to build:** Add an opt-in, harmless canary owned by the active resident
+process. It creates a temporary local synthetic rule and marker, then exercises
+the same keyboard-hook admission, transaction entry, production UI Automation,
+confirmation overlay, exact write verification, replay, and terminal trace as
+normal protected Send. It shows progress and writes a raw-free build-bound
+artifact. The canary is added to the current architecture before transaction
+migration so it can expose the existing production failure.
+
+**Blocked by:** 351.
+
+**State owner:** The active resident owns one canary attempt and its evidence
+artifact. Tray UI may start it and render progress but cannot forge stages or
+success.
+
+**Fail-closed state:** Any missing active resident, profile mismatch, target
+uncertainty, UIA/write/replay error, timeout, or stale generation blocks the
+canary and records one terminal raw-free reason. The original composer content
+and persistent policy remain unchanged.
+
+**Allowed transitions:** `requested -> armed -> send_observed -> transaction
+stages -> terminal_passed | terminal_failed | cancelled`; cleanup is mandatory
+after every terminal state.
+
+**Deterministic proof:** Test state progression, stale attempts, cleanup,
+artifact binding, and failures with injected resident/session adapters. The
+separate live proof must run in the installed active resident against the
+supported OpenAI Desktop keyboard path.
+
+**Red-capable reproduction:** The reported installed behavior where confirmation
+shows sanitized text but the original composer remains unchanged or no replay
+occurs must produce a terminal failed canary artifact before migration.
+
+**Highest required seam:** Installed resident canary through real keyboard hook,
+production UIA, overlay, write verification, replay, and terminal publication.
+
+**Evidence target:** `reproduced_red` in this ticket. Ticket 356 owns the same
+canary becoming `live_verified`.
+
+- [ ] Implement an explicit canary command with visible stage/result UI.
+- [ ] Reuse the normal resident input and side-effect path; no direct fixture
+      write, private submit shortcut, or parallel replay implementation.
+- [ ] Bind the artifact to commit, product version, executable hash, installer,
+      compatibility fingerprint, profile generation, and Send binding.
+- [ ] Record the current user-visible replacement/write/replay failure as red
+      before protected-Send architecture migration begins.
+
+## 353. Deepen composer access behind ProtectedComposerSession
+
+**What to build:** Introduce a target-scoped `ProtectedComposerSession`
+interface that owns target reacquisition and revalidation, UIA apartment work,
+focus checks, text read/write, exact post-write verification, and Send replay.
+Provide a production Windows adapter and deterministic reference adapter. Do
+not change transaction stage ordering in this ticket.
+
+**Blocked by:** 352 must provide a red/green production signal first.
+
+**State owner:** One session owns the transient target evidence and composer
+access lifetime for one admitted attempt. It does not own resident admission,
+sanitizer policy, confirmation, or terminal transaction state.
+
+**Fail-closed state:** Target reacquisition, apartment, focus, write,
+verification, or replay uncertainty returns a typed failure and performs no
+further side effect.
+
+**Allowed transitions:** `created -> target_revalidated -> read -> written ->
+verified -> replayed | failed`; no durable cross-thread AutomationElement is
+retained as hidden state.
+
+**Deterministic proof:** Run the same session contract matrix against the
+reference adapter and injected Windows access boundary, including target
+change, STA failure, focus refusal, write mismatch, replay unavailable, and
+partial replay. No cloud access or sleeps.
+
+**Red-capable reproduction:** A contract test must demonstrate that a writable
+fixture control cannot turn a production UIA/STA failure into success.
+
+**Highest required seam:** Production-access reference composer session.
+
+**Evidence target:** `locally_verified` for the session contract; no production
+keyboard claim is made yet.
+
+- [ ] Add the compact session interface and typed outcomes.
+- [ ] Move production composer-access mechanics behind the Windows adapter.
+- [ ] Add a reference adapter with the same observable contract.
+- [ ] Keep protected-Send state-machine behavior unchanged in this slice.
+
+## 354. Introduce ProtectedSendTransaction beside legacy orchestration
+
+**What to build:** Add the deep external interface
+`Execute(AdmittedProtectedSend) -> ProtectedSendTerminalResult`. It owns attempt
+identity, admitted generation, raw prompt lifetime, sanitization,
+confirmation/edit/cancel, target revalidation, write verification, replay,
+side-effect linearization, raw-free trace ordering, and exactly one terminal
+publication. Initially route only deterministic/reference execution through it;
+production remains on the legacy owner until ticket 356.
+
+**Blocked by:** 353.
+
+**State owner:** `ProtectedSendTransaction` is the sole owner of an admitted
+attempt and terminal outcome. Resident runtime owns admission; session and UI
+adapters return effects only.
+
+**Fail-closed state:** Missing or duplicate stages, stale generation, target
+change, cancellation, write mismatch, replay uncertainty, trace failure, or
+exception ends in one blocked result with no independent adapter replay.
+
+**Allowed transitions:** `admitted -> read -> sanitized -> safe_path |
+confirmation -> write -> verify -> replay -> sent_safely`, or one terminal
+`blocked(reason)`/`cancelled`. Only the transaction may cross the irreversible
+side-effect boundary and publish terminal state.
+
+**Deterministic proof:** Matrix covers safe/sensitive prompts, edit, cancel,
+confirm, target changes, stale generation, write mismatch, replay failures,
+cancellation races, repeated sends, and exactly one terminal result without
+timers, UIA, or cloud access.
+
+**Red-capable reproduction:** Characterization tests first expose that legacy
+callers can observe or own stage ordering outside the proposed transaction and
+that duplicate terminal/side-effect ownership is representable.
+
+**Highest required seam:** Deterministic `ProtectedSendTransaction` matrix.
+
+**Evidence target:** `locally_verified`; production remains on legacy and cannot
+claim live verification from this ticket.
+
+- [ ] Implement the compact request/result contract and explicit state machine.
+- [ ] Move lease, trace, side-effect, and terminal publication ownership inside
+      the transaction.
+- [ ] Keep the legacy production path active and prohibit dual side effects.
+- [ ] Prove raw prompt data is not retained in terminal evidence.
+
+## 355. Route reference acceptance through the production composer access path
+
+**What to build:** Migrate reference-composer acceptance to
+`ProtectedSendTransaction` and `ProtectedComposerSession`, using production
+`NativeVerifiedComposerTextAccess` for Windows access behavior. Direct
+assignment to the fixture TextBox is removed from release evidence. The
+reference-only input source remains physically unable to target Codex/ChatGPT.
+
+**Blocked by:** 354.
+
+**State owner:** The transaction owns each acceptance attempt; the reference
+fixture owns only its window and deterministic input stimuli.
+
+**Fail-closed state:** A reference adapter or production-access mismatch fails
+the scenario and records one raw-free terminal outcome; it cannot substitute a
+fixture write or mark release evidence passed.
+
+**Allowed transitions:** The same transaction transitions as ticket 354, with
+two explicit adapter modes: deterministic session contract and production
+Windows access to the reference composer.
+
+**Deterministic proof:** Run all reference scenarios twice and prove stable
+cleanup, exact multiline formatting, confirm writes sanitized text, cancel
+preserves interception, target changes block, and replay failures are terminal.
+
+**Red-capable reproduction:** Disable or fail production composer access while
+leaving the fixture TextBox writable; the old proof can pass, while the new
+production-access proof must fail.
+
+**Highest required seam:** Reference composer through production
+`NativeVerifiedComposerTextAccess` and the session contract.
+
+**Evidence target:** `locally_verified` at the production-access reference
+level, bound to the executable build.
+
+- [ ] Remove direct fixture TextBox writes from acceptance evidence.
+- [ ] Use the production access adapter through the session contract.
+- [ ] Preserve physical exclusion from OpenAI Desktop targets.
+- [ ] Publish the evidence level honestly as reference production-access proof,
+      not installed ChatGPT proof.
+
+## 356. Migrate production keyboard Send to ProtectedSendTransaction
+
+**What to build:** Route the supported OpenAI Desktop keyboard Send path from
+resident admission into `ProtectedSendTransaction`. The hook only captures,
+classifies, and suppresses; tray only projects state; adapters cannot write,
+replay, or publish terminal success outside the transaction.
+
+**Blocked by:** 355.
+
+**State owner:** Resident runtime owns immutable admission; the transaction
+owns every admitted attempt; the session owns target-scoped mechanics.
+
+**Fail-closed state:** Any unavailable transaction/session, stale generation,
+uncertain selected target, write mismatch, or replay failure keeps the original
+Send suppressed and reports one actionable raw-free outcome.
+
+**Allowed transitions:** `captured selected Send -> suppressed -> admitted ->
+transaction terminal`; unrelated input passes through and cannot create a
+transaction.
+
+**Deterministic proof:** Existing callback, reload, repeated-send, cancel/edit,
+target-change, formatting, and terminal-publication matrices pass through the
+new interface. The resident canary from 352 must turn green on the installed
+candidate without changing its assertion.
+
+**Red-capable reproduction:** Reuse the unchanged failed canary artifact and
+assertion from 352; do not create a more convenient replacement scenario.
+
+**Highest required seam:** Installed active resident on the supported OpenAI
+Desktop keyboard path.
+
+**Evidence target:** `live_verified` for the exact commit, executable, installer,
+profile fingerprint, generation, and Send binding.
+
+- [ ] Replace production keyboard orchestration with the transaction call.
+- [ ] Remove independent write/replay/terminal decisions from migrated callers.
+- [ ] Prove one side effect and one terminal result across cancellation/reload.
+- [ ] Turn the original installed resident canary from red to green.
+
+## 357. Evidence-gate installer and release claims
+
+**What to build:** Make installer packaging, release smoke, status UI, and
+release documentation consume the evidence contract. A candidate may claim
+keyboard protected Send only when required deterministic, reference production-
+access, and installed resident evidence is current for that exact build.
+
+**Blocked by:** 356.
+
+**State owner:** The immutable release evidence manifest owns candidate proof;
+installer and UI are projections.
+
+**Fail-closed state:** Missing/mismatched commit, version, executable hash,
+installer identity, compatibility fingerprint, or binding leaves the claim
+`not_verified` and never silently reuses older proof.
+
+**Allowed transitions:** `locally_verified -> live_verified -> released` only
+after all required artifacts match. Rebuild or profile/app drift invalidates the
+affected higher-level evidence.
+
+**Deterministic proof:** Manifest validator rejects stale and cross-build proof;
+installer smoke verifies embedded version/hash and required evidence fields;
+UI tests project each state without inventing readiness.
+
+**Red-capable reproduction:** Fixtures with a passing older installer proof or
+missing build identity must be rejected before release gating is implemented.
+
+**Highest required seam:** Installer smoke plus matching installed resident
+canary evidence.
+
+**Evidence target:** `released` only when deterministic, reference, and live
+artifacts all match the packaged candidate.
+
+- [ ] Bind all protected-Send evidence artifacts to exact build identity.
+- [ ] Gate release claims and installer smoke on applicable evidence levels.
+- [ ] Show evidence state and next action without exposing prompt data.
+- [ ] Update release documentation to prohibit unsupported fixed/released
+      claims.
+
+## 358. Contract legacy protected-Send orchestration and reclose ticket 348
+
+**What to build:** After the new production path and all evidence levels are
+green, remove the legacy protected-Send stage owner, the broad
+`IProtectedSendPipelineHost`, duplicate protected-Send sequencing in
+`OsInteractionOrchestrator`, and direct acceptance writes. Preserve unrelated
+apply-only behavior behind an explicitly named interface if it is still used.
+
+**Blocked by:** 351-357. Ticket 348 cannot close before this contraction.
+
+**State owner:** `ProtectedSendTransaction` remains the only admitted-attempt
+owner. Resident, session, sanitizer, overlay, and tray boundaries retain only
+their documented responsibilities.
+
+**Fail-closed state:** If any caller still owns replay or terminal publication,
+or if any required evidence is missing, contraction and reclosure stop.
+
+**Allowed transitions:** `dual implementation with one active owner -> all
+callers migrated -> legacy unreachable -> legacy deleted -> 348 reclosed`.
+There is never a state with two active side-effect owners.
+
+**Deterministic proof:** Static dependency checks and tests prove the broad host
+and duplicate state machine are gone. Full suite, self-test, product smoke,
+reference production-access matrix, and installer-matched resident canary pass
+for the same build.
+
+**Red-capable reproduction:** Static dependency checks must initially fail while
+the broad host, direct fixture write, or duplicate protected-Send stage owner is
+still reachable.
+
+**Highest required seam:** Static architecture gate plus the installed resident
+canary for the contracted candidate.
+
+**Evidence target:** `released`, followed by reclosure of 348 with linked proof
+for all required levels.
+
+- [ ] Delete legacy transaction ownership and broad host callbacks.
+- [ ] Keep any apply-only operation separate from cloud-bound Send semantics.
+- [ ] Run all evidence levels on one candidate and record the artifacts.
+- [ ] Reclose 348 with links to deterministic, reference, live, and release
+      evidence; preserve its earlier history.

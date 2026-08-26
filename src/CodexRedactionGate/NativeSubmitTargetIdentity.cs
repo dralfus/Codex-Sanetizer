@@ -11,7 +11,8 @@ namespace CodexRedactionGate;
 internal sealed record NativeSubmitTargetIdentity(
     long SnapshotGeneration,
     string ProfileId,
-    string WindowHandle)
+    string WindowHandle,
+    TextSurfaceDescriptor? CapturedSurface = null)
 {
     public static NativeSubmitTargetIdentity? TryCreate(long snapshotGeneration, TextSurfaceDescriptor? surface)
     {
@@ -23,7 +24,7 @@ internal sealed record NativeSubmitTargetIdentity(
             return null;
         }
 
-        return new NativeSubmitTargetIdentity(snapshotGeneration, surface.ProfileId, windowHandle);
+        return new NativeSubmitTargetIdentity(snapshotGeneration, surface.ProfileId, windowHandle, surface);
     }
 
     public static NativeSubmitTargetIdentity? TryCreateForGesture(
@@ -75,11 +76,16 @@ internal sealed class CapturedTargetSurfaceDiscovery : IActiveTextSurfaceDiscove
 {
     private readonly IActiveTextSurfaceDiscovery _inner;
     private readonly NativeSubmitTargetIdentity _target;
+    private readonly Func<string, bool> _isTargetWindowForeground;
 
-    public CapturedTargetSurfaceDiscovery(IActiveTextSurfaceDiscovery inner, NativeSubmitTargetIdentity target)
+    public CapturedTargetSurfaceDiscovery(
+        IActiveTextSurfaceDiscovery inner,
+        NativeSubmitTargetIdentity target,
+        Func<string, bool>? isTargetWindowForeground = null)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _target = target ?? throw new ArgumentNullException(nameof(target));
+        _isTargetWindowForeground = isTargetWindowForeground ?? IsTargetWindowForeground;
     }
 
     public TextSurfaceDiscoveryResult DiscoverActiveSurface()
@@ -87,6 +93,17 @@ internal sealed class CapturedTargetSurfaceDiscovery : IActiveTextSurfaceDiscove
         var discovery = _inner.DiscoverActiveSurface();
         if (!discovery.Succeeded || discovery.Surface is null || !discovery.Surface.Supported)
         {
+            if (_target.CapturedSurface is not null
+                && IsRecoverableFocusFailure(discovery.Status)
+                && _isTargetWindowForeground(_target.WindowHandle))
+            {
+                return TextSurfaceDiscoveryResult.Success(
+                    _target.CapturedSurface,
+                    Merge(
+                        Merge(discovery.Diagnostics, ("target_identity", "anchored_after_overlay")),
+                        ("focus_status", discovery.Status)));
+            }
+
             return TextSurfaceDiscoveryResult.Failure(
                 OsInteractionStatusIds.FocusLost,
                 Merge(discovery.Diagnostics, ("target_identity", "unavailable")));
@@ -102,6 +119,40 @@ internal sealed class CapturedTargetSurfaceDiscovery : IActiveTextSurfaceDiscove
         }
 
         return discovery;
+    }
+
+    private static bool IsRecoverableFocusFailure(string status)
+    {
+        return status is OsInteractionStatusIds.FocusLost
+            or OsInteractionStatusIds.NotComposer
+            or OsInteractionStatusIds.UnsupportedSurface;
+    }
+
+    private static bool IsTargetWindowForeground(string windowHandle)
+    {
+        if (!OperatingSystem.IsWindows()
+            || !IntPtr.TryParse(windowHandle, System.Globalization.NumberStyles.HexNumber, null, out var expectedWindow)
+            || expectedWindow == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        var foreground = NativeMethods.GetForegroundWindow();
+        var root = foreground == IntPtr.Zero
+            ? IntPtr.Zero
+            : NativeMethods.GetAncestor(foreground, NativeMethods.GaRoot);
+        return expectedWindow == (root == IntPtr.Zero ? foreground : root);
+    }
+
+    private static class NativeMethods
+    {
+        internal const uint GaRoot = 2;
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetAncestor(IntPtr window, uint flags);
     }
 
     private static IReadOnlyDictionary<string, string> Merge(

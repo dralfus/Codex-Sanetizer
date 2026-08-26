@@ -12,6 +12,10 @@ This directory documents Codex Redaction Gate: a local safety layer that interce
 - `PROGRAMMATIC_UIA_SEND_LIMITATION_SPEC.md` - explicit coverage limit for third-party programmatic UI Automation Send activation.
 - `REQUIREMENTS.md` - functional, non-functional, and security requirements.
 - `ARCHITECTURE.md` - target architecture, components, data flows, and integration options.
+- `VERIFIED_DEVELOPMENT_MODEL.md` - normative protected-Send architecture and
+  evidence-gated development model for convergent fixes.
+- `DEVELOPMENT_ROADMAP.md` - historical dependency map and current ordered
+  implementation frontier.
 - `SANITIZER_DESIGN.md` - concrete sanitizer design: API, pipeline, policy, span replacement, and verification.
 - `PROMPT_INTERCEPTION.md` - prompt interception modes, guard mode, gateway mode, and why hook-only blocking is not transparent replacement.
 - `PROMPT_PROTECTION_USABILITY_SPEC.md` - single active-app onboarding, responsive normal typing, and the user-facing tray surface.
@@ -24,6 +28,8 @@ This directory documents Codex Redaction Gate: a local safety layer that interce
 - `PROJECT_FILE_WORKFLOW_GRILL_REVIEW.md` - stress-test notes for coding-agent project file reads, sanitized virtual files, and restore-aware writes.
 - `GLOSSARY.md` - domain model and terminology.
 - `adr/` - architecture decision records.
+- `adr/ADR-007-evidence-gated-protected-send-transaction.md` - accepted decision
+  for one protected-Send transaction owner and build-bound evidence levels.
 - `spikes/tool-evaluation/` - small local spike fixtures and reproducible tool-evaluation notes.
 
 ## Core Idea

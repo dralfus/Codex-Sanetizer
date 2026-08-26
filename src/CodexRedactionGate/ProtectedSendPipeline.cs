@@ -25,6 +25,8 @@ internal interface IProtectedSendPipelineHost
 
     bool CanContinueProtectedSendOperation(ResidentProtectedSendOperation operation);
 
+    string GetProtectedSendContinuityStatus(ResidentProtectedSendOperation operation);
+
     IDisposable? AcquireProtectedSendSideEffect(ResidentProtectedSendOperation operation);
 
     OsInteractionResult RunNativeSubmitFlow(
@@ -124,6 +126,18 @@ internal sealed class ProtectedSendPipeline
             return true;
         }
 
+        string? continuityStatus = null;
+        bool ExecutionGuard()
+        {
+            if (_host.CanContinueProtectedSendOperation(operation))
+            {
+                return true;
+            }
+
+            continuityStatus = _host.GetProtectedSendContinuityStatus(operation);
+            return false;
+        }
+
         using var sideEffectScope = new ProtectedSendSideEffectScope(
             () => _host.AcquireProtectedSendSideEffect(operation));
         var result = ProtectedSendExecution.ExecuteGuarded(
@@ -132,8 +146,12 @@ internal sealed class ProtectedSendPipeline
                 runtime,
                 operation.Target,
                 TraceStage,
-                () => _host.CanContinueProtectedSendOperation(operation),
+                ExecutionGuard,
                 sideEffectScope.Acquire));
+        if (!string.IsNullOrWhiteSpace(continuityStatus))
+        {
+            result = WithContinuityStatus(result, continuityStatus);
+        }
 
         var disposition = AttemptDisposition(result.Status, result.Submitted);
         _host.ObserveProtectedSendStage("terminal");
@@ -159,6 +177,17 @@ internal sealed class ProtectedSendPipeline
         }
 
         return result;
+    }
+
+    private static NativeSubmitInterceptionResult WithContinuityStatus(
+        NativeSubmitInterceptionResult result,
+        string continuityStatus)
+    {
+        var diagnostics = new Dictionary<string, string>(result.Diagnostics, StringComparer.Ordinal)
+        {
+            ["resident_continuity"] = continuityStatus
+        };
+        return result with { Diagnostics = diagnostics };
     }
 
     private sealed class ProtectedSendSideEffectScope : IDisposable

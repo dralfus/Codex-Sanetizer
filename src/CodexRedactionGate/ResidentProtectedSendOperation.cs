@@ -83,6 +83,16 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
         }
     }
 
+    public string ContinuityStatus(ProtectionSnapshot current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+
+        lock (_lifecycleGate)
+        {
+            return ContinuityStatusUnderLock(current);
+        }
+    }
+
     public IDisposable? TryAcquireSideEffect(ProtectionSnapshot current)
     {
         ArgumentNullException.ThrowIfNull(current);
@@ -333,18 +343,55 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
 
     private bool CanContinueUnderLock(ProtectionSnapshot current)
     {
-        return Volatile.Read(ref _completed) == 0
-            && Volatile.Read(ref _cancellationRequested) == 0
-            && Volatile.Read(ref _cancelled) == 0
-            && !_cancellation.IsCancellationRequested
-            && current.State.Enabled
-            && current.HookReady
-            && current.Generation == Snapshot.Generation
-            && ReferenceEquals(current.RuntimeSet, RuntimeSet)
-            && string.Equals(
+        return ContinuityStatusUnderLock(current) == "continuity_ready";
+    }
+
+    private string ContinuityStatusUnderLock(ProtectionSnapshot current)
+    {
+        if (Volatile.Read(ref _completed) != 0)
+        {
+            return "operation_completed";
+        }
+
+        if (Volatile.Read(ref _cancellationRequested) != 0)
+        {
+            return "operation_cancellation_requested";
+        }
+
+        if (Volatile.Read(ref _cancelled) != 0 || _cancellation.IsCancellationRequested)
+        {
+            return "operation_cancelled";
+        }
+
+        if (!current.State.Enabled)
+        {
+            return "protection_disabled";
+        }
+
+        if (!current.HookReady)
+        {
+            return "hook_unavailable";
+        }
+
+        if (current.Generation != Snapshot.Generation)
+        {
+            return "runtime_generation_changed";
+        }
+
+        if (!ReferenceEquals(current.RuntimeSet, RuntimeSet))
+        {
+            return "runtime_replaced";
+        }
+
+        if (!string.Equals(
                 current.State.LocalProtectionStatus,
                 LocalProtectionRecovery.ReadyCode,
-                StringComparison.Ordinal);
+                StringComparison.Ordinal))
+        {
+            return "local_protection_unavailable";
+        }
+
+        return "continuity_ready";
     }
 
     private bool TryCreateTerminalBlockedTraceUnderLock(out IReadOnlyList<ProtectedSendTraceEntry> updated)

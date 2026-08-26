@@ -152,7 +152,7 @@ public sealed class OsInteractionOrchestrator
 
             if (!CanExecute(executionGuard))
             {
-                return ExecutionGuardFailed(surface, result, model, false, diagnostics);
+                return ExecutionGuardFailed(surface, result, model, false, diagnostics, "before_confirmation");
             }
 
             var decision = _confirmationOverlay is ITracedConfirmationOverlay tracedOverlay
@@ -225,7 +225,7 @@ public sealed class OsInteractionOrchestrator
 
             if (!CanExecute(executionGuard))
             {
-                return ExecutionGuardFailed(surface, result, model, true, unchangedDiagnostics);
+                return ExecutionGuardFailed(surface, result, model, true, unchangedDiagnostics, "before_submit_without_write");
             }
 
             var preSubmit = RediscoverSameSurface(surface);
@@ -247,18 +247,24 @@ public sealed class OsInteractionOrchestrator
 
             if (!CanExecute(executionGuard))
             {
-                return ExecutionGuardFailed(submitSurface, result, model, true, unchangedDiagnostics);
+                return ExecutionGuardFailed(submitSurface, result, model, true, unchangedDiagnostics, "before_submit_without_write");
             }
 
             if (!TryAcquireExecutionLease(executionGuard, executionLease, out var submitLease))
             {
-                return ExecutionGuardFailed(submitSurface, result, model, true, unchangedDiagnostics);
+                return ExecutionGuardFailed(submitSurface, result, model, true, unchangedDiagnostics, "after_submit_without_write_lease");
             }
 
             if (!CanExecute(executionGuard))
             {
                 submitLease?.Dispose();
-                return ExecutionGuardFailed(submitSurface, result, model, true, unchangedDiagnostics);
+                return ExecutionGuardFailed(
+                    submitSurface,
+                    result,
+                    model,
+                    true,
+                    unchangedDiagnostics,
+                    "after_submit_without_write_lease");
             }
 
             SubmitActionResult submitWithoutWrite;
@@ -294,18 +300,18 @@ public sealed class OsInteractionOrchestrator
         var writeSurface = preWrite.Surface ?? surface;
         if (!CanExecute(executionGuard))
         {
-            return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics);
+            return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics, "before_write");
         }
 
         if (!TryAcquireExecutionLease(executionGuard, executionLease, out var writeLease))
         {
-            return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics);
+            return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics, "acquiring_write_lease");
         }
 
         if (!CanExecute(executionGuard))
         {
             writeLease?.Dispose();
-            return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics);
+            return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics, "after_write_lease");
         }
 
         TextReplacementResult replace;
@@ -376,7 +382,8 @@ public sealed class OsInteractionOrchestrator
                 replace.Diagnostics,
                 verificationCapture.Diagnostics,
                 ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)));
+                ("verification_status", verificationCapture.Status)),
+                "before_replay");
         }
 
         var replayTarget = RediscoverSameSurface(verificationSurface);
@@ -401,7 +408,8 @@ public sealed class OsInteractionOrchestrator
                 replace.Diagnostics,
                 verificationCapture.Diagnostics,
                 ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)));
+                ("verification_status", verificationCapture.Status)),
+                "before_replay");
         }
 
         if (!TryAcquireExecutionLease(executionGuard, executionLease, out var replayLease))
@@ -411,7 +419,8 @@ public sealed class OsInteractionOrchestrator
                 replace.Diagnostics,
                 verificationCapture.Diagnostics,
                 ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)));
+                ("verification_status", verificationCapture.Status)),
+                "acquiring_replay_lease");
         }
 
         if (!CanExecute(executionGuard))
@@ -422,7 +431,8 @@ public sealed class OsInteractionOrchestrator
                 replace.Diagnostics,
                 verificationCapture.Diagnostics,
                 ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)));
+                ("verification_status", verificationCapture.Status)),
+                "after_replay_lease");
         }
 
         if (!TryTrace(traceStage, "send_injected", "submit_requested"))
@@ -525,7 +535,8 @@ public sealed class OsInteractionOrchestrator
         SanitizationResult result,
         ConfirmationUiModel? model,
         bool applied,
-        IReadOnlyDictionary<string, string> diagnostics)
+        IReadOnlyDictionary<string, string> diagnostics,
+        string phase)
     {
         return Finish(
             OsInteractionStatusIds.FailedClosed,
@@ -534,7 +545,10 @@ public sealed class OsInteractionOrchestrator
             model,
             applied,
             false,
-            Merge(diagnostics, ("trace_status", "resident_operation_unavailable")));
+            Merge(
+                diagnostics,
+                ("trace_status", "resident_operation_unavailable"),
+                ("execution_phase", phase)));
     }
 
     private RediscoveredSurface RediscoverSameSurface(TextSurfaceDescriptor expectedSurface)

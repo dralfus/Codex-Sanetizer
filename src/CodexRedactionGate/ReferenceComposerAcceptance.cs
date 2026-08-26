@@ -135,12 +135,6 @@ internal static class ReferenceComposerAcceptanceRunner
                     new WindowsConfirmationOverlay.FixedForegroundNativeMethods(
                         foregroundActivated: foregroundMode == ReferenceComposerForegroundMode.Verified));
 
-                var textAccess = writeMode == ReferenceComposerWriteMode.Unavailable
-                    ? (IVerifiedComposerTextAccess)new NativeVerifiedComposerTextAccess(discovery.DiscoverActiveSurface)
-                    : replayMode == ReferenceComposerReplayMode.Available
-                        ? new ReferenceComposerTextAccess(composer, discovery.DiscoverActiveSurface)
-                        : new ReferenceComposerTextAccess(composer, discovery.DiscoverActiveSurface, replay);
-                var adapter = new WindowsVerifiedComposerSurfaceAdapter(textAccess);
                 var runtime = new NativeSubmitRuntime(
                     hookHost,
                     new NativeSubmitInterceptionController(
@@ -150,9 +144,16 @@ internal static class ReferenceComposerAcceptanceRunner
                     profile,
                     ResidentTargetTracedRunner: (target, traceStage, executionGuard, executionLease) =>
                     {
+                        var targetAwareDiscovery = new CapturedTargetSurfaceDiscovery(discovery, target);
+                        var textAccess = writeMode == ReferenceComposerWriteMode.Unavailable
+                            ? (IVerifiedComposerTextAccess)new NativeVerifiedComposerTextAccess(targetAwareDiscovery.DiscoverActiveSurface)
+                            : replayMode == ReferenceComposerReplayMode.Available
+                                ? new ReferenceComposerTextAccess(composer, targetAwareDiscovery.DiscoverActiveSurface)
+                                : new ReferenceComposerTextAccess(composer, targetAwareDiscovery.DiscoverActiveSurface, replay);
+                        var adapter = new WindowsVerifiedComposerSurfaceAdapter(textAccess);
                         var orchestrator = new OsInteractionOrchestrator(
                             sanitizer,
-                            new CapturedTargetSurfaceDiscovery(discovery, target),
+                            targetAwareDiscovery,
                             adapter,
                             adapter,
                             new VerifiedSubmitBindingAction(adapter, profile),

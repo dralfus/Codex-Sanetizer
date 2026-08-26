@@ -469,6 +469,44 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void NativeSubmitTargetIdentity_PreservesSurfaceForPostOverlayReacquisition()
+    {
+        var surface = CreateNativeSubmitSurface("codex-desktop") with
+        {
+            Metadata = new SurfaceMetadata(
+                ComposerStatus: OsInteractionStatusIds.SupportedComposer,
+                WindowHandle: "2A")
+        };
+
+        var target = NativeSubmitTargetIdentity.TryCreate(1, surface);
+
+        Assert.That(target, Is.Not.Null);
+        Assert.That(target!.CapturedSurface, Is.SameAs(surface));
+    }
+
+    [Test]
+    public void CapturedTargetSurfaceDiscovery_ReusesCapturedSurfaceWhenFocusIsLostInSameWindow()
+    {
+        var surface = CreateNativeSubmitSurface("codex-desktop") with
+        {
+            Metadata = new SurfaceMetadata(
+                ComposerStatus: OsInteractionStatusIds.SupportedComposer,
+                WindowHandle: "2A")
+        };
+        var target = NativeSubmitTargetIdentity.TryCreate(1, surface)!;
+        var discovery = new CapturedTargetSurfaceDiscovery(
+            new FixedFailureSurfaceDiscovery(OsInteractionStatusIds.FocusLost),
+            target,
+            _ => true);
+
+        var result = discovery.DiscoverActiveSurface();
+
+        Assert.That(result.Succeeded, Is.True);
+        Assert.That(result.Surface, Is.SameAs(surface));
+        Assert.That(result.Diagnostics["target_identity"], Is.EqualTo("anchored_after_overlay"));
+    }
+
+    [Test]
     public void NativeSubmitTargetIdentity_NormalizesPointerChildWindowToRootWindow()
     {
         var surface = CreateNativeSubmitSurface("codex-desktop") with
@@ -2099,6 +2137,41 @@ public partial class SanitizerTests
         Assert.That(trace.Select(entry => entry.Stage), Is.EqualTo(new[] { "send_detected" }));
     }
 
+    [Test]
+    public void ResidentProtectedSendOperation_ReportsRawFreeContinuityReasonWhenHookIsUnavailable()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        var runtime = NativeSubmitRuntime.CreateTest(
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new InvalidOperationException("Test runner should not run."),
+            profile);
+        using var runtimeSet = new NativeSubmitRuntimeSet(hook, new[] { runtime });
+        var protectedSnapshot = new ProtectionSnapshot(
+            Generation: 3,
+            State: new TrayProtectionState(
+                Enabled: true,
+                Mode: "NativeSubmit",
+                Hotkey: "Ctrl+Shift+F9",
+                LastStatus: OsInteractionStatusIds.NativeSubmitInProgress,
+                LastDecision: null,
+                LastReplacementCount: null,
+                LastProfileId: profile.ProfileId,
+                LastApplied: false,
+                LastSubmitted: false),
+            ApplyOnlyRunner: () => throw new InvalidOperationException("Apply-only runner should not run."),
+            RuntimeSet: runtimeSet,
+            HookReady: true,
+            SendControlDiscovery: null,
+            ActiveSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(CreateNativeSubmitSurface(profile.ProfileId)));
+        using var operation = new ResidentProtectedSendOperation(protectedSnapshot, runtimeSet, target: null);
+        var hookUnavailableSnapshot = protectedSnapshot with { HookReady = false };
+
+        Assert.That(operation.CanContinue(hookUnavailableSnapshot), Is.False);
+        Assert.That(operation.ContinuityStatus(hookUnavailableSnapshot), Is.EqualTo("hook_unavailable"));
+    }
+
     private static ConfirmationUiModel CreateOverlayModel(string prompt)
     {
         return new ConfirmationUiModel(
@@ -3567,6 +3640,19 @@ public partial class SanitizerTests
     {
         return false; // Simulate user cancel/close
     }
+
+    private sealed class FixedFailureSurfaceDiscovery : IActiveTextSurfaceDiscovery
+    {
+        private readonly string _status;
+
+        public FixedFailureSurfaceDiscovery(string status)
+        {
+            _status = status;
+        }
+
+        public TextSurfaceDiscoveryResult DiscoverActiveSurface() => TextSurfaceDiscoveryResult.Failure(_status);
+    }
+
 }
 
 [TestFixture]
@@ -6385,6 +6471,7 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(result.SuppressOriginalInput, Is.False);
         Assert.That(result.Diagnostics["enabled"], Is.EqualTo("false"));
     }
+
 }
 
 [TestFixture]

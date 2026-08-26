@@ -83,6 +83,12 @@ The mapping table must be user-global across projects. The same real URL, domain
 65. As a maintainer, I want one durable raw-free operational journal for those actions, so that a support investigation can identify the exact failed stage without collecting prompt data.
 66. As a release owner, I want the full reference-composer matrix to run as release/CI evidence rather than as an opaque tray action, so that first-run setup remains short and understandable.
 67. As a tester, I want manual desktop acceptance to begin only after automatic orchestration, visible progress, diagnostics, and same-process proof are complete, so that manual observations validate a coherent product path.
+68. As a user, I want every intercepted Send to have one transaction owner from suppression through terminal publication, so that no adapter can leave original text in the composer or report success before the sanitized Send is complete.
+69. As a maintainer, I want every production bug to have a red-capable reproduction at the highest practical seam before its implementation is changed, so that fixes are driven by observed behavior rather than inferred local correctness.
+70. As a maintainer, I want change status to distinguish implemented, locally verified, live verified, and released, so that an internal green test is never reported as a confirmed user-visible fix.
+71. As a release owner, I want live acceptance evidence bound to the exact commit, executable version, installer identity, profile fingerprint, and Send binding, so that stale proof cannot authorize a different build.
+72. As a maintainer, I want the reference composer to exercise the production composer-access adapter, so that acceptance catches UI Automation, apartment, focus, write-verification, and replay defects rather than bypassing them with direct fixture control writes.
+73. As a user, I want a failed or indeterminate transaction to preserve the original composer text and block replay with a visible raw-free reason, so that recovery cannot create a silent or duplicate Send.
 
 ## Implementation Decisions
 
@@ -122,6 +128,36 @@ The mapping table must be user-global across projects. The same real URL, domain
 - A production low-level mouse hook must never classify or suppress every left click in a selected AI-client window. Until resident pre-action evidence identifies the actual Send control before the callback, native pointer interception stays disabled, the resident state reports keyboard-only Send protection, and ordinary clicks, copy/paste, navigation, and non-Send controls retain normal behavior. The local reference composer may continue to exercise the shared pointer callback path through its non-production capability.
 - Deferred sanitize/confirm/replay work must receive the snapshot generation and the composer/window target identity captured for the original gesture. It must not rediscover the foreground target later. If the captured target is invalid, changed, or cannot be verified before replay, it aborts raw-free and does not submit.
 - A protected Send is one correlated resident operation. At interception, the resident runtime creates an opaque `attempt_id` and publishes only raw-free transition metadata in this order: `send_detected` -> `target_matched` -> `composer_read` -> `sanitized` -> `overlay_created` -> `overlay_foreground_confirmed` -> `approved` or `cancelled` -> `text_written` -> `send_injected` -> `sent_safely` or one terminal blocked outcome. Transitions that do not apply to a safe prompt may be skipped only through an explicitly recorded safe path. A missing, duplicated, stale, or out-of-order transition fails closed.
+- The external protected-Send interface is one deep `ProtectedSendTransaction`:
+  an admitted request enters once and returns exactly one terminal result. The
+  transaction owns attempt correlation, resident generation, target identity,
+  raw prompt lifetime, sanitization, confirmation, target revalidation, write,
+  exact write verification, replay, side-effect linearization, raw-free trace,
+  and terminal publication. Hooks, tray code, and Windows adapters provide
+  input or execute requested effects; they do not own stage ordering or submit
+  independently.
+- A target-scoped `ProtectedComposerSession` is the transaction's only
+  composer-access seam. It owns target reacquisition, UI Automation apartment
+  handling, focus checks, read/write, exact post-write verification, and Send
+  replay. Production Windows and deterministic/reference implementations must
+  satisfy the same contract. A durable UI Automation element may not cross a
+  thread/apartment boundary as hidden mutable state.
+- Resident state owns admission only: whether this input belongs to a selected
+  protected profile and which immutable generation/binding may be used. The
+  transaction owns the admitted attempt. The tray is only a projection of
+  published resident and transaction outcomes.
+- `sent_safely` means that sanitized text was written and verified locally, the
+  configured Send replay was injected successfully, and one terminal result
+  was committed. It does not prove that the cloud service received or accepted
+  the message, and user-facing text must not overstate that guarantee.
+- The migration to `ProtectedSendTransaction` is expand-and-contract. First,
+  add a resident-owned live canary on the current path so it can expose the
+  existing failure. Then add the session seam and transaction beside legacy
+  orchestration, migrate reference acceptance, migrate production keyboard
+  Send, and remove legacy owners only after equivalent evidence is green.
+- A transaction state-machine change and a production Windows UI Automation
+  adapter change must not be combined in one implementation slice unless a
+  recorded failing acceptance proves they cannot be separated.
 - The confirmation overlay is hosted by one long-lived dedicated UI thread and serialized queue owned by the resident runtime. The low-level input callback only records/suppresses the gesture and schedules the correlated operation; it never creates or blocks on a modal overlay itself.
 - The product pins one supported ChatGPT Desktop compatibility fingerprint for release acceptance. The fingerprint contains only raw-free application/package version, process/window identity, composer UI Automation shape, configured Send/newline pair, and Send-control evidence. A fingerprint mismatch is `unsupported_surface`, not `protected`.
 - The primary acceptance seam is a protected-Send trace recorder at the resident boundary. It receives only opaque attempt identifiers, snapshot generation, target identity fingerprints, transition/result codes, and durations. It never stores prompt text, sensitive values, mappings, paths, control names, or exception messages.
@@ -168,6 +204,38 @@ The mapping table must be user-global across projects. The same real URL, domain
 - Policy files and dictionaries must be treated as sensitive local artifacts because they can contain customer names, product names, project names and internal domains.
 
 ## Testing Decisions
+
+- Development and bug-fix status follows the evidence ladder `proposed ->
+  reproduced_red -> implemented -> locally_verified -> live_verified ->
+  released`. A ticket or user report may use the word fixed only after the
+  original reproduction is green at its required level. Automated unit tests
+  alone can establish at most `locally_verified` unless they exercise the
+  complete production-equivalent seam named by the ticket.
+- Every bug fix begins with a red-capable reproduction. If the current design
+  has no seam capable of reproducing the failure, the first deliverable is a
+  raw-free diagnostic probe, live canary, or acceptance adapter. Repeated source
+  edits without such evidence are prohibited.
+- The highest deterministic seam for protected Send is
+  `ProtectedSendTransaction.Execute(request) -> terminal result`. Its matrix
+  covers safe and sensitive prompts, cancel/edit/confirm, stale generation,
+  target change before write and replay, write mismatch, replay unavailable or
+  partial, cancellation races, repeated sends, and exactly one terminal
+  publication without timers or cloud access.
+- Reference-composer acceptance must call the production
+  `NativeVerifiedComposerTextAccess` path through `ProtectedComposerSession`.
+  Direct assignment to the fixture TextBox is useful only as a fixture unit
+  test and cannot count as production-adapter or release evidence.
+- Live protected-Send acceptance must run inside the active resident instance
+  and traverse the installed keyboard hook, admission snapshot, transaction,
+  production UI Automation access, confirmation overlay, write verification,
+  replay, and terminal publication. The evidence record binds commit, product
+  version, executable hash, installer identity, compatibility fingerprint, and
+  Send binding. A mismatch or missing field rejects the evidence.
+- Release evidence has three non-substitutable levels: deterministic
+  transaction matrix; reference composer through the production access
+  adapter; installed resident canary against the supported OpenAI Desktop
+  build. Lower levels localize failures but cannot replace a required higher
+  level.
 
 - Tests should validate external behavior: given an input, the gate returns expected sanitized output, entity classifications, mapping behavior and policy decisions.
 - Detector tests should cover URLs, domains, emails, private IPs, CIDRs, tokens, passwords, connection strings, JWTs, private keys, customer names, project names and mixed log snippets.

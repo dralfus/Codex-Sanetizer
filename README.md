@@ -341,6 +341,8 @@ Start with:
 - `codex-redaction-gate-spec/README.md`
 - `codex-redaction-gate-spec/SPEC.md`
 - `codex-redaction-gate-spec/ARCHITECTURE.md`
+- `codex-redaction-gate-spec/VERIFIED_DEVELOPMENT_MODEL.md`
+- `codex-redaction-gate-spec/DEVELOPMENT_ROADMAP.md`
 - `codex-redaction-gate-spec/SANITIZER_DESIGN.md`
 - `codex-redaction-gate-spec/THREAT_MODEL.md`
 

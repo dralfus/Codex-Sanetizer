@@ -2172,6 +2172,35 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void OsInteractionOrchestrator_ReportsRawFreePhaseWhenWriteGuardRejectsAfterApproval()
+    {
+        var surface = new ProductFlowTextSurface("Connect to 192.168.10.25");
+        var approved = false;
+        var orchestrator = CreateProductFlowOrchestrator(surface, ConfirmationDecisionContract.Confirm);
+
+        var result = orchestrator.RunOnce(
+            OsInteractionRunOptions.ConfirmAndSend,
+            traceStage: (stage, _) =>
+            {
+                if (stage == "approved")
+                {
+                    approved = true;
+                }
+
+                return true;
+            },
+            executionGuard: () => !approved);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+        Assert.That(result.Applied, Is.False);
+        Assert.That(result.Submitted, Is.False);
+        Assert.That(result.Diagnostics["trace_status"], Is.EqualTo("resident_operation_unavailable"));
+        Assert.That(result.Diagnostics["execution_phase"], Is.EqualTo("before_write"));
+        Assert.That(surface.WriteCount, Is.Zero);
+        Assert.That(surface.SubmitCount, Is.Zero);
+    }
+
+    [Test]
     public void ProductConfirmAndSend_CapturedTargetChangeImmediatelyBeforeReplayBlocksSubmission()
     {
         var surface = new ProductFlowTextSurface("Connect to 192.168.10.25");

@@ -303,12 +303,15 @@ public static class WindowsTrayApp
                 Func<bool>? executionGuard = null,
                 Func<IDisposable?>? executionLease = null)
             {
-                var nativeSubmitAdapter = new WindowsVerifiedComposerSurfaceAdapter();
                 IActiveTextSurfaceDiscovery composerDiscovery = target is null
                     ? WindowsFocusedComposerDiscovery.CreateDefault()
                     : new CapturedTargetSurfaceDiscovery(
                         WindowsFocusedComposerDiscovery.CreateDefault(),
                         target);
+                var nativeSubmitAdapter = OperatingSystem.IsWindows()
+                    ? new WindowsVerifiedComposerSurfaceAdapter(
+                        new NativeVerifiedComposerTextAccess(composerDiscovery.DiscoverActiveSurface))
+                    : new WindowsVerifiedComposerSurfaceAdapter();
                 var nativeSubmitOrchestrator = new OsInteractionOrchestrator(
                     sanitizer,
                     composerDiscovery,
@@ -1025,6 +1028,7 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
     private void JournalSnapshot(TrayProtectionState state)
     {
         var action = state.EffectiveOperationalAction;
+        var lastProtectedSendTrace = state.ProtectedSendAttemptTrace?.LastOrDefault();
         var signature = string.Join('|',
             action.AttemptId,
             action.ActionKind,
@@ -1034,20 +1038,38 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             state.SetupVerificationStatus,
             state.SetupVerificationRemainingSeconds,
             state.NativeSubmitStatus,
-            state.ComposerProtected);
+            state.ComposerProtected,
+            state.ProtectedSendAttemptId,
+            lastProtectedSendTrace?.Stage,
+            lastProtectedSendTrace?.ResultCode,
+            state.LastProtectedSendFailureCode);
         if (string.Equals(signature, _lastJournalStateSignature, StringComparison.Ordinal))
         {
             return;
         }
 
         _lastJournalStateSignature = signature;
+        var journalAction = lastProtectedSendTrace is null
+            ? action.ActionKind == "none" ? "state_transition" : action.ActionKind
+            : "protected_send";
+        var journalStage = lastProtectedSendTrace?.Stage
+            ?? (state.SetupVerificationStatus != "idle" ? state.SetupVerificationStatus : action.Stage);
+        var journalStatus = lastProtectedSendTrace?.ResultCode
+            ?? (state.LastProtectedSendFailureCode != "none"
+                ? state.LastProtectedSendFailureCode
+                : action.Status);
+        var journalResultCode = lastProtectedSendTrace is not null
+            && state.LastProtectedSendFailureCode != "none"
+            ? state.LastProtectedSendFailureCode
+            : action.NextAction;
+        var journalAttemptId = lastProtectedSendTrace?.AttemptId ?? action.AttemptId;
         _operationJournal.Append(
             "resident",
-            action.ActionKind == "none" ? "state_transition" : action.ActionKind,
-            state.SetupVerificationStatus != "idle" ? state.SetupVerificationStatus : action.Stage,
-            action.Status,
-            action.NextAction,
-            action.AttemptId);
+            journalAction,
+            journalStage,
+            journalStatus,
+            journalResultCode,
+            journalAttemptId);
     }
 
     private static string IntentAction(TrayProtectionIntent intent) => intent switch

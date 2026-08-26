@@ -71,6 +71,82 @@ The target identity and snapshot generation captured for the original gesture tr
 
 The highest resident-adapter test seam is an application-context/native-hook lifecycle harness that injects a classified input event and observes suppression, status, and approved replay. Unit tests support that seam, but release readiness requires lifecycle evidence covering startup, setup, reload, target change, and repeated sends.
 
+### Protected Send Transaction
+
+Once the resident snapshot admits a selected Send, one deep
+`ProtectedSendTransaction` owns the complete attempt. Its public shape is
+deliberately small:
+
+```text
+Execute(AdmittedProtectedSend request) -> ProtectedSendTerminalResult
+```
+
+The transaction hides attempt correlation, raw prompt lifetime, sanitizer and
+confirmation sequencing, target revalidation, write verification, replay,
+side-effect linearization, raw-free trace ordering, and terminal publication.
+No hook, tray handler, UI Automation adapter, or overlay callback may submit or
+publish success independently.
+
+The transaction uses a target-scoped `ProtectedComposerSession`. This internal
+interface owns production composer access: reacquire and revalidate the exact
+target, execute UI Automation in the correct apartment, read and write text,
+verify the exact written value, and replay the verified binding. The Windows
+adapter and deterministic reference adapter implement the same contract. The
+reference adapter cannot count as release evidence when it writes directly to
+its fixture TextBox and bypasses the production access path.
+
+```mermaid
+flowchart LR
+    H["Windows hook"] -->|"captured input + resident snapshot"| R["Resident admission"]
+    R -->|"admitted request"| T["ProtectedSendTransaction"]
+    T --> S["Sanitizer"]
+    T --> O["Confirmation overlay"]
+    T --> C["ProtectedComposerSession"]
+    C --> W["Windows UIA adapter"]
+    C --> F["Reference adapter"]
+    T --> P["One raw-free terminal publication"]
+```
+
+State ownership is explicit:
+
+| State | Sole owner | Other modules may do |
+| --- | --- | --- |
+| Selected profiles, hook readiness, immutable generation and binding | Resident runtime | Request setup/reload; project published state |
+| One admitted Send attempt and its terminal outcome | `ProtectedSendTransaction` | Supply input/effects; observe result |
+| Target-scoped read/write/verify/replay mechanics | `ProtectedComposerSession` adapter | Return typed success/failure only |
+| Visible status and user intent | Tray UI | Render published state; dispatch commands |
+
+`sent_safely` is a local guarantee: sanitized text was written and verified,
+the configured replay was injected, and one terminal result was committed. It
+does not claim that a remote service received the message.
+
+### Evidence-Gated Development
+
+Protected behavior advances through `proposed -> reproduced_red -> implemented
+-> locally_verified -> live_verified -> released`. The original user-visible
+reproduction must turn red before the repair and green after it at the highest
+applicable seam. If no seam can reproduce the failure, diagnostics or an
+acceptance adapter is the next architectural task.
+
+The three protected-Send evidence levels are non-substitutable:
+
+1. Deterministic transaction matrix without timers or cloud access.
+2. Reference composer using the production `NativeVerifiedComposerTextAccess`
+   path through `ProtectedComposerSession`.
+3. Installer-matched resident canary using the real hook, active resident,
+   production UI Automation, overlay, verification, replay, and terminal trace.
+
+Migration follows expand-and-contract. A live canary is added to the current
+path first, then the composer-session seam, then the transaction, reference
+adapter, and production keyboard path. Legacy orchestration is removed only
+after all evidence levels pass for the same build. Transaction state changes
+and Windows UI Automation changes are separate slices so a regression has one
+plausible owner.
+
+The normative development contract is in
+`VERIFIED_DEVELOPMENT_MODEL.md`; the decision record is
+`adr/ADR-007-evidence-gated-protected-send-transaction.md`.
+
 ### Redaction Engine
 
 Pure local library that transforms text.

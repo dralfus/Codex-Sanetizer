@@ -8,6 +8,49 @@ using CodexRedactionGate;
 public partial class SanitizerTests
 {
     [Test]
+    public void ComposerTextFormatting_NormalizesLineEndingsWithoutFlatteningText()
+    {
+        var input = "first\r\nsecond\nthird\rfourth\u2028fifth\u2029";
+
+        var normalized = ComposerTextFormatting.NormalizeLineEndings(input);
+
+        Assert.That(normalized, Is.EqualTo(string.Join(
+            Environment.NewLine,
+            new[] { "first", "second", "third", "fourth", "fifth", string.Empty })));
+        Assert.That(normalized, Does.Contain(Environment.NewLine + "third"));
+        Assert.That(normalized, Does.EndWith(Environment.NewLine));
+    }
+
+    [Test]
+    public void ComposerTextFormatting_UsesWhitespaceOnlyForSourceAgreement()
+    {
+        var uiaText = "first second third";
+        var formattedText = "first\r\nsecond\r\nthird";
+
+        Assert.That(
+            ComposerTextFormatting.HasSameContentIgnoringWhitespace(uiaText, formattedText),
+            Is.True);
+        Assert.That(
+            ComposerTextFormatting.HasSameContentIgnoringWhitespace(uiaText, "first different third"),
+            Is.False);
+    }
+
+    [Test]
+    public void ComposerTextFormatting_DiagnosticsAreRawFreeAndExposeFormattingShape()
+    {
+        var raw = "first\nsecond";
+        var normalized = ComposerTextFormatting.NormalizeLineEndings(raw);
+
+        var diagnostics = ComposerTextFormatting.Diagnostics(raw, normalized, "verified-keyboard-copy");
+
+        Assert.That(diagnostics["capture_strategy"], Is.EqualTo("verified-keyboard-copy"));
+        Assert.That(diagnostics["line_break_count"], Is.EqualTo("1"));
+        Assert.That(diagnostics["line_ending_style"], Is.EqualTo("lf"));
+        Assert.That(diagnostics["format_preserved"], Is.EqualTo("true"));
+        Assert.That(System.Text.Json.JsonSerializer.Serialize(diagnostics), Does.Not.Contain(raw));
+    }
+
+    [Test]
     public void OsInteractionContracts_ArePlatformNeutralAndRawFree()
     {
         var surface = CreateFakeTextSurface("Normal prompt text");
@@ -53,8 +96,30 @@ public partial class SanitizerTests
         Assert.That(result.Submitted, Is.False);
         Assert.That(surface.CurrentText, Does.Contain("IP_"));
         Assert.That(surface.CurrentText, Does.Not.Contain("192.168.10.25"));
+        Assert.That(surface.WrittenTexts, Is.EqualTo(new[] { surface.CurrentText }));
         Assert.That(overlay.Models, Has.Count.EqualTo(1));
         Assert.That(result.ConfirmationModel!.SanitizedPrompt, Does.Not.Contain("192.168.10.25"));
+    }
+
+    [Test]
+    public void OsInteractionOrchestrator_SensitiveMultilinePromptPreservesLineBreaksThroughOverlayAndWrite()
+    {
+        var original = string.Join(
+            Environment.NewLine,
+            "first line",
+            "Connect to 192.168.10.25",
+            "last line");
+        var surface = CreateFakeTextSurface(original);
+        var overlay = new FakeConfirmationOverlay(ConfirmationDecisionContract.Confirm);
+        var orchestrator = CreateOsOrchestrator(surface, overlay);
+
+        var result = orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly);
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Applied));
+        Assert.That(result.ConfirmationModel!.SanitizedPrompt, Does.Contain(Environment.NewLine + "last line"));
+        Assert.That(surface.CurrentText, Does.Contain("first line" + Environment.NewLine));
+        Assert.That(surface.CurrentText, Does.Contain(Environment.NewLine + "last line"));
+        Assert.That(surface.CurrentText, Does.Not.Contain("192.168.10.25"));
     }
 
     [Test]
@@ -84,6 +149,7 @@ public partial class SanitizerTests
 
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Submitted));
         Assert.That(surface.CurrentText, Is.EqualTo("Connect to secure-server"));
+        Assert.That(surface.WrittenTexts, Is.EqualTo(new[] { "Connect to secure-server" }));
         Assert.That(surface.SubmitCount, Is.EqualTo(1));
         Assert.That(result.Diagnostics["edited_text_verified"], Is.EqualTo("true"));
     }
@@ -667,6 +733,8 @@ public partial class SanitizerTests
 
         public int SubmitCount { get; private set; }
 
+        public List<string> WrittenTexts { get; } = new();
+
         public TextSurfaceDescriptor Surface { get; }
 
         public TextSurfaceDiscoveryResult DiscoverActiveSurface()
@@ -693,6 +761,7 @@ public partial class SanitizerTests
 
             CurrentText = text;
             WriteCount++;
+            WrittenTexts.Add(text);
             return new TextReplacementResult(true, "applied", new Dictionary<string, string> { ["write_length"] = text.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) });
         }
 

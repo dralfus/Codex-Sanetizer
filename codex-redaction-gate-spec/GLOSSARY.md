@@ -80,6 +80,43 @@ The component that decides whether an entity should be allowed, pseudonymized, r
 
 A scope at which rules are defined, such as built-in defaults, global user policy, organization policy, project policy, or temporary session policy.
 
+## Protected Composer Session
+
+A target-scoped interface used by one protected Send transaction. It owns the
+production-equivalent composer operations: reacquire and revalidate the exact
+target, read text, write text, verify the exact written value, and replay the
+verified Send binding. Windows UI Automation and the deterministic reference
+composer are adapters behind this interface.
+
+## Protected Send Transaction
+
+The single state owner for one intercepted Send attempt. It owns the attempt
+identity, admitted resident generation, raw prompt lifetime, sanitization,
+confirmation, target revalidation, local write, exact verification, replay,
+raw-free trace, and one terminal outcome. Hook, tray, UI Automation, and
+confirmation adapters cannot independently submit or publish success.
+
+## Evidence Ladder
+
+The ordered development states `proposed`, `reproduced_red`, `implemented`,
+`locally_verified`, `live_verified`, and `released`. A change may advance only
+when the evidence required by the next state is recorded for the same behavior
+and build. `Implemented` is not a synonym for fixed.
+
+## Red-Capable Reproduction
+
+A deterministic or live acceptance path that fails for the reported behavior
+before a repair and can turn green without changing the asserted user-visible
+contract. If no such path exists, the first task is to build diagnostics or an
+acceptance seam, not to guess at production code.
+
+## Live Verified
+
+Evidence that the original user-visible reproduction succeeds through the
+active resident process and production adapters on a build whose identity is
+recorded. Passing a synthetic fixture that bypasses production UI Automation
+does not establish this state.
+
 ## Pseudonym
 
 A stable typed placeholder such as `URL_8F3A21B9` or `USERNAME_bright_turing_8F3A`. It preserves entity type and cross-prompt consistency without revealing the original value.

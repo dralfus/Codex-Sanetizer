@@ -29,11 +29,21 @@ composer before its normal keyboard or mouse Send action reaches the cloud.
 
 ## Engineering Acceptance Evidence
 
-The release candidate is accepted for manual Windows testing when the current
-commit passes the full automated test suite, `--self-test`, and
-`--product-smoke`, and the installer is built from that same commit. The smoke
-output must retain `project_files_protected: false` and the file-ingress status
-must remain `unsupported`.
+The full automated test suite, `--self-test`, `--product-smoke`, and an installer
+built from the same commit are necessary but are not sufficient to call a
+reported protected-Send defect fixed. Acceptance follows
+`VERIFIED_DEVELOPMENT_MODEL.md` and ADR-007: the deterministic transaction
+matrix, production-access reference composer, and installer-matched resident
+canary are separate evidence levels. A required higher level cannot be replaced
+by lower-level green tests. The smoke output must retain
+`project_files_protected: false` and the file-ingress status must remain
+`unsupported`.
+
+Manual testing may begin as exploratory evidence after local gates pass, but a
+release claim requires the original reproduction to be green in the active
+resident build. The evidence record must identify the commit, product version,
+executable hash, installer identity, compatibility fingerprint, and Send
+binding; stale or mismatched evidence is rejected.
 
 Manual user acceptance remains a separate final step. It must prove, on the
 installed tray application, that:

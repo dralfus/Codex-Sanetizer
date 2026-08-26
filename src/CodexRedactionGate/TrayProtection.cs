@@ -209,6 +209,9 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
     bool IProtectedSendPipelineHost.CanContinueProtectedSendOperation(
         ResidentProtectedSendOperation operation) => CanContinueProtectedSendOperation(operation);
 
+    string IProtectedSendPipelineHost.GetProtectedSendContinuityStatus(
+        ResidentProtectedSendOperation operation) => operation.ContinuityStatus(ReadSnapshot());
+
     IDisposable? IProtectedSendPipelineHost.AcquireProtectedSendSideEffect(
         ResidentProtectedSendOperation operation) => AcquireProtectedSendSideEffect(operation);
 
@@ -1879,17 +1882,53 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 
     private static string ProtectedSendFailureCode(IReadOnlyDictionary<string, string>? diagnostics)
     {
-        if (diagnostics is null
-            || !diagnostics.TryGetValue("exception_status", out var failureCode))
+        if (diagnostics is null)
         {
             return "none";
         }
 
-        return failureCode switch
+        if (diagnostics.TryGetValue("resident_continuity", out var continuityStatus)
+            && IsSafeProtectedSendFailureCode(continuityStatus))
         {
-            "orchestrator_failure" or "native_submit_flow_failure" => failureCode,
-            _ => "none"
-        };
+            return continuityStatus;
+        }
+
+        if (diagnostics.TryGetValue("execution_phase", out var executionPhase)
+            && IsSafeProtectedSendFailureCode(executionPhase))
+        {
+            return executionPhase;
+        }
+
+        if (diagnostics.TryGetValue("exception_status", out var exceptionStatus))
+        {
+            return exceptionStatus switch
+            {
+                "orchestrator_failure" or "native_submit_flow_failure" => exceptionStatus,
+                _ => "none"
+            };
+        }
+
+        return "none";
+    }
+
+    private static bool IsSafeProtectedSendFailureCode(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 64)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!((character >= 'a' && character <= 'z')
+                || (character >= '0' && character <= '9')
+                || character == '_'))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     internal ProtectionSnapshot? PublishProtectedSendAttempt(
