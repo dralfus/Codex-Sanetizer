@@ -3150,6 +3150,19 @@ green. No manual release claim is made from the deterministic tests or installer
 smoke alone. The deterministic result does not replace the installed acceptance
 artifact.
 
+**Red reproduction (2026-08-26):** The installed canary displayed its armed
+marker, but the marker reached the OpenAI Desktop chat without the confirmation
+overlay. The cause was that canary routing was checked only after ordinary
+sanitizer classification; a marker that was not yet in the resident policy
+could therefore take the normal pass-through path.
+
+**Remediation in progress (2026-08-26):** Armed canary admission now runs before
+ordinary keyboard classification for the exact selected profile and configured
+Send binding, and returns `SuppressOriginalInput=true`. Focused tests cover both
+classification and the suppressed-hook callback. The fix still requires a
+rebuilt installed candidate and a new canary run before the red artifact can be
+accepted as corrected.
+
 ## 353. Deepen composer access behind ProtectedComposerSession
 
 **What to build:** Introduce a target-scoped `ProtectedComposerSession`

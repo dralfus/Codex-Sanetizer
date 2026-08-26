@@ -2833,6 +2833,16 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             ? discovery
             : null;
         runtime ??= ResolveRuntimeByProfileIdentity(snapshot, runtimeSet, discovery);
+        var target = NativeSubmitTargetIdentity.TryCreateForGesture(
+            snapshot.Generation,
+            discovery.Surface,
+            gesture.TargetWindow);
+        var canary = ClassifyArmedResidentCanary(runtime, gesture);
+        if (canary is not null)
+        {
+            return RememberSnapshot(snapshot, runtimeSet, canary, target);
+        }
+
         if (!IsLocalProtectionReady(snapshot)
             && runtime is not null
             && (discovery.Succeeded || HasProfileIdentity(discovery))
@@ -2863,10 +2873,34 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             snapshot,
             runtimeSet,
             result,
-            NativeSubmitTargetIdentity.TryCreateForGesture(
-                snapshot.Generation,
-                discovery.Surface,
-                gesture.TargetWindow));
+            target);
+    }
+
+    private NativeSubmitInterceptionResult? ClassifyArmedResidentCanary(
+        NativeSubmitRuntime? runtime,
+        NativeKeyGesture gesture)
+    {
+        if (runtime is null
+            || !_residentCanary.TryGetArmed(out var arm)
+            || !string.Equals(arm.ProfileId, runtime.Profile.ProfileId, StringComparison.Ordinal)
+            || !runtime.Profile.IsProtected
+            || runtime.Profile.SubmitBinding?.Matches(gesture) != true)
+        {
+            return null;
+        }
+
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.NativeSubmitGuarded,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["profile_id"] = runtime.Profile.ProfileId,
+                ["canary_attempt_id"] = arm.AttemptId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["canary_admission"] = "armed",
+                ["cloud_submission"] = "false"
+            });
     }
 
     private NativeSubmitInterceptionResult? ClassifyFocusedSendControl(

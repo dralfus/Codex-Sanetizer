@@ -88,6 +88,21 @@ public sealed class ResidentCanaryTests
     }
 
     [Test]
+    public void Session_ExposesOnlyAnArmedCanaryForInputAdmission()
+    {
+        var session = new ResidentCanarySession();
+
+        Assert.That(session.TryGetArmed(out _), Is.False);
+        var arm = session.Arm(43, "chatgpt-desktop").Arm!;
+
+        Assert.That(session.TryGetArmed(out var current), Is.True);
+        Assert.That(current, Is.SameAs(arm));
+
+        Assert.That(session.TryObserveSend(43, "chatgpt-desktop", arm.TargetGeneration, out _), Is.True);
+        Assert.That(session.TryGetArmed(out _), Is.False);
+    }
+
+    [Test]
     public void BuildIdentity_ReadsOnlySafeInstallerIdentityFromSidecar()
     {
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-installer-tests", Guid.NewGuid().ToString("N"));
@@ -368,6 +383,129 @@ public sealed class ResidentCanaryTests
         }
     }
 
+    [Test]
+    public void Controller_ArmedCanaryAdmissionSuppressesConfiguredSendBeforeNormalClassification()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-canary-admission-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = CreateProtectedProfile("chatgpt-desktop");
+        var hook = new CanaryHookHost();
+        var surface = TestSurfaceFactory.CreateTestSurface("chatgpt-desktop");
+        var controller = TrayProtectionController.CreateTest(
+            new CanaryHotkeyHost(),
+            () => throw new AssertionException("Manual scan must not run."),
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new AssertionException("Normal production runner must not run."),
+            profile,
+            storageLayout: layout,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(surface),
+            residentCanaryRunner: (_, _, _, _, _, _) => throw new AssertionException("Canary runner is not reached by classification."));
+
+        try
+        {
+            Assert.That(controller.Start(), Is.True);
+            var action = controller.StartOperationalAction(
+                "resident_canary",
+                "requested",
+                true,
+                "focus_composer_and_send_marker");
+            Assert.That(controller.ArmResidentCanary(action.AttemptId, _ => { }).Started, Is.True);
+
+            var classification = hook.Classify(new NativeKeyGesture(
+                "Enter",
+                TargetWindow: new IntPtr(1),
+                TargetProcessId: 1));
+
+            Assert.That(classification.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
+            Assert.That(classification.SuppressOriginalInput, Is.True);
+            Assert.That(classification.Diagnostics["canary_admission"], Is.EqualTo("armed"));
+            Assert.That(classification.Diagnostics["canary_attempt_id"], Is.EqualTo(action.AttemptId.ToString()));
+
+            var newline = hook.Classify(new NativeKeyGesture(
+                "Enter",
+                Ctrl: true,
+                TargetWindow: new IntPtr(1),
+                TargetProcessId: 1));
+
+            Assert.That(newline.SuppressOriginalInput, Is.False);
+        }
+        finally
+        {
+            controller.Stop();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void Controller_ArmedCanaryAdmissionRunsCanaryAfterSuppressingOriginalSend()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-canary-callback-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = CreateProtectedProfile("chatgpt-desktop");
+        var hook = new CanaryHookHost();
+        var canaryRunnerCalls = 0;
+        var surface = TestSurfaceFactory.CreateTestSurface("chatgpt-desktop");
+        var controller = TrayProtectionController.CreateTest(
+            new CanaryHotkeyHost(),
+            () => throw new AssertionException("Manual scan must not run."),
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new AssertionException("Normal production runner must not run."),
+            profile,
+            storageLayout: layout,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(surface),
+            residentCanaryRunner: (_, target, _, traceStage, _, _) =>
+            {
+                canaryRunnerCalls++;
+                Assert.That(traceStage("overlay_created", "confirmation_requested"), Is.True);
+                return new OsInteractionResult(
+                    OsInteractionStatusIds.Submitted,
+                    target.CapturedSurface,
+                    null,
+                    null,
+                    Applied: true,
+                    Submitted: true,
+                    Diagnostics: new Dictionary<string, string>
+                    {
+                        ["canary_cleanup"] = "true",
+                        ["cloud_submission"] = "false",
+                        ["canary_marker_present"] = "true"
+                    });
+            });
+
+        try
+        {
+            Assert.That(controller.Start(), Is.True);
+            var action = controller.StartOperationalAction(
+                "resident_canary",
+                "requested",
+                true,
+                "focus_composer_and_send_marker");
+            Assert.That(controller.ArmResidentCanary(action.AttemptId, _ => { }).Started, Is.True);
+
+            var result = hook.Trigger(new NativeKeyGesture(
+                "Enter",
+                TargetWindow: new IntPtr(1),
+                TargetProcessId: 1));
+
+            Assert.That(result.SuppressOriginalInput, Is.True);
+            Assert.That(hook.OriginalInputSuppressed, Is.True);
+            Assert.That(canaryRunnerCalls, Is.EqualTo(1));
+        }
+        finally
+        {
+            controller.Stop();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     private static SubmitBindingProfile CreateProtectedProfile(string profileId)
     {
         return new SubmitBindingProfile(
@@ -396,12 +534,38 @@ public sealed class ResidentCanaryTests
 
     private sealed class CanaryHookHost : INativeSubmitHookHost
     {
+        private Func<NativeKeyGesture, NativeSubmitInterceptionResult>? _classify;
+        private Action<NativeKeyGesture, NativeSubmitInterceptionResult>? _onSuppressedSubmit;
+
+        internal bool OriginalInputSuppressed { get; private set; }
+
         public string? LastErrorCode => null;
 
         public bool Start(
             Func<NativeKeyGesture, NativeSubmitInterceptionResult> classify,
             Action<NativeKeyGesture, NativeSubmitInterceptionResult> onSuppressedSubmit,
-            Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure) => true;
+            Func<NativeKeyGesture, bool> shouldSuppressClassificationFailure)
+        {
+            _classify = classify;
+            _onSuppressedSubmit = onSuppressedSubmit;
+            return true;
+        }
+
+        internal NativeSubmitInterceptionResult Classify(NativeKeyGesture gesture) =>
+            _classify?.Invoke(gesture)
+            ?? throw new AssertionException("The native hook was not started.");
+
+        internal NativeSubmitInterceptionResult Trigger(NativeKeyGesture gesture)
+        {
+            var classification = Classify(gesture);
+            if (classification.SuppressOriginalInput)
+            {
+                OriginalInputSuppressed = true;
+                _onSuppressedSubmit?.Invoke(gesture, classification);
+            }
+
+            return classification;
+        }
 
         public void Stop()
         {

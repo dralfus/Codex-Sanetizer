@@ -209,6 +209,7 @@ production state machine.
 | 2026-08-26 | **352** | Следующий новый рабочий пункт: resident-owned canary должен сначала воспроизвести текущий установленный keyboard Send-путь на том же production seam. | `[ ]` реализация не начиналась |
 | 2026-08-26 | **352** | Resident-owned canary, lifecycle, target-generation guard, production UIA/write wiring, overlay trace, raw-free evidence и installer identity sidecar добавлены; ложный green replay запрещён. | `[>]` deterministic `1856/1856`, build и installer smoke прошли; installed red artifact и безопасный production replay ещё не доказаны |
 | 2026-08-26 | **352** | После финальной проверки commit `2d99fe2b` roadmap фиксирует canary как единственный текущий gate; deterministic suite проверен как `1857/1857`. | `[>]` следующая пользовательская операция: installed canary с сохранением `reproduced_red`; 353 заблокирована до этого артефакта |
+| 2026-08-26 | **352** | Установленный canary воспроизвёл красный дефект: marker прошёл в OpenAI Desktop без overlay. Admission fix добавляет canary до обычной classification и покрыт focused callback-тестами. | `[>]` пересобрать installed candidate и повторить canary; до этого 352 и 353 остаются заблокированы |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от

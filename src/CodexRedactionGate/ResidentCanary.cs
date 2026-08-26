@@ -148,6 +148,23 @@ internal sealed class ResidentCanarySession
         }
     }
 
+    internal bool TryGetArmed(out ResidentCanaryArm arm)
+    {
+        lock (_gate)
+        {
+            if (_arm is not null
+                && _lifecycle is not null
+                && _lifecycle.Current == "armed")
+            {
+                arm = _arm;
+                return true;
+            }
+
+            arm = null!;
+            return false;
+        }
+    }
+
     internal bool TryObserveSend(
         long attemptId,
         string profileId,
