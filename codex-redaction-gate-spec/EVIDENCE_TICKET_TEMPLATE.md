@@ -18,6 +18,7 @@ Target identity: <compatibility fingerprint and Send binding>
 Evidence record location: artifacts/evidence/<ticket-id>.json
 Evidence discovery: <repository-relative path resolved by the release gate>
 Validator artifact hash: <sha256 of the validator executable or tool>
+Verification artifact hash: <sha256 of the external test/reproduction result>
 Evidence state: proposed
 Claim: unverified
 ```

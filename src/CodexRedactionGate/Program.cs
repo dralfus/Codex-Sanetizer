@@ -456,12 +456,7 @@ public static class Program
             return passed ? 0 : 1;
         }
 
-        if (args.Length == 6 && args[0] == "--evidence-current-record-publish")
-        {
-            return RunCurrentEvidenceRecordPublish(args);
-        }
-
-        if (args.Length == 6 && args[0] == "--evidence-current-record-check")
+        if (args.Length == 7 && args[0] == "--evidence-current-record-check")
         {
             return RunCurrentEvidenceRecordCheck(args);
         }
@@ -1190,44 +1185,19 @@ public static class Program
         }
     }
 
-    private static int RunCurrentEvidenceRecordPublish(string[] args)
-    {
-        try
-        {
-            ProtectedSendEvidenceRecordPublisher.PublishCurrent(
-                args[1],
-                CreateCurrentEvidenceBinding(args));
-            Console.WriteLine("evidence_current_record: published");
-            Console.WriteLine("evidence_current_record_state: locally_verified");
-            Console.WriteLine("raw_free: true");
-            return 0;
-        }
-        catch (ArgumentException)
-        {
-            return Fail("Unable to publish the current evidence record: invalid input.");
-        }
-        catch (IOException)
-        {
-            return Fail("Unable to publish the current evidence record: storage failure.");
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Fail("Unable to publish the current evidence record: storage failure.");
-        }
-        catch (InvalidOperationException)
-        {
-            return Fail("Unable to publish the current evidence record: contract rejected it.");
-        }
-    }
-
     private static int RunCurrentEvidenceRecordCheck(string[] args)
     {
+        if (!TryParseCurrentEvidenceArguments(args, out var command))
+        {
+            return Fail("Current evidence record check failed: invalid input.");
+        }
+
         EvidenceValidationResult result;
         try
         {
             result = ProtectedSendEvidenceRecordGate.ValidateCurrent(
-                args[1],
-                CreateCurrentEvidenceBinding(args),
+                command.RepositoryRoot,
+                command.ToBinding(),
                 DevelopmentEvidenceState.LocallyVerified);
         }
         catch (ArgumentException)
@@ -1245,17 +1215,52 @@ public static class Program
         return result.Valid ? 0 : 1;
     }
 
-    private static ProtectedSendEvidenceBinding CreateCurrentEvidenceBinding(string[] args)
+    private static bool TryParseCurrentEvidenceArguments(
+        string[] args,
+        out CurrentEvidenceCommand command)
     {
-        return new ProtectedSendEvidenceBinding(
-            DevelopmentEvidenceContract.SchemaVersion,
+        command = null!;
+        if (args.Length != 7
+            || args[0] != "--evidence-current-record-check"
+            || string.IsNullOrWhiteSpace(args[1])
+            || string.IsNullOrWhiteSpace(args[2])
+            || string.IsNullOrWhiteSpace(args[3])
+            || string.IsNullOrWhiteSpace(args[4])
+            || string.IsNullOrWhiteSpace(args[5])
+            || string.IsNullOrWhiteSpace(args[6]))
+        {
+            return false;
+        }
+
+        command = new CurrentEvidenceCommand(
+            args[1],
             args[2],
             args[3],
             args[4],
-            "not_applicable",
-            args[4],
-            "not_applicable",
-            args[5]);
+            args[5],
+            args[6]);
+        return true;
+    }
+
+    private sealed record CurrentEvidenceCommand(
+        string RepositoryRoot,
+        string BuildVersion,
+        string SourceCommit,
+        string ExecutableSha256,
+        string ValidatorArtifactSha256,
+        string VerificationArtifactSha256)
+    {
+        public ProtectedSendEvidenceBinding ToBinding()
+            => new(
+                DevelopmentEvidenceContract.SchemaVersion,
+                BuildVersion,
+                SourceCommit,
+                ExecutableSha256,
+                "not_applicable",
+                ExecutableSha256,
+                "not_applicable",
+                ValidatorArtifactSha256,
+                VerificationArtifactSha256);
     }
 
     internal static int RunReferenceComposerReleaseAcceptance(
@@ -2056,8 +2061,7 @@ public static class Program
         Console.WriteLine("  --os-demo-smoke");
         Console.WriteLine("  --product-smoke");
         Console.WriteLine("  --evidence-contract-smoke");
-        Console.WriteLine("  --evidence-current-record-publish repository-root build-version source-commit executable-sha256 validator-artifact-sha256");
-        Console.WriteLine("  --evidence-current-record-check repository-root build-version source-commit executable-sha256 validator-artifact-sha256");
+        Console.WriteLine("  --evidence-current-record-check repository-root build-version source-commit executable-sha256 validator-artifact-sha256 verification-artifact-sha256");
         Console.WriteLine("  --reference-composer-release-acceptance");
         Console.WriteLine("  --native-profiles-status");
         Console.WriteLine("  --native-profile-verify profile-id submit-binding newline-binding");

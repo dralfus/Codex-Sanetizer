@@ -3134,14 +3134,15 @@ gate; this ticket must first provide the usable current-record repository seam.
 
 **Implementation update (2026-08-26):** `artifacts/evidence/351.json` is now
 the machine-discovered current record for this process contract. The
-`--evidence-current-record-publish` command creates it atomically from an
-already published candidate, while `--evidence-current-record-check` validates
-the record against the exact source commit, build version, executable hash,
-schema, reproduction contract, and validator artifact. `build-release.ps1`
-fails closed when this record is absent, stale, malformed, incomplete, or
-mismatched; `publish-evidence-351.ps1` performs the publish-and-check step.
+`publish-evidence-351.ps1` creates it atomically from an already published
+candidate and a separately supplied external verification artifact, while the
+shipped `--evidence-current-record-check` command validates the record against
+the exact source commit, build version, executable hash, schema, reproduction
+contract, validator artifact, and verification artifact. `build-release.ps1`
+fails closed when either artifact is absent, stale, malformed, incomplete, or
+mismatched; the product executable cannot publish its own record.
 The synthetic `--evidence-contract-smoke` remains diagnostic-only and cannot
-pass the current-record gate. Focused tests: `20/20`.
+pass the current-record gate. Focused tests: `26/26`.
 
 ## 352. Add a resident-owned installed keyboard protected-Send canary
 

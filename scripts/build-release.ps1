@@ -136,6 +136,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Output "evidence_contract_validator_smoke=passed"
 
+# Keep the candidate available when the current evidence record is missing or
+# stale, so the publish-evidence helper can bind evidence to this exact build.
+Copy-Item -Path (Join-Path $consoleOutput "*") -Destination $output -Recurse -Force
+Copy-Item -Path (Join-Path $trayOutput "*") -Destination $output -Recurse -Force
+Copy-Item -Path (Join-Path $consoleOutput "CodexRedactionGate.*") -Destination $output -Force
+
+Remove-TestPublishArtifacts -PublishOutput $output
+Remove-Item -LiteralPath $workingOutput -Recurse -Force
+
 $sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sourceCommit)) {
     throw "Unable to resolve the current source commit for evidence validation."
@@ -147,23 +156,22 @@ if ([string]::IsNullOrWhiteSpace($publishedBuildVersion)) {
 }
 
 $publishedExecutableSha256 = (Get-FileHash -LiteralPath $evidenceSmokeExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+$verificationArtifact = Join-Path $repoRoot "artifacts\evidence\351-proof.txt"
+if (-not (Test-Path -LiteralPath $verificationArtifact)) {
+    throw "Current evidence verification artifact is missing: $verificationArtifact"
+}
+$verificationArtifactSha256 = (Get-FileHash -LiteralPath $verificationArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
 & $evidenceSmokeExecutable --evidence-current-record-check `
     $repoRoot `
     $publishedBuildVersion `
     $sourceCommit `
     $publishedExecutableSha256 `
-    $publishedExecutableSha256
+    $publishedExecutableSha256 `
+    $verificationArtifactSha256
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 Write-Output "evidence_current_record_gate=passed"
-
-Copy-Item -Path (Join-Path $consoleOutput "*") -Destination $output -Recurse -Force
-Copy-Item -Path (Join-Path $trayOutput "*") -Destination $output -Recurse -Force
-Copy-Item -Path (Join-Path $consoleOutput "CodexRedactionGate.*") -Destination $output -Force
-
-Remove-TestPublishArtifacts -PublishOutput $output
-Remove-Item -LiteralPath $workingOutput -Recurse -Force
 
 $scannerSource = Join-Path $repoRoot $ScannerSourceDirectory
 $scannerBinary = Join-Path $scannerSource "gitleaks.exe"

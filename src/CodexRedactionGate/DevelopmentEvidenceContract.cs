@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -14,14 +15,46 @@ public static class DevelopmentEvidenceContract
 
 public static class DevelopmentEvidenceRecordLocation
 {
-    public static string RelativePath => Path.Combine("artifacts", "evidence", "351.json");
+    public const string CurrentTicketNumber = "351";
+    public static string VerificationArtifactRelativePath => Path.Combine(
+        "artifacts",
+        "evidence",
+        "351-proof.txt");
+
+    public static string RelativePath => ForTicket(CurrentTicketNumber);
+
+    public static string ForTicket(string ticketNumber)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ticketNumber);
+        if (!ticketNumber.All(character => character is >= '0' and <= '9'))
+        {
+            throw new ArgumentException("ticket_number_invalid", nameof(ticketNumber));
+        }
+
+        return Path.Combine("artifacts", "evidence", ticketNumber + ".json");
+    }
 
     public static string Resolve(string repositoryRoot)
+        => Resolve(repositoryRoot, CurrentTicketNumber);
+
+    public static string ResolveVerificationArtifact(string repositoryRoot)
+        => ResolveRelative(repositoryRoot, VerificationArtifactRelativePath);
+
+    public static string Resolve(string repositoryRoot, string ticketNumber)
+        => ResolveRelative(repositoryRoot, ForTicket(ticketNumber));
+
+    private static string ResolveRelative(string repositoryRoot, string relativePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
 
         var root = Path.GetFullPath(repositoryRoot);
-        var path = Path.GetFullPath(Path.Combine(root, RelativePath));
+        if (!Directory.Exists(root))
+        {
+            throw new InvalidOperationException("evidence_repository_missing");
+        }
+
+        RejectReparsePoint(root);
+        var path = Path.GetFullPath(Path.Combine(root, relativePath));
         var rootWithSeparator = root.EndsWith(Path.DirectorySeparatorChar)
             ? root
             : root + Path.DirectorySeparatorChar;
@@ -30,7 +63,27 @@ public static class DevelopmentEvidenceRecordLocation
             throw new InvalidOperationException("evidence_record_path_outside_repository");
         }
 
+        var current = root;
+        foreach (var segment in relativePath.Split(
+                     new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if (Directory.Exists(current) || File.Exists(current))
+            {
+                RejectReparsePoint(current);
+            }
+        }
+
         return path;
+    }
+
+    private static void RejectReparsePoint(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException("evidence_path_reparse_point");
+        }
     }
 }
 
@@ -105,7 +158,8 @@ public sealed record ProtectedSendEvidenceRecord
         string SubmitBinding,
         IReadOnlyList<DevelopmentEvidenceState> TransitionHistory,
         string Claim = "unverified",
-        string ValidatorArtifactSha256 = "unbound")
+        string ValidatorArtifactSha256 = "unbound",
+        string VerificationArtifactSha256 = "unbound")
     {
         this.SchemaVersion = SchemaVersion;
         this.TicketId = TicketId;
@@ -124,6 +178,7 @@ public sealed record ProtectedSendEvidenceRecord
             ?? throw new ArgumentNullException(nameof(TransitionHistory)));
         this.Claim = Claim;
         this.ValidatorArtifactSha256 = ValidatorArtifactSha256;
+        this.VerificationArtifactSha256 = VerificationArtifactSha256;
     }
 
     public string SchemaVersion { get; init; }
@@ -142,6 +197,7 @@ public sealed record ProtectedSendEvidenceRecord
     public IReadOnlyList<DevelopmentEvidenceState> TransitionHistory { get; private init; }
     public string Claim { get; init; }
     public string ValidatorArtifactSha256 { get; init; }
+    public string VerificationArtifactSha256 { get; init; }
 }
 
 public sealed record ProtectedSendEvidenceBinding(
@@ -152,7 +208,8 @@ public sealed record ProtectedSendEvidenceBinding(
     string InstallerIdentity,
     string CompatibilityFingerprint,
     string SubmitBinding,
-    string ValidatorArtifactSha256 = "unbound");
+    string ValidatorArtifactSha256 = "unbound",
+    string VerificationArtifactSha256 = "unbound");
 
 public sealed record EvidenceValidationResult(bool Valid, string Code);
 
@@ -220,7 +277,8 @@ public static class ProtectedSendEvidenceValidator
             || !IsSafeBuildVersion(expected.InstallerIdentity)
             || !IsSafeHash(expected.CompatibilityFingerprint)
             || !IsSafeIdentifier(expected.SubmitBinding)
-            || !IsSafeHash(expected.ValidatorArtifactSha256))
+            || !IsSafeHash(expected.ValidatorArtifactSha256)
+            || !IsSafeHash(expected.VerificationArtifactSha256))
         {
             return Invalid("invalid_expected_binding");
         }
@@ -291,6 +349,11 @@ public static class ProtectedSendEvidenceValidator
             return Invalid("invalid_validator_artifact_hash");
         }
 
+        if (!IsSafeHash(record.VerificationArtifactSha256))
+        {
+            return Invalid("invalid_verification_artifact_hash");
+        }
+
         if (!IsSafeClaim(record.Claim))
         {
             return Invalid("invalid_evidence_claim");
@@ -325,12 +388,14 @@ public static class ProtectedSendEvidenceValidator
                 || record.CompatibilityFingerprint == Unbound
                 || record.SubmitBinding == Unbound
                 || record.ValidatorArtifactSha256 == Unbound
+                || record.VerificationArtifactSha256 == Unbound
                 || expected.SourceCommit == Unbound
                 || expected.ExecutableSha256 == Unbound
                 || expected.InstallerIdentity == Unbound
                 || expected.CompatibilityFingerprint == Unbound
                 || expected.SubmitBinding == Unbound
-                || expected.ValidatorArtifactSha256 == Unbound)
+                || expected.ValidatorArtifactSha256 == Unbound
+                || expected.VerificationArtifactSha256 == Unbound)
             {
                 return Invalid("expected_binding_incomplete");
             }
@@ -448,7 +513,9 @@ public static class ProtectedSendEvidenceValidator
             && IsSafeIdentifier(binding.SubmitBinding)
             && binding.SubmitBinding != Unbound
             && IsSafeHash(binding.ValidatorArtifactSha256)
-            && binding.ValidatorArtifactSha256 != Unbound;
+            && binding.ValidatorArtifactSha256 != Unbound
+            && IsSafeHash(binding.VerificationArtifactSha256)
+            && binding.VerificationArtifactSha256 != Unbound;
     }
 
     internal static bool IsCompleteRecord(ProtectedSendEvidenceRecord record)
@@ -466,7 +533,9 @@ public static class ProtectedSendEvidenceValidator
             && IsSafeIdentifier(record.SubmitBinding)
             && record.SubmitBinding != Unbound
             && IsSafeHash(record.ValidatorArtifactSha256)
-            && record.ValidatorArtifactSha256 != Unbound;
+            && record.ValidatorArtifactSha256 != Unbound
+            && IsSafeHash(record.VerificationArtifactSha256)
+            && record.VerificationArtifactSha256 != Unbound;
     }
 
     private static EvidenceValidationResult Invalid(string code)
@@ -561,6 +630,12 @@ public static class ProtectedSendEvidenceValidator
             return "evidence_validator_artifact_mismatch";
         }
 
+        if (expected.VerificationArtifactSha256 != Unbound
+            && record.VerificationArtifactSha256 != expected.VerificationArtifactSha256)
+        {
+            return "evidence_verification_artifact_mismatch";
+        }
+
         return null;
     }
 
@@ -628,6 +703,14 @@ public static class ProtectedSendEvidenceRecordGate
         {
             return new EvidenceValidationResult(false, "current_evidence_repository_invalid");
         }
+        catch (IOException)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_repository_invalid");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_repository_invalid");
+        }
 
         if (!File.Exists(path))
         {
@@ -673,58 +756,49 @@ public static class ProtectedSendEvidenceRecordGate
             return new EvidenceValidationResult(false, "current_evidence_binding_incomplete");
         }
 
+        string verificationPath;
+        try
+        {
+            verificationPath = DevelopmentEvidenceRecordLocation.ResolveVerificationArtifact(repositoryRoot);
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or InvalidOperationException
+            or IOException
+            or UnauthorizedAccessException)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_verification_artifact_invalid");
+        }
+
+        if (!File.Exists(verificationPath))
+        {
+            return new EvidenceValidationResult(false, "current_evidence_verification_artifact_missing");
+        }
+
+        string verificationHash;
+        try
+        {
+            verificationHash = Convert.ToHexString(
+                    SHA256.HashData(File.ReadAllBytes(verificationPath)))
+                .ToLowerInvariant();
+        }
+        catch (IOException)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_verification_artifact_unreadable");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_verification_artifact_unreadable");
+        }
+
+        if (!string.Equals(
+                verificationHash,
+                expected.VerificationArtifactSha256,
+                StringComparison.Ordinal))
+        {
+            return new EvidenceValidationResult(false, "evidence_verification_artifact_mismatch");
+        }
+
         return ProtectedSendEvidenceValidator.Validate(record, expected, minimumState);
-    }
-}
-
-public static class ProtectedSendEvidenceRecordPublisher
-{
-    public static void PublishCurrent(
-        string repositoryRoot,
-        ProtectedSendEvidenceBinding binding)
-    {
-        ArgumentNullException.ThrowIfNull(binding);
-        if (!ProtectedSendEvidenceValidator.IsCompleteBinding(binding))
-        {
-            throw new InvalidOperationException("current_evidence_expected_binding_incomplete");
-        }
-
-        var record = new ProtectedSendEvidenceRecord(
-            SchemaVersion: DevelopmentEvidenceContract.SchemaVersion,
-            TicketId: "ticket_351",
-            BehaviorId: "protected_send_evidence",
-            State: DevelopmentEvidenceState.LocallyVerified,
-            ReproductionId: "repro_protected_send",
-            ReproductionCommandId: "cmd_repro_protected_send",
-            HighestRequiredSeam: "deterministic_transaction",
-            BuildVersion: binding.BuildVersion,
-            SourceCommit: binding.SourceCommit,
-            ExecutableSha256: binding.ExecutableSha256,
-            InstallerIdentity: binding.InstallerIdentity,
-            CompatibilityFingerprint: binding.CompatibilityFingerprint,
-            SubmitBinding: binding.SubmitBinding,
-            TransitionHistory: EvidenceHistory(DevelopmentEvidenceState.LocallyVerified),
-            ValidatorArtifactSha256: binding.ValidatorArtifactSha256);
-        var json = ProtectedSendEvidenceValidator.Serialize(record, binding);
-        var path = DevelopmentEvidenceRecordLocation.Resolve(repositoryRoot);
-        var directory = Path.GetDirectoryName(path)
-            ?? throw new InvalidOperationException("current_evidence_directory_invalid");
-        Directory.CreateDirectory(directory);
-
-        var temporaryPath = path + ".tmp";
-        File.WriteAllText(temporaryPath, json);
-        File.Move(temporaryPath, path, overwrite: true);
-    }
-
-    private static DevelopmentEvidenceState[] EvidenceHistory(DevelopmentEvidenceState state)
-    {
-        var history = new DevelopmentEvidenceState[(int)state + 1];
-        for (var index = 0; index < history.Length; index++)
-        {
-            history[index] = (DevelopmentEvidenceState)index;
-        }
-
-        return history;
     }
 }
 
