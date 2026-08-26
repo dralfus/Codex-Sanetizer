@@ -136,6 +136,28 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Output "evidence_contract_validator_smoke=passed"
 
+$sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sourceCommit)) {
+    throw "Unable to resolve the current source commit for evidence validation."
+}
+
+$publishedBuildVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($evidenceSmokeExecutable).ProductVersion
+if ([string]::IsNullOrWhiteSpace($publishedBuildVersion)) {
+    throw "Published executable has no build version for evidence validation."
+}
+
+$publishedExecutableSha256 = (Get-FileHash -LiteralPath $evidenceSmokeExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+& $evidenceSmokeExecutable --evidence-current-record-check `
+    $repoRoot `
+    $publishedBuildVersion `
+    $sourceCommit `
+    $publishedExecutableSha256 `
+    $publishedExecutableSha256
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+Write-Output "evidence_current_record_gate=passed"
+
 Copy-Item -Path (Join-Path $consoleOutput "*") -Destination $output -Recurse -Force
 Copy-Item -Path (Join-Path $trayOutput "*") -Destination $output -Recurse -Force
 Copy-Item -Path (Join-Path $consoleOutput "CodexRedactionGate.*") -Destination $output -Force

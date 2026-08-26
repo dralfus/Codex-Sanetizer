@@ -456,6 +456,16 @@ public static class Program
             return passed ? 0 : 1;
         }
 
+        if (args.Length == 6 && args[0] == "--evidence-current-record-publish")
+        {
+            return RunCurrentEvidenceRecordPublish(args);
+        }
+
+        if (args.Length == 6 && args[0] == "--evidence-current-record-check")
+        {
+            return RunCurrentEvidenceRecordCheck(args);
+        }
+
         if (args.Length == 1 && args[0] == "--reference-composer-release-acceptance")
         {
             return RunReferenceComposerReleaseAcceptance(layoutFactory: runtime.LayoutFactory);
@@ -1178,6 +1188,74 @@ public static class Program
                 Directory.Delete(tempDirectory, recursive: true);
             }
         }
+    }
+
+    private static int RunCurrentEvidenceRecordPublish(string[] args)
+    {
+        try
+        {
+            ProtectedSendEvidenceRecordPublisher.PublishCurrent(
+                args[1],
+                CreateCurrentEvidenceBinding(args));
+            Console.WriteLine("evidence_current_record: published");
+            Console.WriteLine("evidence_current_record_state: locally_verified");
+            Console.WriteLine("raw_free: true");
+            return 0;
+        }
+        catch (ArgumentException)
+        {
+            return Fail("Unable to publish the current evidence record: invalid input.");
+        }
+        catch (IOException)
+        {
+            return Fail("Unable to publish the current evidence record: storage failure.");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Fail("Unable to publish the current evidence record: storage failure.");
+        }
+        catch (InvalidOperationException)
+        {
+            return Fail("Unable to publish the current evidence record: contract rejected it.");
+        }
+    }
+
+    private static int RunCurrentEvidenceRecordCheck(string[] args)
+    {
+        EvidenceValidationResult result;
+        try
+        {
+            result = ProtectedSendEvidenceRecordGate.ValidateCurrent(
+                args[1],
+                CreateCurrentEvidenceBinding(args),
+                DevelopmentEvidenceState.LocallyVerified);
+        }
+        catch (ArgumentException)
+        {
+            return Fail("Current evidence record check failed: invalid input.");
+        }
+        catch (IOException)
+        {
+            return Fail("Current evidence record check failed: storage failure.");
+        }
+
+        Console.WriteLine($"evidence_current_record: {(result.Valid ? "passed" : "failed")}");
+        Console.WriteLine($"evidence_current_record_reason: {result.Code}");
+        Console.WriteLine("raw_free: true");
+        return result.Valid ? 0 : 1;
+    }
+
+    private static ProtectedSendEvidenceBinding CreateCurrentEvidenceBinding(string[] args)
+    {
+        return new ProtectedSendEvidenceBinding(
+            DevelopmentEvidenceContract.SchemaVersion,
+            args[2],
+            args[3],
+            args[4],
+            "not_applicable",
+            args[4],
+            "not_applicable",
+            args[5]);
     }
 
     internal static int RunReferenceComposerReleaseAcceptance(
@@ -1978,6 +2056,8 @@ public static class Program
         Console.WriteLine("  --os-demo-smoke");
         Console.WriteLine("  --product-smoke");
         Console.WriteLine("  --evidence-contract-smoke");
+        Console.WriteLine("  --evidence-current-record-publish repository-root build-version source-commit executable-sha256 validator-artifact-sha256");
+        Console.WriteLine("  --evidence-current-record-check repository-root build-version source-commit executable-sha256 validator-artifact-sha256");
         Console.WriteLine("  --reference-composer-release-acceptance");
         Console.WriteLine("  --native-profiles-status");
         Console.WriteLine("  --native-profile-verify profile-id submit-binding newline-binding");

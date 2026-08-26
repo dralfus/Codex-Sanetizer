@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -9,6 +10,28 @@ namespace CodexRedactionGate;
 public static class DevelopmentEvidenceContract
 {
     public const string SchemaVersion = "1";
+}
+
+public static class DevelopmentEvidenceRecordLocation
+{
+    public static string RelativePath => Path.Combine("artifacts", "evidence", "351.json");
+
+    public static string Resolve(string repositoryRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
+
+        var root = Path.GetFullPath(repositoryRoot);
+        var path = Path.GetFullPath(Path.Combine(root, RelativePath));
+        var rootWithSeparator = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("evidence_record_path_outside_repository");
+        }
+
+        return path;
+    }
 }
 
 public enum DevelopmentEvidenceState
@@ -81,7 +104,8 @@ public sealed record ProtectedSendEvidenceRecord
         string CompatibilityFingerprint,
         string SubmitBinding,
         IReadOnlyList<DevelopmentEvidenceState> TransitionHistory,
-        string Claim = "unverified")
+        string Claim = "unverified",
+        string ValidatorArtifactSha256 = "unbound")
     {
         this.SchemaVersion = SchemaVersion;
         this.TicketId = TicketId;
@@ -99,6 +123,7 @@ public sealed record ProtectedSendEvidenceRecord
         this.TransitionHistory = Array.AsReadOnly(TransitionHistory?.ToArray()
             ?? throw new ArgumentNullException(nameof(TransitionHistory)));
         this.Claim = Claim;
+        this.ValidatorArtifactSha256 = ValidatorArtifactSha256;
     }
 
     public string SchemaVersion { get; init; }
@@ -116,6 +141,7 @@ public sealed record ProtectedSendEvidenceRecord
     public string SubmitBinding { get; init; }
     public IReadOnlyList<DevelopmentEvidenceState> TransitionHistory { get; private init; }
     public string Claim { get; init; }
+    public string ValidatorArtifactSha256 { get; init; }
 }
 
 public sealed record ProtectedSendEvidenceBinding(
@@ -125,7 +151,8 @@ public sealed record ProtectedSendEvidenceBinding(
     string ExecutableSha256,
     string InstallerIdentity,
     string CompatibilityFingerprint,
-    string SubmitBinding);
+    string SubmitBinding,
+    string ValidatorArtifactSha256 = "unbound");
 
 public sealed record EvidenceValidationResult(bool Valid, string Code);
 
@@ -152,6 +179,7 @@ public static class ProtectedSendEvidenceValidator
                 DevelopmentEvidenceContract.SchemaVersion,
                 expectedBuildVersion,
                 expectedSourceCommit,
+                Unbound,
                 Unbound,
                 Unbound,
                 Unbound,
@@ -191,7 +219,8 @@ public static class ProtectedSendEvidenceValidator
             || !IsSafeHash(expected.ExecutableSha256)
             || !IsSafeBuildVersion(expected.InstallerIdentity)
             || !IsSafeHash(expected.CompatibilityFingerprint)
-            || !IsSafeIdentifier(expected.SubmitBinding))
+            || !IsSafeIdentifier(expected.SubmitBinding)
+            || !IsSafeHash(expected.ValidatorArtifactSha256))
         {
             return Invalid("invalid_expected_binding");
         }
@@ -257,6 +286,11 @@ public static class ProtectedSendEvidenceValidator
             return Invalid("invalid_submit_binding");
         }
 
+        if (!IsSafeHash(record.ValidatorArtifactSha256))
+        {
+            return Invalid("invalid_validator_artifact_hash");
+        }
+
         if (!IsSafeClaim(record.Claim))
         {
             return Invalid("invalid_evidence_claim");
@@ -290,11 +324,13 @@ public static class ProtectedSendEvidenceValidator
                 || record.InstallerIdentity == Unbound
                 || record.CompatibilityFingerprint == Unbound
                 || record.SubmitBinding == Unbound
+                || record.ValidatorArtifactSha256 == Unbound
                 || expected.SourceCommit == Unbound
                 || expected.ExecutableSha256 == Unbound
                 || expected.InstallerIdentity == Unbound
                 || expected.CompatibilityFingerprint == Unbound
-                || expected.SubmitBinding == Unbound)
+                || expected.SubmitBinding == Unbound
+                || expected.ValidatorArtifactSha256 == Unbound)
             {
                 return Invalid("expected_binding_incomplete");
             }
@@ -359,6 +395,78 @@ public static class ProtectedSendEvidenceValidator
         }
 
         return JsonSerializer.Serialize(record, JsonOptions);
+    }
+
+    public static bool TryDeserialize(
+        string json,
+        out ProtectedSendEvidenceRecord? record,
+        out EvidenceValidationResult result)
+    {
+        record = null;
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            result = Invalid("invalid_evidence_record_json");
+            return false;
+        }
+
+        try
+        {
+            record = JsonSerializer.Deserialize<ProtectedSendEvidenceRecord>(json, JsonOptions);
+            if (record is null)
+            {
+                result = Invalid("invalid_evidence_record_json");
+                return false;
+            }
+
+            result = new EvidenceValidationResult(true, "deserialized");
+            return true;
+        }
+        catch (JsonException)
+        {
+            result = Invalid("invalid_evidence_record_json");
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            result = Invalid("invalid_evidence_record_json");
+            return false;
+        }
+    }
+
+    internal static bool IsCompleteBinding(ProtectedSendEvidenceBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+
+        return IsSafeCommit(binding.SourceCommit)
+            && binding.SourceCommit != Unbound
+            && IsSafeHash(binding.ExecutableSha256)
+            && binding.ExecutableSha256 != Unbound
+            && IsSafeBuildVersion(binding.InstallerIdentity)
+            && binding.InstallerIdentity != Unbound
+            && IsSafeHash(binding.CompatibilityFingerprint)
+            && binding.CompatibilityFingerprint != Unbound
+            && IsSafeIdentifier(binding.SubmitBinding)
+            && binding.SubmitBinding != Unbound
+            && IsSafeHash(binding.ValidatorArtifactSha256)
+            && binding.ValidatorArtifactSha256 != Unbound;
+    }
+
+    internal static bool IsCompleteRecord(ProtectedSendEvidenceRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        return IsSafeCommit(record.SourceCommit)
+            && record.SourceCommit != Unbound
+            && IsSafeHash(record.ExecutableSha256)
+            && record.ExecutableSha256 != Unbound
+            && IsSafeBuildVersion(record.InstallerIdentity)
+            && record.InstallerIdentity != Unbound
+            && IsSafeHash(record.CompatibilityFingerprint)
+            && record.CompatibilityFingerprint != Unbound
+            && IsSafeIdentifier(record.SubmitBinding)
+            && record.SubmitBinding != Unbound
+            && IsSafeHash(record.ValidatorArtifactSha256)
+            && record.ValidatorArtifactSha256 != Unbound;
     }
 
     private static EvidenceValidationResult Invalid(string code)
@@ -447,6 +555,12 @@ public static class ProtectedSendEvidenceValidator
             return "evidence_binding_mismatch";
         }
 
+        if (expected.ValidatorArtifactSha256 != Unbound
+            && record.ValidatorArtifactSha256 != expected.ValidatorArtifactSha256)
+        {
+            return "evidence_validator_artifact_mismatch";
+        }
+
         return null;
     }
 
@@ -487,6 +601,133 @@ public static class ProtectedSendEvidenceValidator
     }
 }
 
+public static class ProtectedSendEvidenceRecordGate
+{
+    public static EvidenceValidationResult ValidateCurrent(
+        string repositoryRoot,
+        ProtectedSendEvidenceBinding expected,
+        DevelopmentEvidenceState minimumState)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+
+        if (!ProtectedSendEvidenceValidator.IsCompleteBinding(expected))
+        {
+            return new EvidenceValidationResult(false, "current_evidence_expected_binding_incomplete");
+        }
+
+        string path;
+        try
+        {
+            path = DevelopmentEvidenceRecordLocation.Resolve(repositoryRoot);
+        }
+        catch (ArgumentException)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_repository_invalid");
+        }
+        catch (InvalidOperationException)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_repository_invalid");
+        }
+
+        if (!File.Exists(path))
+        {
+            return new EvidenceValidationResult(false, "current_evidence_record_missing");
+        }
+
+        string json;
+        try
+        {
+            json = File.ReadAllText(path);
+        }
+        catch (IOException)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_record_unreadable");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_record_unreadable");
+        }
+
+        if (!ProtectedSendEvidenceValidator.TryDeserialize(json, out var record, out _)
+            || record is null)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_record_invalid");
+        }
+
+        if ((int)record.State < (int)minimumState)
+        {
+            return new EvidenceValidationResult(false, "current_evidence_state_below_required");
+        }
+
+        if (!string.Equals(record.TicketId, "ticket_351", StringComparison.Ordinal)
+            || !string.Equals(record.BehaviorId, "protected_send_evidence", StringComparison.Ordinal)
+            || !string.Equals(record.ReproductionId, "repro_protected_send", StringComparison.Ordinal)
+            || !string.Equals(record.ReproductionCommandId, "cmd_repro_protected_send", StringComparison.Ordinal)
+            || !string.Equals(record.HighestRequiredSeam, "deterministic_transaction", StringComparison.Ordinal))
+        {
+            return new EvidenceValidationResult(false, "current_evidence_contract_mismatch");
+        }
+
+        if (!ProtectedSendEvidenceValidator.IsCompleteRecord(record))
+        {
+            return new EvidenceValidationResult(false, "current_evidence_binding_incomplete");
+        }
+
+        return ProtectedSendEvidenceValidator.Validate(record, expected, minimumState);
+    }
+}
+
+public static class ProtectedSendEvidenceRecordPublisher
+{
+    public static void PublishCurrent(
+        string repositoryRoot,
+        ProtectedSendEvidenceBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        if (!ProtectedSendEvidenceValidator.IsCompleteBinding(binding))
+        {
+            throw new InvalidOperationException("current_evidence_expected_binding_incomplete");
+        }
+
+        var record = new ProtectedSendEvidenceRecord(
+            SchemaVersion: DevelopmentEvidenceContract.SchemaVersion,
+            TicketId: "ticket_351",
+            BehaviorId: "protected_send_evidence",
+            State: DevelopmentEvidenceState.LocallyVerified,
+            ReproductionId: "repro_protected_send",
+            ReproductionCommandId: "cmd_repro_protected_send",
+            HighestRequiredSeam: "deterministic_transaction",
+            BuildVersion: binding.BuildVersion,
+            SourceCommit: binding.SourceCommit,
+            ExecutableSha256: binding.ExecutableSha256,
+            InstallerIdentity: binding.InstallerIdentity,
+            CompatibilityFingerprint: binding.CompatibilityFingerprint,
+            SubmitBinding: binding.SubmitBinding,
+            TransitionHistory: EvidenceHistory(DevelopmentEvidenceState.LocallyVerified),
+            ValidatorArtifactSha256: binding.ValidatorArtifactSha256);
+        var json = ProtectedSendEvidenceValidator.Serialize(record, binding);
+        var path = DevelopmentEvidenceRecordLocation.Resolve(repositoryRoot);
+        var directory = Path.GetDirectoryName(path)
+            ?? throw new InvalidOperationException("current_evidence_directory_invalid");
+        Directory.CreateDirectory(directory);
+
+        var temporaryPath = path + ".tmp";
+        File.WriteAllText(temporaryPath, json);
+        File.Move(temporaryPath, path, overwrite: true);
+    }
+
+    private static DevelopmentEvidenceState[] EvidenceHistory(DevelopmentEvidenceState state)
+    {
+        var history = new DevelopmentEvidenceState[(int)state + 1];
+        for (var index = 0; index < history.Length; index++)
+        {
+            history[index] = (DevelopmentEvidenceState)index;
+        }
+
+        return history;
+    }
+}
+
 public static class DevelopmentEvidenceContractSmoke
 {
     public static bool Run()
@@ -505,7 +746,8 @@ public static class DevelopmentEvidenceContractSmoke
             InstallerIdentity: "unbound",
             CompatibilityFingerprint: "unbound",
             SubmitBinding: "unbound",
-            TransitionHistory: EvidenceHistory(DevelopmentEvidenceState.Implemented));
+            TransitionHistory: EvidenceHistory(DevelopmentEvidenceState.Implemented),
+            ValidatorArtifactSha256: "unbound");
         var valid = ProtectedSendEvidenceValidator.Validate(
             record,
             BuildVersion.Current,

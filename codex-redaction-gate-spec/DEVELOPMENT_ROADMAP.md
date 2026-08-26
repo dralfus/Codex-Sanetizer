@@ -203,7 +203,7 @@ target diagnostics не сохраняются. `codex-desktop` и `chatgpt-desk
 
 | Очерёдность | Тикет | Результат | Зависимости |
 |---:|---|---|---|
-| 1 | **351** `[x]` | Единая шкала `proposed -> reproduced_red -> implemented -> locally_verified -> live_verified -> released`; validator и CLI smoke запрещают преждевременный fixed claim. | Нет |
+| 1 | **351** `[x]` | Единая шкала `proposed -> reproduced_red -> implemented -> locally_verified -> live_verified -> released`; machine-readable current evidence record и fail-closed release gate запрещают подменять реальное доказательство синтетическим smoke. | Нет |
 | 2 | **352** `[x]` | Resident-owned canary на установленном кандидате сохранил raw-free `reproduced_red` с точной installed build; одно нажатие было подавлено, terminal failure доказан. | 351 |
 | 3 | **353** `[x]` | `ProtectedComposerSession` скрывает target-scoped UIA/STA/focus/read/write/verify/replay за компактным контрактом; reference и Windows factories используют один session API, матрица `7/7`. | 352 |
 | 4 | **354** `[>]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. | 353 |
@@ -240,10 +240,15 @@ production state machine.
 | 2026-08-26 | **361** | Callback admission использует resident armed state; fixture содержит `window_handle`, а trace начинается с обязательных `composer_read` и `sanitized`. | `[x]` focused canary callback test passed; installed 352 acceptance остаётся pending |
 | 2026-08-26 | **352** | UX canary: resident marker автоматически копируется в Windows clipboard после стадии `armed`; при отказе показывается ручной fallback, marker не попадает в журнал или evidence. | `[x]` focused workflow tests `3/3`; installed `reproduced_red` acceptance остаётся pending |
 | 2026-08-26 | **352** | Исправлена потеря installer identity с `+commit` и добавлен raw-free `target_verification_failed` для отказа до capture; второй Send после terminal canary не считается частью той же попытки. | `[x]` exact installed red evidence для `0.1.20260826.t1633+f7dd69d`; следующий кодовый шаг — 353 |
+| 2026-08-26 | **351** | Current evidence record `artifacts/evidence/351.json` имеет machine-discovery contract, публикуется атомарно после сборки кандидата и проверяется по exact source/build/executable/validator binding; synthetic smoke остаётся diagnostic-only. | `[x]` focused `20/20`, full suite `1903/1903`, current-record gate implemented |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от
 мутации, а синтетическая contract-проверка явно не считается release proof.
+Следующий слой 351 также закреплён: текущая запись находится в
+`artifacts/evidence/351.json`, публикуется только после сборки кандидата и
+сравнивается с exact source/build/executable/validator binding. Отсутствие,
+устаревание или рассогласование этой записи останавливает release.
 Задача 353 закрыла session boundary локальной deterministic evidence: текущий
 кодовый шаг — **354**, а production artifact/release gate остаются владельцами
 последующих 355-358. Установленная production-клавиатура по-прежнему не

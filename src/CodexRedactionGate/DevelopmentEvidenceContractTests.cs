@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json;
 using NUnit.Framework;
 
@@ -223,6 +224,126 @@ public sealed class DevelopmentEvidenceContractTests
         Assert.That(JsonDocument.Parse(json).RootElement.GetProperty("claim").GetString(), Is.EqualTo("unverified"));
     }
 
+    [Test]
+    public void CurrentEvidenceRecordLocation_IsStableAndRepositoryRelative()
+    {
+        Assert.That(
+            DevelopmentEvidenceRecordLocation.RelativePath,
+            Is.EqualTo(Path.Combine("artifacts", "evidence", "351.json")));
+
+        var root = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-evidence-root");
+        var resolved = DevelopmentEvidenceRecordLocation.Resolve(root);
+
+        Assert.That(resolved, Is.EqualTo(Path.Combine(root, DevelopmentEvidenceRecordLocation.RelativePath)));
+    }
+
+    [Test]
+    public void CurrentEvidenceGate_RejectsMissingRecord()
+    {
+        var root = CreateTemporaryRoot();
+        try
+        {
+            var result = ProtectedSendEvidenceRecordGate.ValidateCurrent(
+                root,
+                CreateBinding(),
+                DevelopmentEvidenceState.LocallyVerified);
+
+            Assert.That(result.Valid, Is.False);
+            Assert.That(result.Code, Is.EqualTo("current_evidence_record_missing"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Test]
+    public void CurrentEvidenceGate_RejectsSyntheticRecordBelowRequiredState()
+    {
+        var root = CreateTemporaryRoot();
+        try
+        {
+            var synthetic = CreateRecord(DevelopmentEvidenceState.Implemented) with
+            {
+                ExecutableSha256 = "unbound",
+                InstallerIdentity = "unbound",
+                CompatibilityFingerprint = "unbound",
+                SubmitBinding = "unbound",
+                ValidatorArtifactSha256 = "unbound"
+            };
+            WriteCurrentRecord(root, ProtectedSendEvidenceValidator.Serialize(synthetic));
+
+            var result = ProtectedSendEvidenceRecordGate.ValidateCurrent(
+                root,
+                CreateBinding(),
+                DevelopmentEvidenceState.LocallyVerified);
+
+            Assert.That(result.Valid, Is.False);
+            Assert.That(result.Code, Is.EqualTo("current_evidence_state_below_required"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Test]
+    public void CurrentEvidenceGate_AcceptsBoundLocallyVerifiedRecord()
+    {
+        var root = CreateTemporaryRoot();
+        try
+        {
+            var binding = CreateBinding();
+            WriteCurrentRecord(
+                root,
+                ProtectedSendEvidenceValidator.Serialize(
+                    CreateRecord(DevelopmentEvidenceState.LocallyVerified),
+                    binding));
+
+            var result = ProtectedSendEvidenceRecordGate.ValidateCurrent(
+                root,
+                binding,
+                DevelopmentEvidenceState.LocallyVerified);
+
+            Assert.That(result.Valid, Is.True);
+            Assert.That(result.Code, Is.EqualTo("valid"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Test]
+    public void CurrentEvidenceGate_RejectsStaleArtifactBinding()
+    {
+        var root = CreateTemporaryRoot();
+        try
+        {
+            var binding = CreateBinding();
+            var staleRecord = CreateRecord(DevelopmentEvidenceState.LocallyVerified) with
+            {
+                ExecutableSha256 = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+            };
+            var staleBinding = binding with { ExecutableSha256 = staleRecord.ExecutableSha256 };
+            WriteCurrentRecord(
+                root,
+                ProtectedSendEvidenceValidator.Serialize(staleRecord, staleBinding));
+
+            var result = ProtectedSendEvidenceRecordGate.ValidateCurrent(
+                root,
+                binding,
+                DevelopmentEvidenceState.LocallyVerified);
+
+            Assert.That(result.Valid, Is.False);
+            Assert.That(result.Code, Is.EqualTo("evidence_executable_mismatch"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private const string SourceCommit = "0123456789abcdef0123456789abcdef01234567";
     private const string Hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -235,7 +356,8 @@ public sealed class DevelopmentEvidenceContractTests
             Hash,
             "installer_candidate",
             Hash,
-            "ctrl_enter");
+            "ctrl_enter",
+            Hash);
     }
 
     private static ProtectedSendEvidenceRecord CreateRecord(
@@ -256,7 +378,22 @@ public sealed class DevelopmentEvidenceContractTests
             InstallerIdentity: "installer_candidate",
             CompatibilityFingerprint: Hash,
             SubmitBinding: "ctrl_enter",
-            TransitionHistory: history ?? EvidenceHistory(state));
+            TransitionHistory: history ?? EvidenceHistory(state),
+            ValidatorArtifactSha256: Hash);
+    }
+
+    private static string CreateTemporaryRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-evidence-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static void WriteCurrentRecord(string root, string json)
+    {
+        var path = DevelopmentEvidenceRecordLocation.Resolve(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, json);
     }
 
     private static DevelopmentEvidenceState[] EvidenceHistory(DevelopmentEvidenceState state)

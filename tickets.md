@@ -3123,14 +3123,25 @@ missing or stale ticket record does not yet block a release claim as required
 by this ticket. Ticket 357 remains the later product-wide installer/release
 gate; this ticket must first provide the usable current-record repository seam.
 
-- [ ] Add a machine-readable evidence-record location and discovery contract
+- [x] Add a machine-readable evidence-record location and discovery contract
       for protected behavior tickets.
-- [ ] Publish a real `locally_verified` record for 351 bound to the current
+- [x] Publish a real `locally_verified` record for 351 bound to the current
       schema, reproduction, commit, build, and validator artifact.
-- [ ] Make the release contract check fail when a required current record is
+- [x] Make the release contract check fail when a required current record is
       missing, stale, mismatched, or below its declared evidence target.
-- [ ] Keep synthetic smoke records diagnostic-only and prove they cannot
+- [x] Keep synthetic smoke records diagnostic-only and prove they cannot
       satisfy the current-record gate.
+
+**Implementation update (2026-08-26):** `artifacts/evidence/351.json` is now
+the machine-discovered current record for this process contract. The
+`--evidence-current-record-publish` command creates it atomically from an
+already published candidate, while `--evidence-current-record-check` validates
+the record against the exact source commit, build version, executable hash,
+schema, reproduction contract, and validator artifact. `build-release.ps1`
+fails closed when this record is absent, stale, malformed, incomplete, or
+mismatched; `publish-evidence-351.ps1` performs the publish-and-check step.
+The synthetic `--evidence-contract-smoke` remains diagnostic-only and cannot
+pass the current-record gate. Focused tests: `20/20`.
 
 ## 352. Add a resident-owned installed keyboard protected-Send canary
 
