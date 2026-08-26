@@ -37,6 +37,32 @@ tickets.md                       Local implementation tracker
 
 If the scanner package is missing, release builds and runtime readiness report a raw-free safe-disabled scanner state instead of downloading anything at runtime.
 
+### SDK selection on Windows
+
+Windows can have a runtime-only `dotnet.exe` in `C:\Program Files\dotnet` before a user-local SDK in `C:\Users\<user>\AppData\Local\Microsoft\dotnet`. A runtime can launch the installed application but cannot build or test this repository. `scripts\build-release.ps1` validates that the selected host reports a .NET 10 SDK and prefers the repository-bundled SDK when it is present.
+
+For direct source commands, verify the selected host before running them:
+
+```powershell
+dotnet --list-sdks
+```
+
+The output must contain `10.x`. If it does not, use the installed SDK host explicitly for the current session:
+
+```powershell
+$dotnet = "$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe"
+& $dotnet --list-sdks
+& $dotnet test .\src\CodexRedactionGate\CodexRedactionGate.csproj -nologo -p:UseAppHost=false
+```
+
+For a machine-wide fix, install the .NET 10 SDK (x64) using the official Microsoft installer. The existing `C:\Program Files\dotnet` entry is already in the machine `PATH`; after installation, close and reopen PowerShell and verify that `dotnet --list-sdks` reports `10.x`.
+
+For a repository restore, use `scripts\restore.ps1`. It uses the same SDK resolver as the release build and reports a safe diagnosis for NuGet source or TLS failures. Restore failures remain blocking; package signature validation stays enabled and the script does not offer a validation bypass.
+
+```powershell
+.\scripts\restore.ps1
+```
+
 ## Quick Start
 
 Build and test:

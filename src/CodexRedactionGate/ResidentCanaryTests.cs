@@ -448,7 +448,13 @@ public sealed class ResidentCanaryTests
         var profile = CreateProtectedProfile("chatgpt-desktop");
         var hook = new CanaryHookHost();
         var canaryRunnerCalls = 0;
-        var surface = TestSurfaceFactory.CreateTestSurface("chatgpt-desktop");
+        var surface = TestSurfaceFactory.CreateTestSurface("chatgpt-desktop") with
+        {
+            Metadata = new SurfaceMetadata(
+                SurfaceKind: "test",
+                ComposerStatus: OsInteractionStatusIds.SupportedComposer,
+                WindowHandle: "1")
+        };
         var controller = TrayProtectionController.CreateTest(
             new CanaryHotkeyHost(),
             () => throw new AssertionException("Manual scan must not run."),
@@ -461,6 +467,8 @@ public sealed class ResidentCanaryTests
             residentCanaryRunner: (_, target, _, traceStage, _, _) =>
             {
                 canaryRunnerCalls++;
+                Assert.That(traceStage("composer_read", "capture_verified"), Is.True);
+                Assert.That(traceStage("sanitized", "sanitization_verified"), Is.True);
                 Assert.That(traceStage("overlay_created", "confirmation_requested"), Is.True);
                 return new OsInteractionResult(
                     OsInteractionStatusIds.Submitted,

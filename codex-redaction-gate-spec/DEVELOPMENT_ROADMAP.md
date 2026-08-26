@@ -46,6 +46,22 @@ write/replay показали, что внутренняя реализация 
 355 -> 356 -> 357 -> 358`. Пока доказательство 352 не получено, следующую
 кодовую задачу 353 не начинаем.
 
+### Исправления инструментирования и canary (359-361)
+
+Три корректирующих тикета добавлены поверх истории и не меняют критический
+порядок основного convergence-пути:
+
+| Тикет | Статус | Результат | Связь с текущим gate |
+|---:|---|---|---|
+| **359** | `[x]` | Release build и restore используют один проверяемый resolver .NET 10 SDK; runtime-only `dotnet.exe` не принимается как SDK. | Независимый prerequisite для tooling |
+| **360** | `[x]` | Restore wrapper явно сообщает состояние NuGet/TLS и сохраняет включённую проверку подписей. | Не меняет 352; live restore зависит от сети |
+| **361** | `[x]` | Resident canary admission проходит через callback с валидным target identity и каноническим trace. | Исправляет локальный red-тест; установленное доказательство всё ещё требует 352 |
+
+`359-361` не являются заменой установленному acceptance 352. Они закрывают
+ошибки tooling и deterministic callback proof, после чего следующий ручной
+шаг остаётся прежним: запустить canary на совпадающем установленном кандидате
+и сохранить `reproduced_red`.
+
 ## Карта зависимостей
 
 ```mermaid
@@ -63,6 +79,9 @@ flowchart TD
     A350["[x] 350\nЕдиная OpenAI Desktop identity\nstable compatibility / transient target"]
     E351["[x] 351\nКонтракт уровней доказательств"]
     C352["[>] 352\nResident live canary\nкод готов; установленный red pending"]
+    T359["[x] 359\nDeterministic .NET 10 SDK resolver"]
+    T360["[x] 360\nSafe NuGet restore diagnosis"]
+    T361["[x] 361\nResident canary callback admission"]
     S353["[ ] 353\nProtectedComposerSession"]
     T354["[ ] 354\nProtectedSendTransaction\nрядом с legacy"]
     R355["[ ] 355\nReference через production UIA"]
@@ -93,6 +112,9 @@ flowchart TD
     A349 --> E351
     A350 --> E351
     E351 --> C352
+    T359 --> T360
+    E351 --> T361
+    C352 -. "installed acceptance remains required" .-> T361
     C352 --> S353
     S353 --> T354
     T354 --> R355
@@ -210,6 +232,9 @@ production state machine.
 | 2026-08-26 | **352** | Resident-owned canary, lifecycle, target-generation guard, production UIA/write wiring, overlay trace, raw-free evidence и installer identity sidecar добавлены; ложный green replay запрещён. | `[>]` deterministic `1856/1856`, build и installer smoke прошли; installed red artifact и безопасный production replay ещё не доказаны |
 | 2026-08-26 | **352** | После финальной проверки commit `2d99fe2b` roadmap фиксирует canary как единственный текущий gate; deterministic suite проверен как `1857/1857`. | `[>]` следующая пользовательская операция: installed canary с сохранением `reproduced_red`; 353 заблокирована до этого артефакта |
 | 2026-08-26 | **352** | Установленный canary воспроизвёл красный дефект: marker прошёл в OpenAI Desktop без overlay. Admission fix добавляет canary до обычной classification и покрыт focused callback-тестами. | `[>]` пересобрать installed candidate и повторить canary; до этого 352 и 353 остаются заблокированы |
+| 2026-08-26 | **359** | Общий resolver выбирает только host с .NET 10 SDK и используется build/restore entry points. | `[x]` PowerShell syntax, SDK 10.0.400 и release build verified |
+| 2026-08-26 | **360** | Restore wrapper отделяет SDK failure от NuGet/TLS failure и не ослабляет signature validation. | `[x]` `restore_status=passed` в текущей среде; сетевой failure path диагностически покрыт |
+| 2026-08-26 | **361** | Callback admission использует resident armed state; fixture содержит `window_handle`, а trace начинается с обязательных `composer_read` и `sanitized`. | `[x]` focused canary callback test passed; installed 352 acceptance остаётся pending |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от

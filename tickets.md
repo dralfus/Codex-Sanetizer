@@ -3408,3 +3408,113 @@ for all required levels.
 - [ ] Run all evidence levels on one candidate and record the artifacts.
 - [ ] Reclose 348 with links to deterministic, reference, live, and release
       evidence; preserve its earlier history.
+
+## 359. Resolve the .NET 10 SDK deterministically for repository tooling
+
+**What to build:** Release and source-tooling commands select a host that
+actually reports a .NET 10 SDK, even when Windows `PATH` resolves a
+runtime-only `dotnet.exe` first. The command must fail clearly when no usable
+SDK exists.
+
+**Blocked by:** None - can start immediately.
+
+**State owner:** Repository build and restore scripts own SDK resolution;
+application runtime state is unaffected.
+
+**Fail-closed state:** A missing or non-.NET-10 SDK stops the command before
+cleaning or publishing output. No runtime-only host is treated as a build
+capability.
+
+**Allowed transitions:** `unresolved -> resolved -> command_started`, or
+`unresolved -> failed_with_actionable_error`.
+
+**Deterministic proof:** A testable resolver chooses a .NET 10 SDK from the
+repository, user-local, machine, or PATH candidates in that order; explicit
+`DOTNET_EXE` is validated; release build reports the selected host.
+
+**Red-capable reproduction:** Put a runtime-only host before a valid SDK on
+`PATH` and verify the command rejects the first host and selects the valid
+candidate.
+
+**Highest required seam:** The shared SDK resolver used by build and restore
+entry points.
+
+**Evidence target:** `locally_verified` for repository tooling.
+
+- [x] Validate every candidate with `dotnet --list-sdks`.
+- [x] Share the resolver between release build and restore commands.
+- [x] Document the runtime-only host failure mode and the repair command.
+
+## 360. Diagnose NuGet restore transport failures without weakening validation
+
+**What to build:** A repository restore command reports a raw-free, actionable
+diagnosis when NuGet source access or TLS fails, while retaining package
+signature validation and the configured source. The command must distinguish a
+restore failure from an SDK failure and must not silently bypass verification.
+
+**Blocked by:** 359.
+
+**State owner:** The restore wrapper owns command diagnostics; NuGet remains
+the owner of source access and package signature validation.
+
+**Fail-closed state:** Failed restore stops the command. No package is
+accepted through an unsigned, alternate, or disabled-validation path.
+
+**Allowed transitions:** `sdk_resolved -> restore_started -> restored`, or
+`restore_started -> failed_with_safe_diagnosis`.
+
+**Deterministic proof:** A successful restore uses the selected SDK; a
+simulated or observed `NU1301`/TLS failure emits only safe diagnostic fields
+and a concrete next action. No configuration disables signature checks.
+
+**Red-capable reproduction:** Block `api.nuget.org` or reproduce the
+repository-signature TLS failure and verify the wrapper exits non-zero with a
+diagnosis instead of suggesting a validation bypass.
+
+**Highest required seam:** Restore command exit handling and safe diagnostic
+classification.
+
+**Evidence target:** `locally_verified` for the wrapper; live restore remains
+dependent on the machine's network/proxy state.
+
+- [x] Add a restore wrapper using the shared .NET resolver.
+- [x] Classify NuGet source/TLS failures without printing prompt content.
+- [x] Document that signature validation remains enabled.
+
+## 361. Preserve resident-canary admission through the protected callback path
+
+**What to build:** An armed resident canary admitted by the Windows keyboard
+callback suppresses the original Send and invokes the canary runner exactly
+once for the captured target. The test fixture must include a valid target
+window identity and must exercise the production trace transition order.
+
+**Blocked by:** 351; installed acceptance remains gated by 352.
+
+**State owner:** `ResidentCanarySession` owns canary admission; the resident
+protected-send path owns callback execution; the test fixture owns only test
+target construction.
+
+**Fail-closed state:** Missing, stale, or mismatched target identity fails
+closed and never invokes the normal production runner or sends the original
+input.
+
+**Allowed transitions:** `armed -> send_observed -> transaction_started ->
+trace stages -> terminal`, or `armed -> terminal_failed`.
+
+**Deterministic proof:** The focused callback test proves original input is
+suppressed, canary runner calls equal one, normal runner calls equal zero, and
+the trace reaches terminal state with safe diagnostics.
+
+**Red-capable reproduction:** Use a surface without `window_handle` or route
+the callback through the old operational-action lookup; the test must fail
+before the valid-target fixture and resident-session admission are restored.
+
+**Highest required seam:** `RunNativeSubmitFlow` canary admission after the
+callback has captured classification context.
+
+**Evidence target:** `locally_verified`, followed by the installed `352`
+artifact.
+
+- [x] Read the armed canary from resident session state at callback time.
+- [x] Preserve target identity in the callback fixture.
+- [x] Exercise the canonical trace stages before overlay admission.

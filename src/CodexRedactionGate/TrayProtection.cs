@@ -3354,12 +3354,11 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         Func<bool> executionGuard,
         Func<IDisposable?> executionLease)
     {
-        var canaryAttemptId = _residentCanaryAttemptId();
-        if (canaryAttemptId > 0)
+        if (_residentCanary.TryGetArmed(out var armedCanary))
         {
             if (target is not null
                 && _residentCanary.TryObserveSend(
-                    canaryAttemptId,
+                    armedCanary.AttemptId,
                     runtime.Profile.ProfileId,
                     target.SnapshotGeneration,
                     out var arm))
@@ -3368,12 +3367,12 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                     "send_observed",
                     true,
                     "run_canary",
-                    canaryAttemptId);
+                    armedCanary.AttemptId);
                 return RunResidentCanary(runtime, target, arm, traceStage, executionGuard, executionLease);
             }
 
             if (_residentCanary.TryFail(
-                    canaryAttemptId,
+                    armedCanary.AttemptId,
                     target is null ? "target_unavailable" : "target_mismatch",
                     out var failedCanary))
             {
@@ -3381,7 +3380,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                     "target_verification_failed",
                     false,
                     "retry_canary",
-                    canaryAttemptId);
+                    armedCanary.AttemptId);
                 return CompleteFailedResidentCanary(runtime, failedCanary, target);
             }
 
@@ -3427,15 +3426,6 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         }
 
         return TraceRunnerUnavailableResult();
-    }
-
-    private long _residentCanaryAttemptId()
-    {
-        var state = ReadSnapshot().State;
-        return state.EffectiveOperationalAction.ActionKind == "resident_canary"
-            && string.Equals(state.EffectiveOperationalAction.Status, "running", StringComparison.Ordinal)
-            ? state.EffectiveOperationalAction.AttemptId
-            : 0;
     }
 
     private OsInteractionResult CompleteFailedResidentCanary(

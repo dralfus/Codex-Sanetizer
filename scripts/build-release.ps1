@@ -71,26 +71,10 @@ function Remove-TestPublishArtifacts {
         Remove-Item -Force
 }
 
-$dotnet = $env:DOTNET_EXE
-if ([string]::IsNullOrWhiteSpace($dotnet)) {
-    $candidates = @(
-        "dotnet",
-        "$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe",
-        "$env:ProgramFiles\dotnet\dotnet.exe"
-    )
-    $dotnet = $candidates | Where-Object {
-        if ($_ -eq "dotnet") {
-            $null -ne (Get-Command dotnet -ErrorAction SilentlyContinue)
-        }
-        else {
-            Test-Path $_
-        }
-    } | Select-Object -First 1
-}
-
-if ([string]::IsNullOrWhiteSpace($dotnet)) {
-    throw "dotnet SDK was not found. Set DOTNET_EXE to dotnet.exe."
-}
+$sdkResolver = Join-Path $PSScriptRoot "resolve-dotnet-sdk.ps1"
+. $sdkResolver
+$dotnet = Resolve-Net10Sdk -RepositoryRoot $repoRoot
+Write-Host "dotnet_sdk_host=$dotnet"
 
 Assert-UnderRepository -Path $outputFullPath -Purpose "publish output"
 Assert-UnderRepository -Path $workingOutputFullPath -Purpose "temporary publish output"
