@@ -141,6 +141,16 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+$evidenceSmokeExecutable = Join-Path $consoleOutput "CodexRedactionGate.exe"
+if (-not (Test-Path -LiteralPath $evidenceSmokeExecutable)) {
+    throw "Evidence contract smoke executable was not published: $evidenceSmokeExecutable"
+}
+
+& $evidenceSmokeExecutable --evidence-contract-smoke
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 Copy-Item -Path (Join-Path $consoleOutput "*") -Destination $output -Recurse -Force
 Copy-Item -Path (Join-Path $trayOutput "*") -Destination $output -Recurse -Force
 Copy-Item -Path (Join-Path $consoleOutput "CodexRedactionGate.*") -Destination $output -Force

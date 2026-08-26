@@ -111,6 +111,83 @@ public sealed class DevelopmentEvidenceContractTests
     }
 
     [Test]
+    public void Validator_RejectsMissingSchemaAndReproductionCommand()
+    {
+        var result = ProtectedSendEvidenceValidator.Validate(
+            CreateRecord(DevelopmentEvidenceState.Implemented) with
+            {
+                SchemaVersion = "",
+                ReproductionCommandId = ""
+            },
+            CreateBinding(),
+            DevelopmentEvidenceState.Implemented);
+
+        Assert.That(result.Valid, Is.False);
+        Assert.That(result.Code, Is.EqualTo("invalid_schema_version"));
+    }
+
+    [Test]
+    public void Validator_RejectsSkippedEvidenceHistory()
+    {
+        var result = ProtectedSendEvidenceValidator.Validate(
+            CreateRecord(DevelopmentEvidenceState.Implemented) with
+            {
+                TransitionHistory = new[]
+                {
+                    DevelopmentEvidenceState.Proposed,
+                    DevelopmentEvidenceState.Implemented
+                }
+            },
+            CreateBinding(),
+            DevelopmentEvidenceState.Implemented);
+
+        Assert.That(result.Valid, Is.False);
+        Assert.That(result.Code, Is.EqualTo("invalid_evidence_history"));
+    }
+
+    [Test]
+    public void Validator_RejectsUnboundArtifactsForLiveEvidence()
+    {
+        var result = ProtectedSendEvidenceValidator.Validate(
+            CreateRecord(DevelopmentEvidenceState.LiveVerified),
+            CreateBinding() with
+            {
+                ExecutableSha256 = "unbound",
+                InstallerIdentity = "unbound",
+                CompatibilityFingerprint = "unbound",
+                SubmitBinding = "unbound"
+            },
+            DevelopmentEvidenceState.LiveVerified);
+
+        Assert.That(result.Valid, Is.False);
+        Assert.That(result.Code, Is.EqualTo("expected_binding_incomplete"));
+    }
+
+    [Test]
+    public void Validator_RejectsMismatchedArtifactIdentity()
+    {
+        var result = ProtectedSendEvidenceValidator.Validate(
+            CreateRecord(DevelopmentEvidenceState.LiveVerified),
+            CreateBinding() with { InstallerIdentity = "installer_other" },
+            DevelopmentEvidenceState.LiveVerified);
+
+        Assert.That(result.Valid, Is.False);
+        Assert.That(result.Code, Is.EqualTo("evidence_installer_mismatch"));
+    }
+
+    [Test]
+    public void Serialize_RejectsAnUnsafeRecordInsteadOfEmittingIt()
+    {
+        Assert.That(
+            () => ProtectedSendEvidenceValidator.Serialize(
+                CreateRecord(DevelopmentEvidenceState.Implemented) with
+                {
+                    BehaviorId = "raw secret prompt"
+                }),
+            Throws.TypeOf<InvalidOperationException>());
+    }
+
+    [Test]
     public void EvidenceSerialization_UsesTokensAndContainsNoPromptField()
     {
         var json = ProtectedSendEvidenceValidator.Serialize(
@@ -126,19 +203,45 @@ public sealed class DevelopmentEvidenceContractTests
     private const string SourceCommit = "0123456789abcdef0123456789abcdef01234567";
     private const string Hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+    private static ProtectedSendEvidenceBinding CreateBinding()
+    {
+        return new ProtectedSendEvidenceBinding(
+            DevelopmentEvidenceContract.SchemaVersion,
+            BuildVersion.Current,
+            SourceCommit,
+            Hash,
+            "installer_candidate",
+            Hash,
+            "ctrl_enter");
+    }
+
     private static ProtectedSendEvidenceRecord CreateRecord(DevelopmentEvidenceState state)
     {
         return new ProtectedSendEvidenceRecord(
+            SchemaVersion: DevelopmentEvidenceContract.SchemaVersion,
             TicketId: "ticket_351",
             BehaviorId: "protected_send_evidence",
             State: state,
             ReproductionId: "repro_protected_send",
+            ReproductionCommandId: "cmd_repro_protected_send",
             HighestRequiredSeam: "deterministic_transaction",
             BuildVersion: BuildVersion.Current,
             SourceCommit: SourceCommit,
             ExecutableSha256: Hash,
             InstallerIdentity: "installer_candidate",
             CompatibilityFingerprint: Hash,
-            SubmitBinding: "ctrl_enter");
+            SubmitBinding: "ctrl_enter",
+            TransitionHistory: EvidenceHistory(state));
+    }
+
+    private static DevelopmentEvidenceState[] EvidenceHistory(DevelopmentEvidenceState state)
+    {
+        var history = new DevelopmentEvidenceState[(int)state + 1];
+        for (var index = 0; index < history.Length; index++)
+        {
+            history[index] = (DevelopmentEvidenceState)index;
+        }
+
+        return history;
     }
 }
