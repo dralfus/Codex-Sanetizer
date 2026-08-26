@@ -3039,7 +3039,7 @@ Transient target diagnostics are excluded from persisted profile diagnostics,
 while the active target remains available only for the current operation. A
 supported profile is revalidated from current discovery even when old evidence
 is supplied, so stale evidence cannot bypass incomplete current identity.
-Verification: focused identity tests `29/29`, full suite `1897/1897`, and
+Verification: focused identity tests `30/30`, full suite `1898/1898`, and
 Release build with zero warnings/errors.
 
 **Scope clarification:** `codex-desktop` and `chatgpt-desktop` remain exact

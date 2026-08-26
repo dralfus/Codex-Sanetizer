@@ -182,7 +182,7 @@ Desktop composer.
 для mouse Send и не является условием запуска 347/348.
 
 **Текущее доказательство после 350:** follow-up identity hardening прошёл
-focused identity tests `29/29`, полный suite `1897/1897` и Release build без
+focused identity tests `30/30`, полный suite `1898/1898` и Release build без
 предупреждений и ошибок. Stable identity теперь требует trusted package family
 `OpenAI.Codex_2p2nqsd0c76g` и canonical OpenAI Desktop branding; transient
 target diagnostics не сохраняются. `codex-desktop` и `chatgpt-desktop` остаются
