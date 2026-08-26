@@ -181,11 +181,14 @@ Desktop composer.
 детерминированная reference-composer матрица. `314` остаётся отдельной задачей
 для mouse Send и не является условием запуска 347/348.
 
-**Текущее доказательство после 350:** `1782/1782`, `--self-test`,
-`--product-smoke` и Release build без предупреждений и ошибок. Installer
+**Текущее доказательство после 350:** follow-up identity hardening прошёл
+focused identity tests `29/29`, полный suite `1897/1897` и Release build без
+предупреждений и ошибок. Stable identity теперь требует trusted package family
+`OpenAI.Codex_2p2nqsd0c76g` и canonical OpenAI Desktop branding; transient
+target diagnostics не сохраняются. `codex-desktop` и `chatgpt-desktop` остаются
+раздельными operational selectors поверх общей stable identity. Installer
 `0.1.20260822.t1325` остаётся в истории как предыдущий candidate и не содержит
-ремонт 350. Для следующей ручной release-приёмки опубликована и запущена
-сборка `0.1.20260823.t1841` из `artifacts/publish`.
+ремонт 350; новый runtime/release evidence для 351+ ещё не опубликован.
 
 ### Этап 1.6. Сделать protected Send доказуемым глубоким модулем
 

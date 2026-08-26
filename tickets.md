@@ -3019,16 +3019,33 @@ identity. The completed history above remains valid evidence for the partial
 implementation, but the ticket is open until the full compatibility identity
 is stable across supported aliases.
 
-- [ ] Derive package evidence from the actual installed OpenAI Desktop package
+- [x] Derive package evidence from the actual installed OpenAI Desktop package
       identity, or explicitly mark package identity unavailable and fail closed.
-- [ ] Canonicalize supported Codex/ChatGPT process and executable aliases in
+- [x] Canonicalize supported Codex/ChatGPT process and executable aliases in
       every persisted compatibility field, or remove alias-dependent fields
       from persisted comparison.
-- [ ] Add a deterministic full-fingerprint comparison between mixed Codex and
+- [x] Add a deterministic full-fingerprint comparison between mixed Codex and
       ChatGPT process/executable/window branding, not only an assertion for the
       product-id field.
-- [ ] Prove that changing only a supported alias does not require setup, while
+- [x] Prove that changing only a supported alias does not require setup, while
       an actual version or composer-shape change still does.
+
+**Completed (2026-08-26 follow-up):** Stable evidence now requires the trusted
+`OpenAI.Codex_2p2nqsd0c76g` package family, canonical OpenAI Desktop branding,
+meaningful framework/control values, and non-placeholder stable fingerprints.
+The Windows discovery path derives the package family from the native package
+full name and leaves missing values empty instead of hashing sentinels.
+Transient target diagnostics are excluded from persisted profile diagnostics,
+while the active target remains available only for the current operation. A
+supported profile is revalidated from current discovery even when old evidence
+is supplied, so stale evidence cannot bypass incomplete current identity.
+Verification: focused identity tests `29/29`, full suite `1897/1897`, and
+Release build with zero warnings/errors.
+
+**Scope clarification:** `codex-desktop` and `chatgpt-desktop` remain exact
+operational profile selectors. The single `openai-desktop` identity is the
+stable compatibility contract shared by those selectors; it does not make an
+active surface from one selected profile silently replace the other profile.
 
 ## 351. Enforce an evidence-state contract for product fixes
 
