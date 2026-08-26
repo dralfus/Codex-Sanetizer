@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using NUnit.Framework;
 
@@ -130,14 +131,13 @@ public sealed class DevelopmentEvidenceContractTests
     public void Validator_RejectsSkippedEvidenceHistory()
     {
         var result = ProtectedSendEvidenceValidator.Validate(
-            CreateRecord(DevelopmentEvidenceState.Implemented) with
-            {
-                TransitionHistory = new[]
+            CreateRecord(
+                DevelopmentEvidenceState.Implemented,
+                new[]
                 {
                     DevelopmentEvidenceState.Proposed,
                     DevelopmentEvidenceState.Implemented
-                }
-            },
+                }),
             CreateBinding(),
             DevelopmentEvidenceState.Implemented);
 
@@ -188,6 +188,29 @@ public sealed class DevelopmentEvidenceContractTests
     }
 
     [Test]
+    public void Serialize_RequiresExternalBindingForLiveEvidence()
+    {
+        Assert.That(
+            () => ProtectedSendEvidenceValidator.Serialize(
+                CreateRecord(DevelopmentEvidenceState.LiveVerified)),
+            Throws.TypeOf<InvalidOperationException>()
+                .With.Message.EqualTo("external_binding_required"));
+    }
+
+    [Test]
+    public void EvidenceHistory_IsDefensivelyCopied()
+    {
+        var history = EvidenceHistory(DevelopmentEvidenceState.Implemented);
+        var record = CreateRecord(DevelopmentEvidenceState.Implemented, history);
+
+        history[2] = DevelopmentEvidenceState.LiveVerified;
+
+        Assert.That(
+            record.TransitionHistory[2],
+            Is.EqualTo(DevelopmentEvidenceState.Implemented));
+    }
+
+    [Test]
     public void EvidenceSerialization_UsesTokensAndContainsNoPromptField()
     {
         var json = ProtectedSendEvidenceValidator.Serialize(
@@ -215,7 +238,9 @@ public sealed class DevelopmentEvidenceContractTests
             "ctrl_enter");
     }
 
-    private static ProtectedSendEvidenceRecord CreateRecord(DevelopmentEvidenceState state)
+    private static ProtectedSendEvidenceRecord CreateRecord(
+        DevelopmentEvidenceState state,
+        IReadOnlyList<DevelopmentEvidenceState>? history = null)
     {
         return new ProtectedSendEvidenceRecord(
             SchemaVersion: DevelopmentEvidenceContract.SchemaVersion,
@@ -231,7 +256,7 @@ public sealed class DevelopmentEvidenceContractTests
             InstallerIdentity: "installer_candidate",
             CompatibilityFingerprint: Hash,
             SubmitBinding: "ctrl_enter",
-            TransitionHistory: EvidenceHistory(state));
+            TransitionHistory: history ?? EvidenceHistory(state));
     }
 
     private static DevelopmentEvidenceState[] EvidenceHistory(DevelopmentEvidenceState state)

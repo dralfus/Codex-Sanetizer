@@ -64,22 +64,59 @@ public static class DevelopmentEvidenceStateTokens
     }
 }
 
-public sealed record ProtectedSendEvidenceRecord(
-    string SchemaVersion,
-    string TicketId,
-    string BehaviorId,
-    DevelopmentEvidenceState State,
-    string ReproductionId,
-    string ReproductionCommandId,
-    string HighestRequiredSeam,
-    string BuildVersion,
-    string SourceCommit,
-    string ExecutableSha256,
-    string InstallerIdentity,
-    string CompatibilityFingerprint,
-    string SubmitBinding,
-    IReadOnlyList<DevelopmentEvidenceState> TransitionHistory,
-    string Claim = "unverified");
+public sealed record ProtectedSendEvidenceRecord
+{
+    public ProtectedSendEvidenceRecord(
+        string SchemaVersion,
+        string TicketId,
+        string BehaviorId,
+        DevelopmentEvidenceState State,
+        string ReproductionId,
+        string ReproductionCommandId,
+        string HighestRequiredSeam,
+        string BuildVersion,
+        string SourceCommit,
+        string ExecutableSha256,
+        string InstallerIdentity,
+        string CompatibilityFingerprint,
+        string SubmitBinding,
+        IReadOnlyList<DevelopmentEvidenceState> TransitionHistory,
+        string Claim = "unverified")
+    {
+        this.SchemaVersion = SchemaVersion;
+        this.TicketId = TicketId;
+        this.BehaviorId = BehaviorId;
+        this.State = State;
+        this.ReproductionId = ReproductionId;
+        this.ReproductionCommandId = ReproductionCommandId;
+        this.HighestRequiredSeam = HighestRequiredSeam;
+        this.BuildVersion = BuildVersion;
+        this.SourceCommit = SourceCommit;
+        this.ExecutableSha256 = ExecutableSha256;
+        this.InstallerIdentity = InstallerIdentity;
+        this.CompatibilityFingerprint = CompatibilityFingerprint;
+        this.SubmitBinding = SubmitBinding;
+        this.TransitionHistory = Array.AsReadOnly(TransitionHistory?.ToArray()
+            ?? throw new ArgumentNullException(nameof(TransitionHistory)));
+        this.Claim = Claim;
+    }
+
+    public string SchemaVersion { get; init; }
+    public string TicketId { get; init; }
+    public string BehaviorId { get; init; }
+    public DevelopmentEvidenceState State { get; init; }
+    public string ReproductionId { get; init; }
+    public string ReproductionCommandId { get; init; }
+    public string HighestRequiredSeam { get; init; }
+    public string BuildVersion { get; init; }
+    public string SourceCommit { get; init; }
+    public string ExecutableSha256 { get; init; }
+    public string InstallerIdentity { get; init; }
+    public string CompatibilityFingerprint { get; init; }
+    public string SubmitBinding { get; init; }
+    public IReadOnlyList<DevelopmentEvidenceState> TransitionHistory { get; private init; }
+    public string Claim { get; init; }
+}
 
 public sealed record ProtectedSendEvidenceBinding(
     string SchemaVersion,
@@ -285,19 +322,36 @@ public static class ProtectedSendEvidenceValidator
     }
 
     public static string Serialize(ProtectedSendEvidenceRecord record)
+        => SerializeValidated(record, expected: null);
+
+    public static string Serialize(
+        ProtectedSendEvidenceRecord record,
+        ProtectedSendEvidenceBinding expected)
+        => SerializeValidated(record, expected);
+
+    private static string SerializeValidated(
+        ProtectedSendEvidenceRecord record,
+        ProtectedSendEvidenceBinding? expected)
     {
         ArgumentNullException.ThrowIfNull(record);
 
+        if (record.State >= DevelopmentEvidenceState.LiveVerified
+            && expected is null)
+        {
+            throw new InvalidOperationException("external_binding_required");
+        }
+
+        expected ??= new ProtectedSendEvidenceBinding(
+            record.SchemaVersion,
+            record.BuildVersion,
+            record.SourceCommit,
+            Unbound,
+            Unbound,
+            Unbound,
+            Unbound);
         var validation = Validate(
             record,
-            new ProtectedSendEvidenceBinding(
-                record.SchemaVersion,
-                record.BuildVersion,
-                record.SourceCommit,
-                record.ExecutableSha256,
-                record.InstallerIdentity,
-                record.CompatibilityFingerprint,
-                record.SubmitBinding),
+            expected,
             record.State);
         if (!validation.Valid)
         {

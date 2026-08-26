@@ -3064,16 +3064,19 @@ synthetic evidence as release proof. Tests prove adjacent-only transitions,
 premature `fixed` rejection, build and artifact mismatch rejection, incomplete
 binding rejection, unsafe-field rejection, stable serialization, and SDK
 informational versions containing `+`. Verification: focused contract tests pass
-(`13/13`), the CLI contract smoke passes, and the full suite passes (`1839/1839`).
+(`15/15`), the CLI contract smoke passes, the release publish validator smoke
+passes, and the full suite passes (`1846/1846`).
 
 **Review follow-up (2026-08-26):** The first implementation was reopened after
 review found that artifact fields could be `unbound` at live/released states,
 the smoke record used self-consistent fake identity, schema/history and a
-reproduction command were absent, and serialization did not validate records.
+reproduction command were absent, serialization did not validate records, and
+live evidence could self-bind its own artifacts.
 The validator now requires complete binding for live/released evidence, checks
 all supplied artifact identities, requires schema/history/reproduction ids,
-rejects invalid records before serialization, and the release build invokes the
-standalone contract smoke. The synthetic smoke remains explicitly
+rejects invalid records before serialization, requires an external binding for
+live/released serialization, defensively copies transition history, and the
+release build invokes the standalone validator smoke. The synthetic smoke remains explicitly
 `implemented`-only and is no longer included in the aggregate release
 readiness result.
 

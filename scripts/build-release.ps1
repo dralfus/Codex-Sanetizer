@@ -150,6 +150,7 @@ if (-not (Test-Path -LiteralPath $evidenceSmokeExecutable)) {
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
+Write-Output "evidence_contract_validator_smoke=passed"
 
 Copy-Item -Path (Join-Path $consoleOutput "*") -Destination $output -Recurse -Force
 Copy-Item -Path (Join-Path $trayOutput "*") -Destination $output -Recurse -Force
