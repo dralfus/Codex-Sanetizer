@@ -12,6 +12,11 @@ public static class SmokeSurfaceFactory
         return TestSurfaceFactory.CreateSmokeNativeSubmitSurface(profileId);
     }
 
+    public static TextSurfaceDiscoveryResult CreateSmokeNativeSubmitDiscovery(string profileId)
+    {
+        return TestSurfaceFactory.CreateSmokeNativeSubmitDiscovery(profileId);
+    }
+
     public static TextSurfaceDiscoveryResult CreateVerifiedChatGptDiscovery() =>
         ChatGptDiscoveryFixture.CreateVerified(CreateSmokeNativeSubmitSurface("chatgpt-desktop"));
 }
@@ -125,7 +130,7 @@ public static class ProductSmokeRunner
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("codex-desktop")));
+            SmokeSurfaceFactory.CreateSmokeNativeSubmitDiscovery("codex-desktop"));
         var profileSave = SubmitBindingProfileStore.Upsert(layout, smokeProfile);
         var protectedTriggerStatusPassed = profileSave.Succeeded
             && smokeProfile.IsProtected
@@ -192,7 +197,7 @@ public static class ProductSmokeRunner
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("codex-desktop")));
+            SmokeSurfaceFactory.CreateSmokeNativeSubmitDiscovery("codex-desktop"));
         var chatGptVerification = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "chatgpt-desktop",
             "Enter",
@@ -202,7 +207,7 @@ public static class ProductSmokeRunner
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("chatgpt-desktop")));
+            SmokeSurfaceFactory.CreateSmokeNativeSubmitDiscovery("chatgpt-desktop"));
         var nativeProfileVerificationEntrypointsPassed = nativeSubmit.Passed
             && codexVerification.IsProtected
             && chatGptVerification.IsProtected

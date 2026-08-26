@@ -98,7 +98,7 @@ internal static class ResidentLifecycleSmokeRunner
                 "codex-desktop",
                 "Enter",
                 "Ctrl+Enter",
-                TextSurfaceDiscoveryResult.Success(SmokeSurfaceFactory.CreateSmokeNativeSubmitSurface("codex-desktop")));
+                SmokeSurfaceFactory.CreateSmokeNativeSubmitDiscovery("codex-desktop"));
             var initialController = new NativeSubmitInterceptionController(
                 pendingProfile,
                 new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
@@ -319,7 +319,7 @@ internal static class ResidentLifecycleSmokeRunner
             runtime.Controller,
             profile,
             nativeSubmitRuntimes: new[] { runtime },
-            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(captured));
+            activeSurfaceDiscovery: () => ChatGptDiscoveryFixture.CreateVerified(captured));
 
         if (!protection.Start())
         {
@@ -360,7 +360,7 @@ internal static class ResidentLifecycleSmokeRunner
 
         public TextSurfaceDiscoveryResult DiscoverActiveSurface()
         {
-            return TextSurfaceDiscoveryResult.Success(_surface);
+            return ChatGptDiscoveryFixture.CreateVerified(_surface);
         }
     }
 

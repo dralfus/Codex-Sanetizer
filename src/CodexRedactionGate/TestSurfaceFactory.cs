@@ -31,6 +31,15 @@ public static class TestSurfaceFactory
     }
 
     /// <summary>
+    /// Creates a native-submit discovery result with complete, raw-free OpenAI
+    /// Desktop compatibility evidence for deterministic tests.
+    /// </summary>
+    public static TextSurfaceDiscoveryResult CreateNativeSubmitDiscovery(string profileId)
+    {
+        return ChatGptDiscoveryFixture.CreateVerified(CreateNativeSubmitSurface(profileId));
+    }
+
+    /// <summary>
     /// Creates a smoke test surface for native submit testing.
     /// </summary>
     /// <param name="profileId">The profile ID for the surface.</param>
@@ -50,6 +59,14 @@ public static class TestSurfaceFactory
             CanReplaceText: true,
             CanSubmit: true,
             Metadata: metadata);
+    }
+
+    /// <summary>
+    /// Creates a smoke discovery result with complete compatibility evidence.
+    /// </summary>
+    public static TextSurfaceDiscoveryResult CreateSmokeNativeSubmitDiscovery(string profileId)
+    {
+        return ChatGptDiscoveryFixture.CreateVerified(CreateSmokeNativeSubmitSurface(profileId));
     }
 
     /// <summary>

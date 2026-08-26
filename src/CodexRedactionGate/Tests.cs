@@ -1545,7 +1545,7 @@ public partial class SanitizerTests
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(new TextSurfaceDescriptor(
+            ChatGptDiscoveryFixture.CreateVerified(new TextSurfaceDescriptor(
                 "surface-1",
                 "codex-desktop",
                 "Codex desktop composer",
@@ -1586,7 +1586,7 @@ public partial class SanitizerTests
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(new TextSurfaceDescriptor(
+            ChatGptDiscoveryFixture.CreateVerified(new TextSurfaceDescriptor(
                 "surface-1",
                 "codex-desktop",
                 "Codex desktop composer",
@@ -1624,7 +1624,7 @@ public partial class SanitizerTests
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(new TextSurfaceDescriptor(
+            ChatGptDiscoveryFixture.CreateVerified(new TextSurfaceDescriptor(
                 "surface-1",
                 "codex-desktop",
                 "Codex desktop composer",
@@ -6282,7 +6282,7 @@ public class CliTests
                 "codex-desktop",
                 "Enter",
                 "Ctrl+Enter",
-                TextSurfaceDiscoveryResult.Success(CreateCliNativeSubmitSurface("codex-desktop"))) with
+                ChatGptDiscoveryFixture.CreateVerified(CreateCliNativeSubmitSurface("codex-desktop"))) with
             {
                 Diagnostics = new Dictionary<string, string>
                 {
@@ -9570,15 +9570,11 @@ public class ResidentFirstRunSetupLaunchTests
 
     private static SubmitBindingProfile CreateProtectedSetupProfile()
     {
-        return new SubmitBindingProfile(
+        return SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "codex-desktop",
-            Enabled: true,
-            BindingSource: "user_verified",
-            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding!,
-            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding!,
-            CapabilityStatus: OsInteractionStatusIds.Protected,
-            CompatibilityEvidence: null,
-            Diagnostics: new Dictionary<string, string>());
+            "Enter",
+            "Ctrl+Enter",
+            ChatGptDiscoveryFixture.CreateVerified(CreateSetupTestSurface()));
     }
 
     private static TextSurfaceDescriptor CreateSetupTestSurface()

@@ -2383,11 +2383,7 @@ public static class NativeSubmitProductSmokeRunner
 
         // Test pair 1: Enter as Send / Ctrl+Enter as newline
         var surface1 = CreateSurface("codex-desktop", "profile-smoke");
-        var discovery1 = TextSurfaceDiscoveryResult.Success(surface1, new Dictionary<string, string>
-        {
-            ["surface_kind"] = "disposable_local_target",
-            ["cloud_submission"] = "false"
-        });
+        var discovery1 = ChatGptDiscoveryFixture.CreateVerified(surface1);
         var profile1 = SubmitBindingOnboardingVerifier.VerifyUserBindings(
             "codex-desktop",
             "Enter",
@@ -2654,7 +2650,7 @@ public static class NativeSubmitProductSmokeRunner
             "codex-desktop",
             "Enter",
             "Ctrl+Enter",
-            TextSurfaceDiscoveryResult.Success(surface.Surface));
+            ChatGptDiscoveryFixture.CreateVerified(surface.Surface));
         var orchestrator = new OsInteractionOrchestrator(
             new Sanitizer(new InMemoryHmacMappingVault(hmacSecret)),
             surface,
