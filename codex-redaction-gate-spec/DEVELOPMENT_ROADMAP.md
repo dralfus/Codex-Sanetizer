@@ -33,6 +33,19 @@ write/replay показали, что внутренняя реализация 
 Поэтому старые закрытые задачи остаются историей построенного фундамента, а 348
 архитектурно переоткрыт до завершения нового convergence-пути 351-358.
 
+## Текущий источник истины
+
+Следующая задача на текущем этапе — **352**. Её кодовая часть уже находится в
+коммите `2d99fe2b`, но задача ещё не закрыта: нужно запустить canary на
+установленном кандидате и получить сохранённый raw-free `reproduced_red`
+артефакт. Это не заменяется `--self-test`, `--product-smoke` или
+детерминированными тестами.
+
+**351 закрыта. 348 не является следующей задачей:** это итоговый umbrella-
+тикет, который можно закрыть только после всей цепочки `352 -> 353 -> 354 ->
+355 -> 356 -> 357 -> 358`. Пока доказательство 352 не получено, следующую
+кодовую задачу 353 не начинаем.
+
 ## Карта зависимостей
 
 ```mermaid
@@ -45,11 +58,11 @@ flowchart TD
     T344["[x] 344\nИзолировать suite от установленного tray"]
     R346["[x] 346\nImmutable admission evidence\nдо native callback"]
     A347["[x] 347\nАтомарный resident workflow transaction"]
-    A348["[>] 348 переоткрыт\nProtected Send ещё не глубокий модуль"]
+    A348["[ ] 348 переоткрыт\nФинальное закрытие после 351-358"]
     A349["[x] 349\nSetup/recovery race-матрица"]
     A350["[x] 350\nЕдиная OpenAI Desktop identity\nstable compatibility / transient target"]
-    E351["[>] 351\nКонтракт уровней доказательств"]
-    C352["[>] 352\nResident live canary\nдетерминированно реализован; live red pending"]
+    E351["[x] 351\nКонтракт уровней доказательств"]
+    C352["[>] 352\nResident live canary\nкод готов; установленный red pending"]
     S353["[ ] 353\nProtectedComposerSession"]
     T354["[ ] 354\nProtectedSendTransaction\nрядом с legacy"]
     R355["[ ] 355\nReference через production UIA"]
@@ -74,12 +87,11 @@ flowchart TD
     R342 --> A347
     R345 --> A347
     R346 --> A347
-    A347 --> A348
     A347 --> A349
-    A349 --> A348
     A349 --> A350
-    A350 --> A348
-    A348 --> E351
+    A347 --> E351
+    A349 --> E351
+    A350 --> E351
     E351 --> C352
     C352 --> S353
     S353 --> T354
@@ -87,6 +99,7 @@ flowchart TD
     R355 --> P356
     P356 --> G357
     G357 --> X358
+    X358 --> A348
     X358 --> Keyboard
     T344 -. "нужен для честной\nполной проверки" .-> Keyboard
     R342 --> Keyboard
@@ -97,7 +110,13 @@ flowchart TD
     X358 -. "до расширения\nfile ingress" .-> Ingress
     R324 --> Ingress
     Ingress --> Files
+
+    A347 -. "history only: initial 348 path" .-> A348
+    A348 -. "history only: convergence umbrella" .-> E351
 ```
+
+Сплошные стрелки показывают текущие зависимости. Пунктирные стрелки
+сохранены только для истории и не означают порядок выполнения.
 
 ## Рекомендуемая последовательность
 
@@ -124,10 +143,14 @@ Desktop composer.
 уменьшает количество мест, где могут появиться смешанные решения о состоянии,
 перед началом file-ingress работ.
 
+Таблица ниже сохранена как историческая запись этапа 1.5. Текущий порядок
+определяется картой и таблицей этапа 1.6; строка 348 здесь больше не является
+текущим acceptance gate.
+
 | Очерёдность | Тикет | Результат | Зависимости |
 |---:|---|---|---|
 | 1 | **347** `[x]` | Activation, profile commit и terminal publication линеаризованы; race-матрица 349 исключает mixed-state при cancellation/newer operation. Предыдущее завершение сохранено в `tickets.md` как история. | 341, 342, 345, 346 |
-| 2 | **348** `[>]` acceptance pending | Единица side-effect удерживается от write/replay через `sent_safely`; source-матрица зелёная, но повторное закрытие ждёт release proof от installer, совпадающего с source build. | 347, 323, 324, 346 |
+| 2 | **348** `[history]` acceptance pending | Историческая запись первичного acceptance gate; финальное закрытие теперь выполняется только после цепочки 351-358. | 347, 323, 324, 346 |
 | 3 | **349** `[x]` | Детерминированно доказаны setup/recovery cancellation, newer operation и rollback failure; 347 повторно закрыт, а 348 ждёт installer-matched release proof. | 347 |
 | 4 | **350** `[x]` | Store-пакет `OpenAI.Codex` с `ChatGPT.exe` и окном Codex представлен одной стабильной identity; handle окна и UIA runtime ID отделены в transient target и не инвалидируют профиль после перезапуска. | 323, 324, 346, 349 |
 
@@ -149,16 +172,21 @@ Desktop composer.
 после этого меняется архитектура. Так мы не меняем одновременно измерительный
 прибор и сам механизм.
 
+Ниже находится текущая последовательность выполнения. `[>]` означает единственный
+активный gate; `[ ]` — следующая работа после успешного gate. 348 намеренно
+перенесён в конец как финальная проверка сходимости.
+
 | Очерёдность | Тикет | Результат | Зависимости |
 |---:|---|---|---|
 | 1 | **351** `[x]` | Единая шкала `proposed -> reproduced_red -> implemented -> locally_verified -> live_verified -> released`; validator и CLI smoke запрещают преждевременный fixed claim. | Нет |
-| 2 | **352** `[ ]` | Resident-owned canary проходит реальный hook/UIA/overlay/write/replay и связывает raw-free результат с точной installed build. Сначала фиксирует текущий красный сценарий. | 351 |
+| 2 | **352** `[>]` | Запустить resident-owned canary на установленном кандидате и сохранить raw-free `reproduced_red` с точной installed build. Кодовая часть уже в `2d99fe2b`; installed acceptance ещё pending. | 351 |
 | 3 | **353** `[ ]` | `ProtectedComposerSession` скрывает target-scoped UIA/STA/focus/read/write/verify/replay за компактным контрактом. | 352 |
 | 4 | **354** `[ ]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. | 353 |
 | 5 | **355** `[ ]` | Reference composer использует production `NativeVerifiedComposerTextAccess`, а не прямую запись в fixture TextBox. | 354 |
 | 6 | **356** `[ ]` | Production keyboard Send переведён на transaction; canary 352 становится зелёным без изменения исходного assertion. | 355 |
 | 7 | **357** `[ ]` | Installer и release claim принимают только совпадающее deterministic/reference/live evidence. | 356 |
 | 8 | **358** `[ ]` | Legacy state owners удалены; широкий host и дублирующая protected-Send машина исчезли; 348 повторно закрыт. | 351-357 |
+| 9 | **348** `[ ]` | Финально закрыть umbrella-тикет только со ссылками на все доказательства 351-358. | 352-358 |
 
 **Gate этапа 1.6:** полный suite и smoke необходимы, но недостаточны. Для одной
 и той же сборки должны пройти transaction matrix, reference composer через
@@ -180,6 +208,7 @@ production state machine.
 | 2026-08-26 | **351** | Typed evidence-state contract, schema и transition history, raw-free сериализация, внешняя проверка artifact binding, отдельный validator smoke в release publish. | `[x]` `1846/1846`, contract CLI passed, release publish validator smoke passed, final review без замечаний |
 | 2026-08-26 | **352** | Следующий новый рабочий пункт: resident-owned canary должен сначала воспроизвести текущий установленный keyboard Send-путь на том же production seam. | `[ ]` реализация не начиналась |
 | 2026-08-26 | **352** | Resident-owned canary, lifecycle, target-generation guard, production UIA/write wiring, overlay trace, raw-free evidence и installer identity sidecar добавлены; ложный green replay запрещён. | `[>]` deterministic `1856/1856`, build и installer smoke прошли; installed red artifact и безопасный production replay ещё не доказаны |
+| 2026-08-26 | **352** | После финальной проверки commit `2d99fe2b` roadmap фиксирует canary как единственный текущий gate; deterministic suite проверен как `1857/1857`. | `[>]` следующая пользовательская операция: installed canary с сохранением `reproduced_red`; 353 заблокирована до этого артефакта |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от
@@ -214,10 +243,11 @@ evidence теперь требует внешнего build/target binding, hist
 
 ## Что делать прямо сейчас
 
-1. Запустить установленный resident canary и получить сохранённый красный
-   результат текущего keyboard-пути; результат deterministic smoke не заменяет
-   live evidence.
-2. Выполнить 353-356 маленькими последовательными срезами; после каждого
+1. Завершить текущий gate 352: запустить установленный resident canary и
+   получить сохранённый красный результат текущего keyboard-пути; результат
+   deterministic smoke не заменяет live evidence.
+2. Только после артефакта 352 выполнять 353-356 маленькими последовательными
+   срезами; после каждого
    запускать нижние уровни доказательств, а после 356 превратить тот же canary в
    зелёный.
 3. Выполнить 357-358, собрать совпадающий installer и только затем повторно

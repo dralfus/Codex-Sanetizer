@@ -3082,6 +3082,11 @@ readiness result.
 
 ## 352. Add a resident-owned installed keyboard protected-Send canary
 
+**Current state (2026-08-26):** `[>]` The implementation slice is committed in
+`2d99fe2b`. The remaining acceptance step is to run **Run resident Send canary**
+from the installed tray candidate and persist the raw-free `reproduced_red`
+artifact. Do not start 353 until that artifact exists.
+
 **What to build:** Add an opt-in, harmless canary owned by the active resident
 process. It creates a temporary local synthetic rule and marker, then exercises
 the same keyboard-hook admission, transaction entry, production UI Automation,
@@ -3120,10 +3125,10 @@ production UIA, overlay, write verification, replay, and terminal publication.
 **Evidence target:** `reproduced_red` in this ticket. Ticket 356 owns the same
 canary becoming `live_verified`.
 
-- [ ] Implement an explicit canary command with visible stage/result UI.
-- [ ] Reuse the normal resident input and side-effect path; no direct fixture
+- [x] Implement an explicit canary command with visible stage/result UI.
+- [x] Reuse the normal resident input and side-effect path; no direct fixture
       write, private submit shortcut, or parallel replay implementation.
-- [ ] Bind the artifact to commit, product version, executable hash, installer,
+- [x] Bind the artifact to commit, product version, executable hash, installer,
       compatibility fingerprint, profile generation, and Send binding.
 - [ ] Record the current user-visible replacement/write/replay failure as red
       before protected-Send architecture migration begins.
@@ -3134,7 +3139,7 @@ checks, production UIA capture/write adapters, confirmation overlay, terminal
 publication, and raw-free evidence storage. The installer writes an identity
 sidecar so installed evidence can be bound to the setup executable. Deterministic
 tests cover lifecycle transitions, stale profile/generation rejection, evidence
-validation, and controller routing; the full suite passes (`1856/1856`).
+validation, and controller routing; the full suite passes (`1857/1857`).
 
 The installed canary intentionally returns `replay_unavailable` until the
 production replay seam can prove that its replay key is safely observed without
@@ -3142,7 +3147,8 @@ cloud submission. It must not claim success from a no-op submit. Therefore 352
 is implemented as a red-capable slice, but its installed `reproduced_red`
 artifact remains pending and 353/356 own the work required to turn that signal
 green. No manual release claim is made from the deterministic tests or installer
-smoke alone.
+smoke alone. The deterministic result does not replace the installed acceptance
+artifact.
 
 ## 353. Deepen composer access behind ProtectedComposerSession
 
