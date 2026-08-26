@@ -38,7 +38,8 @@ write/replay показали, что внутренняя реализация 
 Задача **352** закрыта установленным raw-free red-evidence для кандидата
 `0.1.20260826.t1633+f7dd69d`. Одно нажатие `Ctrl+Enter` было подавлено,
 canary дошёл до `send_observed` и `transaction_started`, а затем завершился
-fail-closed без второго Send. Следующая кодовая задача — **353**.
+fail-closed без второго Send. Задача **353** теперь локально закрыта
+контрактной матрицей; следующая кодовая задача — **354**.
 
 **351 закрыта. 348 не является следующей задачей:** это итоговый umbrella-
 тикет, который можно закрыть только после всей цепочки `352 -> 353 -> 354 ->
@@ -81,8 +82,8 @@ flowchart TD
     T359["[x] 359\nDeterministic .NET 10 SDK resolver"]
     T360["[x] 360\nSafe NuGet restore diagnosis"]
     T361["[x] 361\nResident canary callback admission"]
-    S353["[ ] 353\nProtectedComposerSession"]
-    T354["[ ] 354\nProtectedSendTransaction\nрядом с legacy"]
+    S353["[x] 353\nProtectedComposerSession"]
+    T354["[>] 354\nProtectedSendTransaction\nрядом с legacy"]
     R355["[ ] 355\nReference через production UIA"]
     P356["[ ] 356\nProduction keyboard migration"]
     G357["[ ] 357\nEvidence-gated installer/release"]
@@ -201,8 +202,8 @@ Desktop composer.
 |---:|---|---|---|
 | 1 | **351** `[x]` | Единая шкала `proposed -> reproduced_red -> implemented -> locally_verified -> live_verified -> released`; validator и CLI smoke запрещают преждевременный fixed claim. | Нет |
 | 2 | **352** `[x]` | Resident-owned canary на установленном кандидате сохранил raw-free `reproduced_red` с точной installed build; одно нажатие было подавлено, terminal failure доказан. | 351 |
-| 3 | **353** `[ ]` | `ProtectedComposerSession` скрывает target-scoped UIA/STA/focus/read/write/verify/replay за компактным контрактом. | 352 |
-| 4 | **354** `[ ]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. | 353 |
+| 3 | **353** `[x]` | `ProtectedComposerSession` скрывает target-scoped UIA/STA/focus/read/write/verify/replay за компактным контрактом; reference и Windows factories используют один session API, матрица `7/7`. | 352 |
+| 4 | **354** `[>]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. | 353 |
 | 5 | **355** `[ ]` | Reference composer использует production `NativeVerifiedComposerTextAccess`, а не прямую запись в fixture TextBox. | 354 |
 | 6 | **356** `[ ]` | Production keyboard Send переведён на transaction; canary 352 становится зелёным без изменения исходного assertion. | 355 |
 | 7 | **357** `[ ]` | Installer и release claim принимают только совпадающее deterministic/reference/live evidence. | 356 |
@@ -240,9 +241,10 @@ production state machine.
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от
 мутации, а синтетическая contract-проверка явно не считается release proof.
-Новых самостоятельных задач между 351 и 352 не добавлено: installed red
-evidence закрывает текущий gate; следующий кодовый шаг — **353**, а production
-artifact/release gate остаются владельцами последующих 357-358.
+Задача 353 закрыла session boundary локальной deterministic evidence: текущий
+кодовый шаг — **354**, а production artifact/release gate остаются владельцами
+последующих 355-358. Установленная production-клавиатура по-прежнему не
+объявляется исправленной до canary-green в 356.
 
 ### Этап 2. Закрыть оставшиеся точечные риски prompt-защиты
 

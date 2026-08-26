@@ -480,10 +480,10 @@ internal sealed class ResidentCanaryProductionRunner : IDisposable
             });
         var orchestrator = new OsInteractionOrchestrator(
             sanitizer,
-            composerDiscovery,
-            liveAdapter,
-            liveAdapter,
-            new ResidentCanaryReplayUnavailableAction(),
+            new WindowsProtectedComposerSessionFactory(
+                composerDiscovery,
+                liveAdapter,
+                new ResidentCanaryReplayUnavailableAction()),
             _confirmationOverlay);
         var interaction = orchestrator.RunOnce(
             OsInteractionRunOptions.ConfirmAndSend,

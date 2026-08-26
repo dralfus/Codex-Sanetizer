@@ -153,10 +153,11 @@ internal static class ReferenceComposerAcceptanceRunner
                         var adapter = new WindowsVerifiedComposerSurfaceAdapter(textAccess);
                         var orchestrator = new OsInteractionOrchestrator(
                             sanitizer,
-                            targetAwareDiscovery,
-                            adapter,
-                            adapter,
-                            new VerifiedSubmitBindingAction(adapter, profile),
+                            new ReferenceProtectedComposerSessionFactory(
+                                targetAwareDiscovery,
+                                adapter,
+                                adapter,
+                                new VerifiedSubmitBindingAction(adapter, profile)),
                             overlay);
                         Func<string, string, bool> acceptanceTrace = (stage, resultCode) =>
                         {

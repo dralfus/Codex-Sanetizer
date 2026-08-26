@@ -25,10 +25,7 @@ public sealed record OsInteractionResult(
 public sealed class OsInteractionOrchestrator
 {
     private readonly ISanitizer _sanitizer;
-    private readonly IActiveTextSurfaceDiscovery _surfaceDiscovery;
-    private readonly ITextSurfaceReader _reader;
-    private readonly ITextSurfaceWriter _writer;
-    private readonly ISubmitAction _submitAction;
+    private readonly IProtectedComposerSessionFactory _sessionFactory;
     private readonly IConfirmationOverlay _confirmationOverlay;
 
     public OsInteractionOrchestrator(
@@ -38,12 +35,20 @@ public sealed class OsInteractionOrchestrator
         ITextSurfaceWriter writer,
         ISubmitAction submitAction,
         IConfirmationOverlay confirmationOverlay)
+        : this(
+            sanitizer,
+            new ProtectedComposerSessionFactory(surfaceDiscovery, reader, writer, submitAction),
+            confirmationOverlay)
+    {
+    }
+
+    internal OsInteractionOrchestrator(
+        ISanitizer sanitizer,
+        IProtectedComposerSessionFactory sessionFactory,
+        IConfirmationOverlay confirmationOverlay)
     {
         _sanitizer = sanitizer ?? throw new ArgumentNullException(nameof(sanitizer));
-        _surfaceDiscovery = surfaceDiscovery ?? throw new ArgumentNullException(nameof(surfaceDiscovery));
-        _reader = reader ?? throw new ArgumentNullException(nameof(reader));
-        _writer = writer ?? throw new ArgumentNullException(nameof(writer));
-        _submitAction = submitAction ?? throw new ArgumentNullException(nameof(submitAction));
+        _sessionFactory = sessionFactory ?? throw new ArgumentNullException(nameof(sessionFactory));
         _confirmationOverlay = confirmationOverlay ?? throw new ArgumentNullException(nameof(confirmationOverlay));
     }
 
@@ -84,33 +89,24 @@ public sealed class OsInteractionOrchestrator
         Func<bool>? executionGuard,
         Func<IDisposable?>? executionLease)
     {
-        var discovery = _surfaceDiscovery.DiscoverActiveSurface();
-        if (!discovery.Succeeded || discovery.Surface is null || !discovery.Surface.Supported)
+        var session = _sessionFactory.Create();
+        var capture = session.Read();
+        if (!capture.Succeeded || capture.Surface is null || capture.Text is null)
         {
-            return Finish(discovery.Status, discovery.Surface, null, null, false, false, discovery.Diagnostics);
+            return Finish(capture.Status, capture.Surface, null, null, false, false, capture.Diagnostics);
         }
 
-        var surface = discovery.Surface;
-        var capture = _reader.CaptureText(surface);
-        if (!capture.Succeeded || capture.Text is null)
-        {
-            return Finish(OsInteractionStatusIds.CaptureFailed, surface, null, null, false, false, Merge(
-                discovery.Diagnostics,
-                capture.Diagnostics,
-                ("capture_status", capture.Status)));
-        }
+        var surface = capture.Surface;
 
         if (!TryTrace(traceStage, "composer_read", "capture_verified"))
         {
             return Finish(OsInteractionStatusIds.FailedClosed, surface, null, null, false, false, Merge(
-                discovery.Diagnostics,
                 capture.Diagnostics,
                 ("trace_status", "composer_read_unavailable")));
         }
 
         var result = _sanitizer.Sanitize(CreateRequest(capture.Text, surface));
         var diagnostics = Merge(
-            discovery.Diagnostics,
             capture.Diagnostics,
             ("profile_id", surface.ProfileId),
             ("decision", FormatDecision(result.Decision)),
@@ -228,16 +224,16 @@ public sealed class OsInteractionOrchestrator
                 return ExecutionGuardFailed(surface, result, model, true, unchangedDiagnostics, "before_submit_without_write");
             }
 
-            var preSubmit = RediscoverSameSurface(surface);
-            if (preSubmit.Status is not null)
+            var preSubmit = session.Revalidate();
+            if (!preSubmit.Succeeded || preSubmit.Surface is null)
             {
-                return Finish(preSubmit.Status, preSubmit.Surface, result, model, true, false, Merge(
+                return Finish(ReplayStatus(preSubmit.Status), preSubmit.Surface ?? surface, result, model, true, false, Merge(
                     unchangedDiagnostics,
                     preSubmit.Diagnostics,
                     ("pre_submit_status", preSubmit.Status)));
             }
 
-            var submitSurface = preSubmit.Surface ?? surface;
+            var submitSurface = preSubmit.Surface;
             if (!TryTrace(traceStage, "send_injected", "submit_requested"))
             {
                 return Finish(OsInteractionStatusIds.FailedClosed, submitSurface, result, model, true, false, Merge(
@@ -267,15 +263,25 @@ public sealed class OsInteractionOrchestrator
                     "after_submit_without_write_lease");
             }
 
-            SubmitActionResult submitWithoutWrite;
+            ProtectedComposerReplayResult replayResult;
             try
             {
-                submitWithoutWrite = _submitAction.Submit(submitSurface);
+                replayResult = session.Replay();
             }
             finally
             {
                 submitLease?.Dispose();
             }
+
+            if (!replayResult.Succeeded || replayResult.Surface is null || replayResult.Submit is null)
+            {
+                return Finish(ReplayStatus(replayResult.Status), replayResult.Surface ?? submitSurface, result, model, true, false, Merge(
+                    unchangedDiagnostics,
+                    replayResult.Diagnostics,
+                    ("submit_status", replayResult.Status)));
+            }
+
+            var submitWithoutWrite = replayResult.Submit;
 
             return submitWithoutWrite.Succeeded
                 ? Finish(OsInteractionStatusIds.Submitted, submitSurface, result, model, true, true, Merge(
@@ -288,16 +294,16 @@ public sealed class OsInteractionOrchestrator
                     ("submit_status", submitWithoutWrite.Status)));
         }
 
-        var preWrite = RediscoverSameSurface(surface);
-        if (preWrite.Status is not null)
+        var preWrite = session.Revalidate();
+        if (!preWrite.Succeeded || preWrite.Surface is null)
         {
-            return Finish(preWrite.Status, preWrite.Surface, result, model, false, false, Merge(
+            return Finish(preWrite.Status, preWrite.Surface ?? surface, result, model, false, false, Merge(
                 diagnostics,
                 preWrite.Diagnostics,
                 ("pre_write_status", preWrite.Status)));
         }
 
-        var writeSurface = preWrite.Surface ?? surface;
+        var writeSurface = preWrite.Surface;
         if (!CanExecute(executionGuard))
         {
             return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics, "before_write");
@@ -314,124 +320,74 @@ public sealed class OsInteractionOrchestrator
             return ExecutionGuardFailed(writeSurface, result, model, false, diagnostics, "after_write_lease");
         }
 
-        TextReplacementResult replace;
+        ProtectedComposerWriteResult writeResult;
         try
         {
-            replace = _writer.ReplaceText(writeSurface, outgoingText);
+            writeResult = session.WriteAndVerify(outgoingText);
         }
         finally
         {
             writeLease?.Dispose();
         }
-        if (!replace.Succeeded)
+        var verificationSurface = writeResult.Surface ?? writeSurface;
+        var writeDiagnostics = Merge(
+            diagnostics,
+            writeResult.Diagnostics,
+            writeResult.Write?.Diagnostics ?? EmptyDiagnostics,
+            writeResult.Verification?.Diagnostics ?? EmptyDiagnostics,
+            ("write_status", writeResult.Write?.Status ?? writeResult.Status),
+            ("verification_status", writeResult.Verification?.Status ?? writeResult.Status));
+        var writeSucceeded = writeResult.Write?.Succeeded == true;
+        if (!writeResult.Succeeded)
         {
-            return Finish(OsInteractionStatusIds.WriteFailed, writeSurface, result, model, false, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                ("write_status", replace.Status)));
-        }
-
-        var preVerify = RediscoverSameSurface(writeSurface);
-        if (preVerify.Status is not null)
-        {
-            return Finish(preVerify.Status, preVerify.Surface, result, model, true, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                preVerify.Diagnostics,
-                ("write_status", replace.Status),
-                ("pre_verify_status", preVerify.Status)));
-        }
-
-        var verificationSurface = preVerify.Surface ?? writeSurface;
-        var verificationCapture = _reader.CaptureText(verificationSurface);
-        if (!verificationCapture.Succeeded
-            || !string.Equals(verificationCapture.Text, outgoingText, StringComparison.Ordinal))
-        {
-            return Finish(OsInteractionStatusIds.VerificationFailed, verificationSurface, result, model, true, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                verificationCapture.Diagnostics,
-                ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)));
+            return Finish(writeResult.Status, verificationSurface, result, model, writeSucceeded, false, writeDiagnostics);
         }
 
         if (!TryTrace(traceStage, "text_written", "write_verified"))
         {
             return Finish(OsInteractionStatusIds.FailedClosed, verificationSurface, result, model, true, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                verificationCapture.Diagnostics,
-                ("write_status", replace.Status),
+                writeDiagnostics,
                 ("trace_status", "text_written_unavailable")));
         }
 
         if (!options.SubmitAfterApply)
         {
-            return Finish(OsInteractionStatusIds.Applied, verificationSurface, result, model, true, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                verificationCapture.Diagnostics,
-                ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)));
+            return Finish(OsInteractionStatusIds.Applied, verificationSurface, result, model, true, false, writeDiagnostics);
         }
 
         if (!CanExecute(executionGuard))
         {
-            return ExecutionGuardFailed(verificationSurface, result, model, true, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                verificationCapture.Diagnostics,
-                ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)),
+            return ExecutionGuardFailed(verificationSurface, result, model, true, writeDiagnostics,
                 "before_replay");
         }
 
-        var replayTarget = RediscoverSameSurface(verificationSurface);
-        if (replayTarget.Status is not null)
+        var replayTarget = session.Revalidate();
+        if (!replayTarget.Succeeded || replayTarget.Surface is null)
         {
-            return Finish(replayTarget.Status, replayTarget.Surface, result, model, true, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                verificationCapture.Diagnostics,
+            return Finish(ReplayStatus(replayTarget.Status), replayTarget.Surface ?? verificationSurface, result, model, true, false, Merge(
+                writeDiagnostics,
                 replayTarget.Diagnostics,
-                ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status),
                 ("pre_submit_status", replayTarget.Status)));
         }
 
-        var replaySurface = replayTarget.Surface ?? verificationSurface;
+        var replaySurface = replayTarget.Surface;
 
         if (!CanExecute(executionGuard))
         {
-            return ExecutionGuardFailed(replaySurface, result, model, true, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                verificationCapture.Diagnostics,
-                ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)),
+            return ExecutionGuardFailed(replaySurface, result, model, true, writeDiagnostics,
                 "before_replay");
         }
 
         if (!TryAcquireExecutionLease(executionGuard, executionLease, out var replayLease))
         {
-            return ExecutionGuardFailed(replaySurface, result, model, true, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                verificationCapture.Diagnostics,
-                ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)),
+            return ExecutionGuardFailed(replaySurface, result, model, true, writeDiagnostics,
                 "acquiring_replay_lease");
         }
 
         if (!CanExecute(executionGuard))
         {
             replayLease?.Dispose();
-            return ExecutionGuardFailed(replaySurface, result, model, true, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                verificationCapture.Diagnostics,
-                ("write_status", replace.Status),
-                ("verification_status", verificationCapture.Status)),
+            return ExecutionGuardFailed(replaySurface, result, model, true, writeDiagnostics,
                 "after_replay_lease");
         }
 
@@ -439,41 +395,33 @@ public sealed class OsInteractionOrchestrator
         {
             replayLease?.Dispose();
             return Finish(OsInteractionStatusIds.FailedClosed, replaySurface, result, model, true, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                ("write_status", replace.Status),
+                writeDiagnostics,
                 ("trace_status", "send_injected_unavailable")));
         }
 
-        SubmitActionResult submit;
+        ProtectedComposerReplayResult replay;
         try
         {
-            submit = _submitAction.Submit(replaySurface);
+            replay = session.Replay();
         }
         finally
         {
             replayLease?.Dispose();
         }
 
-        if (!submit.Succeeded)
+        if (!replay.Succeeded || replay.Surface is null || replay.Submit is null)
         {
-            var replayStatus = submit.Status == OsInteractionStatusIds.ReplayIndeterminate
-                ? OsInteractionStatusIds.ReplayIndeterminate
-                : OsInteractionStatusIds.SubmitFailed;
-            return Finish(replayStatus, replaySurface, result, model, true, false, Merge(
-                diagnostics,
-                replace.Diagnostics,
-                submit.Diagnostics,
-                ("write_status", replace.Status),
-                ("submit_status", submit.Status)));
+            return Finish(ReplayStatus(replay.Status), replay.Surface ?? replaySurface, result, model, true, false, Merge(
+                writeDiagnostics,
+                replay.Diagnostics,
+                ("submit_status", replay.Status)));
         }
 
-        return Finish(OsInteractionStatusIds.Submitted, replaySurface, result, model, true, true, Merge(
-            diagnostics,
-            replace.Diagnostics,
-            submit.Diagnostics,
-            ("write_status", replace.Status),
-            ("submit_status", submit.Status)));
+        return Finish(OsInteractionStatusIds.Submitted, replay.Surface, result, model, true, true, Merge(
+            writeDiagnostics,
+            replay.Diagnostics,
+            replay.Submit.Diagnostics,
+            ("submit_status", replay.Submit.Status)));
     }
 
     private static bool TryTrace(
@@ -551,31 +499,6 @@ public sealed class OsInteractionOrchestrator
                 ("execution_phase", phase)));
     }
 
-    private RediscoveredSurface RediscoverSameSurface(TextSurfaceDescriptor expectedSurface)
-    {
-        var rediscovery = _surfaceDiscovery.DiscoverActiveSurface();
-        if (!rediscovery.Succeeded || rediscovery.Surface is null || !rediscovery.Surface.Supported)
-        {
-            var status = rediscovery.Status == OsInteractionStatusIds.StaleComposer
-                ? OsInteractionStatusIds.StaleComposer
-                : OsInteractionStatusIds.FocusLost;
-            return new RediscoveredSurface(
-                status,
-                rediscovery.Surface,
-                Merge(rediscovery.Diagnostics, ("rediscovery_status", rediscovery.Status)));
-        }
-
-        if (!IsSameSurface(expectedSurface, rediscovery.Surface))
-        {
-            return new RediscoveredSurface(
-                OsInteractionStatusIds.StaleComposer,
-                rediscovery.Surface,
-                Merge(rediscovery.Diagnostics, ("rediscovery_status", rediscovery.Status)));
-        }
-
-        return new RediscoveredSurface(null, rediscovery.Surface, rediscovery.Diagnostics);
-    }
-
     private static SanitizeRequest CreateRequest(string text, TextSurfaceDescriptor surface)
     {
         return new SanitizeRequest(
@@ -639,14 +562,16 @@ public sealed class OsInteractionOrchestrator
         };
     }
 
-    private static bool IsSameSurface(TextSurfaceDescriptor expected, TextSurfaceDescriptor actual)
+    private static string ReplayStatus(string status)
     {
-        return string.Equals(expected.SurfaceId, actual.SurfaceId, StringComparison.Ordinal)
-            && string.Equals(expected.ProfileId, actual.ProfileId, StringComparison.Ordinal);
+        return status is OsInteractionStatusIds.ReplayIndeterminate
+            or OsInteractionStatusIds.StaleComposer
+            or OsInteractionStatusIds.FocusLost
+            or OsInteractionStatusIds.FailedClosed
+            ? status
+            : OsInteractionStatusIds.SubmitFailed;
     }
 
-    private sealed record RediscoveredSurface(
-        string? Status,
-        TextSurfaceDescriptor? Surface,
-        IReadOnlyDictionary<string, string> Diagnostics);
+    private static IReadOnlyDictionary<string, string> EmptyDiagnostics { get; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 }

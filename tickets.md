@@ -3219,10 +3219,21 @@ fixture control cannot turn a production UIA/STA failure into success.
 **Evidence target:** `locally_verified` for the session contract; no production
 keyboard claim is made yet.
 
-- [ ] Add the compact session interface and typed outcomes.
-- [ ] Move production composer-access mechanics behind the Windows adapter.
-- [ ] Add a reference adapter with the same observable contract.
-- [ ] Keep protected-Send state-machine behavior unchanged in this slice.
+- [x] Add the compact session interface and typed outcomes.
+- [x] Move production composer-access mechanics behind the Windows adapter.
+- [x] Add a reference adapter with the same observable contract.
+- [x] Keep protected-Send state-machine behavior unchanged in this slice.
+
+**Implementation evidence (2026-08-26):** `ProtectedComposerSession` now owns
+target capture/revalidation, protected read, write plus exact post-write
+verification, and replay behind typed outcomes. `WindowsProtectedComposerSessionFactory`
+composes the verified Windows UIA/STA adapter, while
+`ReferenceProtectedComposerSessionFactory` exposes the same deterministic
+contract. The orchestrator keeps admission, sanitizer, confirmation, leases,
+trace, and terminal publication; its observable stage ordering remains covered
+by the existing suite. The session matrix covers target change, foreground
+refusal, write mismatch, replay failure, adapter exception, and the Windows
+verified adapter path without timers or cloud access.
 
 ## 354. Introduce ProtectedSendTransaction beside legacy orchestration
 

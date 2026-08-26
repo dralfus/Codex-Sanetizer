@@ -255,14 +255,15 @@ public static class WindowsTrayApp
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(layout);
 
-        var liveAdapter = new WindowsVerifiedComposerSurfaceAdapter();
+        var composerDiscovery = WindowsFocusedComposerDiscovery.CreateDefault();
+        var liveAdapter = OperatingSystem.IsWindows()
+            ? new WindowsVerifiedComposerSurfaceAdapter(
+                new NativeVerifiedComposerTextAccess(composerDiscovery.DiscoverActiveSurface))
+            : new WindowsVerifiedComposerSurfaceAdapter();
         var confirmationOverlay = new WindowsConfirmationOverlay();
         var orchestrator = new OsInteractionOrchestrator(
             sanitizer,
-            WindowsFocusedComposerDiscovery.CreateDefault(),
-            liveAdapter,
-            liveAdapter,
-            liveAdapter,
+            new WindowsProtectedComposerSessionFactory(composerDiscovery, liveAdapter),
             confirmationOverlay);
         return new ResidentProtectionRuntime(
             () => orchestrator.RunOnce(OsInteractionRunOptions.ApplyOnly),
@@ -322,10 +323,10 @@ public static class WindowsTrayApp
                     : new WindowsVerifiedComposerSurfaceAdapter();
                 var nativeSubmitOrchestrator = new OsInteractionOrchestrator(
                     sanitizer,
-                    composerDiscovery,
-                    nativeSubmitAdapter,
-                    nativeSubmitAdapter,
-                    new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile),
+                    new WindowsProtectedComposerSessionFactory(
+                        composerDiscovery,
+                        nativeSubmitAdapter,
+                        new VerifiedSubmitBindingAction(nativeSubmitAdapter, nativeProfile)),
                     confirmationOverlay);
                 return nativeSubmitOrchestrator.RunOnce(
                     OsInteractionRunOptions.ConfirmAndSend,
