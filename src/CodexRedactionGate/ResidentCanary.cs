@@ -502,6 +502,10 @@ internal sealed class ResidentCanaryProductionRunner : IDisposable
             ["canary_marker_present"] = "true",
             ["cloud_submission"] = "false"
         };
+        if (!diagnostics.ContainsKey("canary_code") && !interaction.Submitted)
+        {
+            diagnostics["canary_code"] = CanaryFailureCode(interaction);
+        }
         if (!cleanupSucceeded)
         {
             return interaction with
@@ -514,6 +518,20 @@ internal sealed class ResidentCanaryProductionRunner : IDisposable
         }
 
         return interaction with { Diagnostics = diagnostics };
+    }
+
+    internal static string CanaryFailureCode(OsInteractionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        return result.Status switch
+        {
+            OsInteractionStatusIds.FocusLost or OsInteractionStatusIds.StaleComposer
+                => "target_reverification_failed",
+            OsInteractionStatusIds.CaptureFailed => "capture_failed",
+            OsInteractionStatusIds.Blocked => "canary_marker_blocked",
+            _ => "canary_execution_failed"
+        };
     }
 
     private static bool RestoreExactText(

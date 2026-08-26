@@ -169,6 +169,23 @@ public sealed class ResidentCanaryTests
     }
 
     [Test]
+    public void ProductionRunner_ClassifiesProtectedPathFailureWithoutCanaryCode()
+    {
+        var result = new OsInteractionResult(
+            OsInteractionStatusIds.FocusLost,
+            null,
+            null,
+            null,
+            false,
+            false,
+            new Dictionary<string, string>());
+
+        Assert.That(
+            ResidentCanaryProductionRunner.CanaryFailureCode(result),
+            Is.EqualTo("target_reverification_failed"));
+    }
+
+    [Test]
     public void EvidenceStore_WritesRawFreeAtomicRecord()
     {
         var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-canary-tests", Guid.NewGuid().ToString("N"));
