@@ -35,11 +35,10 @@ write/replay показали, что внутренняя реализация 
 
 ## Текущий источник истины
 
-Следующая задача на текущем этапе — **352**. Её кодовая часть уже находится в
-коммите `2d99fe2b`, но задача ещё не закрыта: нужно запустить canary на
-установленном кандидате и получить сохранённый raw-free `reproduced_red`
-артефакт. Это не заменяется `--self-test`, `--product-smoke` или
-детерминированными тестами.
+Задача **352** закрыта установленным raw-free red-evidence для кандидата
+`0.1.20260826.t1633+f7dd69d`. Одно нажатие `Ctrl+Enter` было подавлено,
+canary дошёл до `send_observed` и `transaction_started`, а затем завершился
+fail-closed без второго Send. Следующая кодовая задача — **353**.
 
 **351 закрыта. 348 не является следующей задачей:** это итоговый umbrella-
 тикет, который можно закрыть только после всей цепочки `352 -> 353 -> 354 ->
@@ -78,7 +77,7 @@ flowchart TD
     A349["[x] 349\nSetup/recovery race-матрица"]
     A350["[x] 350\nЕдиная OpenAI Desktop identity\nstable compatibility / transient target"]
     E351["[x] 351\nКонтракт уровней доказательств"]
-    C352["[>] 352\nResident live canary\nкод готов; установленный red pending"]
+    C352["[x] 352\nResident live canary\ninstalled red evidence recorded"]
     T359["[x] 359\nDeterministic .NET 10 SDK resolver"]
     T360["[x] 360\nSafe NuGet restore diagnosis"]
     T361["[x] 361\nResident canary callback admission"]
@@ -201,7 +200,7 @@ Desktop composer.
 | Очерёдность | Тикет | Результат | Зависимости |
 |---:|---|---|---|
 | 1 | **351** `[x]` | Единая шкала `proposed -> reproduced_red -> implemented -> locally_verified -> live_verified -> released`; validator и CLI smoke запрещают преждевременный fixed claim. | Нет |
-| 2 | **352** `[>]` | Запустить resident-owned canary на установленном кандидате и сохранить raw-free `reproduced_red` с точной installed build. Кодовая часть уже в `2d99fe2b`; installed acceptance ещё pending. | 351 |
+| 2 | **352** `[x]` | Resident-owned canary на установленном кандидате сохранил raw-free `reproduced_red` с точной installed build; одно нажатие было подавлено, terminal failure доказан. | 351 |
 | 3 | **353** `[ ]` | `ProtectedComposerSession` скрывает target-scoped UIA/STA/focus/read/write/verify/replay за компактным контрактом. | 352 |
 | 4 | **354** `[ ]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. | 353 |
 | 5 | **355** `[ ]` | Reference composer использует production `NativeVerifiedComposerTextAccess`, а не прямую запись в fixture TextBox. | 354 |
@@ -236,14 +235,14 @@ production state machine.
 | 2026-08-26 | **360** | Restore wrapper отделяет SDK failure от NuGet/TLS failure и не ослабляет signature validation. | `[x]` `restore_status=passed` в текущей среде; сетевой failure path диагностически покрыт |
 | 2026-08-26 | **361** | Callback admission использует resident armed state; fixture содержит `window_handle`, а trace начинается с обязательных `composer_read` и `sanitized`. | `[x]` focused canary callback test passed; installed 352 acceptance остаётся pending |
 | 2026-08-26 | **352** | UX canary: resident marker автоматически копируется в Windows clipboard после стадии `armed`; при отказе показывается ручной fallback, marker не попадает в журнал или evidence. | `[x]` focused workflow tests `3/3`; installed `reproduced_red` acceptance остаётся pending |
-| 2026-08-26 | **352** | Исправлена потеря installer identity с `+commit` и добавлен raw-free `target_verification_failed` для отказа до capture; второй Send после terminal canary не считается частью той же попытки. | `[>]` focused `15/15`; установленное evidence нужно повторить на rebuilt candidate |
+| 2026-08-26 | **352** | Исправлена потеря installer identity с `+commit` и добавлен raw-free `target_verification_failed` для отказа до capture; второй Send после terminal canary не считается частью той же попытки. | `[x]` exact installed red evidence для `0.1.20260826.t1633+f7dd69d`; следующий кодовый шаг — 353 |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от
 мутации, а синтетическая contract-проверка явно не считается release proof.
-Новых самостоятельных задач между 351 и 352 не добавлено: фактический
-следующий шаг остаётся **352**, а production artifact/release gate остаются
-владельцами последующих 357-358.
+Новых самостоятельных задач между 351 и 352 не добавлено: installed red
+evidence закрывает текущий gate; следующий кодовый шаг — **353**, а production
+artifact/release gate остаются владельцами последующих 357-358.
 
 ### Этап 2. Закрыть оставшиеся точечные риски prompt-защиты
 

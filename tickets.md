@@ -3082,11 +3082,11 @@ readiness result.
 
 ## 352. Add a resident-owned installed keyboard protected-Send canary
 
-**Current state (2026-08-26):** `[>]` The implementation slice and resident
-admission remediation are committed in `69a68046` (based on `2d99fe2b`). The
-remaining acceptance step is to run **Run resident Send canary**
-from the installed tray candidate and persist the raw-free `reproduced_red`
-artifact. Do not start 353 until that artifact exists.
+**Current state (2026-08-26):** `[x]` The installed candidate from
+`f7dd69d` produced the required raw-free `reproduced_red` artifact. The first
+protected Send was suppressed, the canary reached `send_observed` and
+`transaction_started`, then terminated fail-closed without a second Send.
+Task 353 may now start; the canary becoming green remains owned by 356.
 
 **What to build:** Add an opt-in, harmless canary owned by the active resident
 process. It creates a temporary local synthetic rule and marker, then exercises
@@ -3131,7 +3131,7 @@ canary becoming `live_verified`.
       write, private submit shortcut, or parallel replay implementation.
 - [x] Bind the artifact to commit, product version, executable hash, installer,
       compatibility fingerprint, profile generation, and Send binding.
-- [ ] Record the current user-visible replacement/write/replay failure as red
+- [x] Record the current user-visible replacement/write/replay failure as red
       before protected-Send architecture migration begins.
 
 **Implementation update (2026-08-26):** The resident-owned canary path is now
@@ -3175,7 +3175,14 @@ capture now retain a stable `target_verification_failed` code alongside the
 raw-free discovery status. Installer identities containing the `+commit`
 suffix are accepted, so the evidence can bind to the actual installed
 candidate instead of falling back to `unbound`. The installed acceptance
-artifact is still pending and must be rerun on the rebuilt candidate.
+artifact is now bound to the rebuilt candidate.
+
+**Installed red evidence (2026-08-26):** Candidate
+`0.1.20260826.t1633+f7dd69d` recorded a raw-free failure artifact with matching
+source commit, executable hash, installer identity, compatibility fingerprint,
+profile generation, and `ctrl_enter` binding. The single user Send was
+suppressed; the terminal failure was recorded after approximately five
+seconds. A later Send must not be counted as part of this canary attempt.
 
 ## 353. Deepen composer access behind ProtectedComposerSession
 
