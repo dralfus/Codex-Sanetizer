@@ -362,11 +362,12 @@ public static class SubmitBindingProfileStore
             return new SubmitBindingProfileStoreResult(false, "reference_profile_forbidden", Array.Empty<SubmitBindingProfile>());
         }
 
+        var persistedProfiles = profiles.Select(NormalizeForPersistence).ToArray();
         var payload = JsonSerializer.Serialize(
-            new ProfileFile(profiles.Select(ToFile).ToArray()),
+            new ProfileFile(persistedProfiles.Select(ToFile).ToArray()),
             JsonOptions);
         AtomicFileWriter.WriteAllBytes(DefaultPath(layout), Encoding.UTF8.GetBytes(payload + Environment.NewLine));
-        return new SubmitBindingProfileStoreResult(true, "profiles_saved", profiles);
+        return new SubmitBindingProfileStoreResult(true, "profiles_saved", persistedProfiles);
     }
 
     public static SubmitBindingProfileStoreResult Upsert(DefaultStorageLayout layout, SubmitBindingProfile profile)
@@ -440,11 +441,13 @@ public static class SubmitBindingProfileStore
             newline,
             item.CapabilityStatus ?? OsInteractionStatusIds.BindingUnknown,
             item.CompatibilityEvidence,
-            item.Diagnostics ?? new Dictionary<string, string>());
+            ChatGptDesktopCompatibility.PersistedDiscoveryDiagnostics(
+                item.Diagnostics ?? new Dictionary<string, string>()));
     }
 
     private static ProfileFileItem ToFile(SubmitBindingProfile profile)
     {
+        profile = NormalizeForPersistence(profile);
         return new ProfileFileItem(
             profile.ProfileId,
             profile.Enabled,
@@ -454,6 +457,14 @@ public static class SubmitBindingProfileStore
             profile.CapabilityStatus,
             profile.CompatibilityEvidence,
             profile.Diagnostics);
+    }
+
+    private static SubmitBindingProfile NormalizeForPersistence(SubmitBindingProfile profile)
+    {
+        return profile with
+        {
+            Diagnostics = ChatGptDesktopCompatibility.PersistedDiscoveryDiagnostics(profile.Diagnostics)
+        };
     }
 
     private static JsonSerializerOptions JsonOptions { get; } = new()

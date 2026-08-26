@@ -4,6 +4,12 @@ using System.Linq;
 
 namespace CodexRedactionGate;
 
+public enum OpenAiDesktopPackageIdentityStatus
+{
+    Unavailable,
+    Available
+}
+
 public sealed record OpenAiDesktopIdentity(
     OpaqueFingerprint ApplicationIdentityFingerprint,
     OpaqueFingerprint ApplicationVersionFingerprint,
@@ -21,7 +27,7 @@ public sealed record OpenAiDesktopIdentity(
 
     public string PackageFamilyName { get; init; } = "unknown";
 
-    public string PackageIdentityStatus { get; init; } = "unavailable";
+    public OpenAiDesktopPackageIdentityStatus PackageIdentityStatus { get; init; }
 
     public string WindowBranding { get; init; } = "unknown";
 
@@ -120,7 +126,7 @@ public sealed record OpenAiDesktopIdentity(
         && ApplicationVersionFingerprint.IsValid
         && string.Equals(ApplicationVersionStatus, "available", StringComparison.Ordinal)
         && PackageFullNameFingerprint.IsValid
-        && string.Equals(PackageIdentityStatus, "available", StringComparison.Ordinal)
+        && PackageIdentityStatus == OpenAiDesktopPackageIdentityStatus.Available
         && string.Equals(PackageFamilyName, SupportedPackageFamilyName, StringComparison.OrdinalIgnoreCase)
         && ExecutableNameFingerprint.IsValid
         && ProcessNameFingerprint.IsValid
@@ -137,7 +143,9 @@ public sealed record OpenAiDesktopIdentity(
             ["application_identity_hash"] = ApplicationIdentityFingerprint.Value,
             ["application_version_hash"] = ApplicationVersionFingerprint.Value,
             ["application_version_status"] = ApplicationVersionStatus,
-            ["package_identity_status"] = PackageIdentityStatus,
+            ["package_identity_status"] = PackageIdentityStatus == OpenAiDesktopPackageIdentityStatus.Available
+                ? "available"
+                : "unavailable",
             ["package_family_name"] = PackageFamilyName,
             ["package_full_name_hash"] = PackageFullNameFingerprint.Value,
             ["executable_name_hash"] = ExecutableNameFingerprint.Value,
@@ -160,8 +168,9 @@ public sealed record OpenAiDesktopIdentity(
                 !diagnostics.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value))
             || !diagnostics.TryGetValue("application_version_status", out var versionStatus)
             || !string.Equals(versionStatus, "available", StringComparison.Ordinal)
-            || !diagnostics.TryGetValue("package_identity_status", out var packageIdentityStatus)
-            || !string.Equals(packageIdentityStatus, "available", StringComparison.Ordinal)
+            || !diagnostics.TryGetValue("package_identity_status", out var packageIdentityStatusText)
+            || !TryParsePackageIdentityStatus(packageIdentityStatusText, out var packageIdentityStatus)
+            || packageIdentityStatus != OpenAiDesktopPackageIdentityStatus.Available
             || !TryReadCanonicalValue(diagnostics, "package_family_name", SupportedPackageFamilyName, out var packageFamilyName)
             || !TryReadCanonicalValue(diagnostics, "window_branding", ProductId, out var windowBranding)
             || !TryReadMeaningfulValue(diagnostics, "element_framework_id", out var frameworkId)
@@ -212,6 +221,20 @@ public sealed record OpenAiDesktopIdentity(
 
         value = expected;
         return true;
+    }
+
+    private static bool TryParsePackageIdentityStatus(
+        string? value,
+        out OpenAiDesktopPackageIdentityStatus status)
+    {
+        status = OpenAiDesktopPackageIdentityStatus.Unavailable;
+        if (string.Equals(value, "available", StringComparison.Ordinal))
+        {
+            status = OpenAiDesktopPackageIdentityStatus.Available;
+            return true;
+        }
+
+        return string.Equals(value, "unavailable", StringComparison.Ordinal);
     }
 
     private static bool TryReadMeaningfulValue(

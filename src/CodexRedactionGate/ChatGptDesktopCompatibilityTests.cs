@@ -162,6 +162,45 @@ public sealed class ChatGptDesktopCompatibilityTests
     }
 
     [Test]
+    public void ProfileStore_FiltersTransientTargetDiagnosticsAtTheStorageBoundary()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-profile-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", VerifiedChatGptDiscovery()) with
+        {
+            Diagnostics = new Dictionary<string, string>
+            {
+                ["surface.target_process_hash"] = ChatGptDiscoveryFixture.Fingerprint("process-instance"),
+                ["surface.window_identity_hash"] = ChatGptDiscoveryFixture.Fingerprint("window-instance"),
+                ["surface.focused_element_hash"] = ChatGptDiscoveryFixture.Fingerprint("element-instance"),
+                ["surface.application_version_status"] = "available"
+            }
+        };
+
+        try
+        {
+            var saved = SubmitBindingProfileStore.Save(layout, new[] { profile });
+            var json = File.ReadAllText(SubmitBindingProfileStore.DefaultPath(layout));
+            var loaded = SubmitBindingProfileStore.Load(layout);
+
+            Assert.That(saved.Succeeded, Is.True);
+            Assert.That(json, Does.Not.Contain("target_process_hash"));
+            Assert.That(json, Does.Not.Contain("window_identity_hash"));
+            Assert.That(json, Does.Not.Contain("focused_element_hash"));
+            Assert.That(loaded.Profiles.Single().Diagnostics.Keys.Any(ChatGptDesktopCompatibility.IsTransientTargetDiagnosticKey), Is.False);
+            Assert.That(loaded.Profiles.Single().Diagnostics["surface.application_version_status"], Is.EqualTo("available"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
     public void CompatibilityIdentity_RejectsUnsupportedPackageFamilyAndUnknownBranding()
     {
         var unsupportedPackage = new Dictionary<string, string>(
