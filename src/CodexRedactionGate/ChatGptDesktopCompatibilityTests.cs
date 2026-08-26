@@ -175,12 +175,87 @@ public sealed class ChatGptDesktopCompatibilityTests
             VerifiedChatGptDiscovery().Diagnostics,
             StringComparer.Ordinal)
         {
-            ["package_family_name"] = "OpenAI.Codex",
+            ["package_family_name"] = OpenAiDesktopIdentity.SupportedPackageFamilyName,
             ["window_branding"] = "unknown"
         };
 
         Assert.That(OpenAiDesktopIdentity.TryCreate(unsupportedPackage, out _), Is.False);
         Assert.That(OpenAiDesktopIdentity.TryCreate(unknownBranding, out _), Is.False);
+    }
+
+    [Test]
+    public void CompatibilityIdentity_AcceptsSupportedPackageFamilyWithDifferentCasing()
+    {
+        var diagnostics = new Dictionary<string, string>(
+            VerifiedChatGptDiscovery().Diagnostics,
+            StringComparer.Ordinal)
+        {
+            ["package_family_name"] = OpenAiDesktopIdentity.SupportedPackageFamilyName.ToLowerInvariant()
+        };
+
+        Assert.That(OpenAiDesktopIdentity.TryCreate(diagnostics, out var identity), Is.True);
+        Assert.That(identity!.PackageFamilyName, Is.EqualTo(OpenAiDesktopIdentity.SupportedPackageFamilyName));
+    }
+
+    [Test]
+    public void CompatibilityIdentity_RejectsDifferentPackagePublisher()
+    {
+        var package = "OpenAI.Codex_1.0.0.0_x64__differentpublisher";
+
+        Assert.That(OpenAiDesktopIdentity.IsSupportedPackageFullName(package), Is.False);
+    }
+
+    [TestCase("unknown")]
+    [TestCase("unavailable")]
+    [TestCase("not_available")]
+    [TestCase("")]
+    public void CompatibilityIdentity_RejectsEachPlaceholderFrameworkValue(string framework)
+    {
+        var diagnostics = new Dictionary<string, string>(
+            VerifiedChatGptDiscovery().Diagnostics,
+            StringComparer.Ordinal)
+        {
+            ["element_framework_id"] = framework
+        };
+
+        Assert.That(OpenAiDesktopIdentity.TryCreate(diagnostics, out _), Is.False);
+    }
+
+    [TestCase("unknown")]
+    [TestCase("unavailable")]
+    [TestCase("not_available")]
+    [TestCase("")]
+    public void CompatibilityIdentity_RejectsEachPlaceholderControlValue(string controlType)
+    {
+        var diagnostics = new Dictionary<string, string>(
+            VerifiedChatGptDiscovery().Diagnostics,
+            StringComparer.Ordinal)
+        {
+            ["element_control_type"] = controlType
+        };
+
+        Assert.That(OpenAiDesktopIdentity.TryCreate(diagnostics, out _), Is.False);
+    }
+
+    [Test]
+    public void VerifyUserBindings_RevalidatesCurrentDiscoveryWhenOldEvidenceIsSupplied()
+    {
+        var verified = VerifiedChatGptDiscovery();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", verified);
+        var incomplete = ChatGptDiscoveryFixture.CreateBuilder()
+            .WithoutPackageIdentity()
+            .Build();
+
+        var result = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Ctrl+Enter",
+            "Enter",
+            incomplete,
+            profile.CompatibilityEvidence);
+
+        Assert.That(result.IsProtected, Is.False);
+        Assert.That(result.CapabilityStatus, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
     }
 
     [Test]

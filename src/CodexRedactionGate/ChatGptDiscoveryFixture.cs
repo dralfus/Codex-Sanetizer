@@ -22,7 +22,7 @@ internal sealed class ChatGptDiscoveryFixtureBuilder
             ["application_version_hash"] = ChatGptDiscoveryFixture.Fingerprint("version"),
             ["application_version_status"] = "available",
             ["package_identity_status"] = "available",
-            ["package_family_name"] = "OpenAI.Codex",
+            ["package_family_name"] = OpenAiDesktopIdentity.SupportedPackageFamilyName,
             ["package_full_name_hash"] = ChatGptDiscoveryFixture.Fingerprint("package"),
             ["executable_name_hash"] = ChatGptDiscoveryFixture.Fingerprint(OpenAiDesktopIdentity.ProductId),
             ["process_name_hash"] = ChatGptDiscoveryFixture.Fingerprint(OpenAiDesktopIdentity.ProductId),

@@ -380,6 +380,8 @@ public partial class SanitizerTests
         Assert.That(chatGptResult.Succeeded, Is.True);
         Assert.That(codexResult.Diagnostics["package_identity_status"], Is.EqualTo("available"));
         Assert.That(chatGptResult.Diagnostics["package_identity_status"], Is.EqualTo("available"));
+        Assert.That(codexResult.Diagnostics["package_family_name"], Is.EqualTo(OpenAiDesktopIdentity.SupportedPackageFamilyName));
+        Assert.That(chatGptResult.Diagnostics["package_family_name"], Is.EqualTo(OpenAiDesktopIdentity.SupportedPackageFamilyName));
         Assert.That(OpenAiDesktopIdentity.TryCreate(codexResult.Diagnostics, out var codexIdentity), Is.True);
         Assert.That(OpenAiDesktopIdentity.TryCreate(chatGptResult.Diagnostics, out var chatGptIdentity), Is.True);
         Assert.That(codexIdentity, Is.Not.Null);

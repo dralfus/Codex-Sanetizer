@@ -261,8 +261,7 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
 
     private static string ApplicationVersionStatus(string applicationVersion)
     {
-        return string.IsNullOrWhiteSpace(applicationVersion)
-            || string.Equals(applicationVersion, "unknown", StringComparison.OrdinalIgnoreCase)
+        return !OpenAiDesktopIdentity.IsMeaningfulEvidenceValue(applicationVersion)
             ? "unavailable"
             : "available";
     }
@@ -303,7 +302,7 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
 
     private static string HashIfPresent(string? value)
     {
-        return string.IsNullOrWhiteSpace(value) ? string.Empty : Hash(value);
+        return OpenAiDesktopIdentity.IsMeaningfulEvidenceValue(value) ? Hash(value!) : string.Empty;
     }
 
     private static IReadOnlyDictionary<string, string> Merge(

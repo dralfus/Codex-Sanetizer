@@ -97,7 +97,6 @@ internal static class ChatGptDesktopCompatibility
             sendControlFingerprint)
         {
             DesktopIdentity = desktopIdentity,
-            PackageIdentityStatus = discovery.Diagnostics["package_identity_status"],
             VerifiedTargetFingerprint = TransientTargetFingerprint.TryCreate(discovery.Diagnostics)
         };
         return true;

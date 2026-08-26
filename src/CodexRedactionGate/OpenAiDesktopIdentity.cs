@@ -17,9 +17,11 @@ public sealed record OpenAiDesktopIdentity(
     OpaqueFingerprint ComposerClassFingerprint)
 {
     public const string ProductId = "openai-desktop";
-    internal const string SupportedPackageFamilyName = "OpenAI.Codex";
+    internal const string SupportedPackageFamilyName = "OpenAI.Codex_2p2nqsd0c76g";
 
     public string PackageFamilyName { get; init; } = "unknown";
+
+    public string PackageIdentityStatus { get; init; } = "unavailable";
 
     public string WindowBranding { get; init; } = "unknown";
 
@@ -54,7 +56,19 @@ public sealed record OpenAiDesktopIdentity(
         }
 
         var separator = packageFullName.IndexOf('_');
-        return separator > 0 ? packageFullName[..separator] : packageFullName;
+        if (separator <= 0)
+        {
+            return packageFullName;
+        }
+
+        var packageName = packageFullName[..separator];
+        var publisherSeparator = packageFullName.LastIndexOf("__", StringComparison.Ordinal);
+        if (publisherSeparator >= 0 && publisherSeparator + 2 < packageFullName.Length)
+        {
+            return $"{packageName}_{packageFullName[(publisherSeparator + 2)..]}";
+        }
+
+        return packageFullName;
     }
 
     internal static bool IsSupportedPackageFullName(string? packageFullName)
@@ -63,6 +77,20 @@ public sealed record OpenAiDesktopIdentity(
             NormalizePackageFamilyName(packageFullName),
             SupportedPackageFamilyName,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsMeaningfulEvidenceValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Trim();
+        return !normalized.Equals("unknown", StringComparison.OrdinalIgnoreCase)
+            && !normalized.Equals("unavailable", StringComparison.OrdinalIgnoreCase)
+            && !normalized.Equals("not_available", StringComparison.OrdinalIgnoreCase)
+            && !normalized.Equals("missing", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool IsSupportedProfileId(string profileId)
@@ -92,7 +120,8 @@ public sealed record OpenAiDesktopIdentity(
         && ApplicationVersionFingerprint.IsValid
         && string.Equals(ApplicationVersionStatus, "available", StringComparison.Ordinal)
         && PackageFullNameFingerprint.IsValid
-        && string.Equals(PackageFamilyName, SupportedPackageFamilyName, StringComparison.Ordinal)
+        && string.Equals(PackageIdentityStatus, "available", StringComparison.Ordinal)
+        && string.Equals(PackageFamilyName, SupportedPackageFamilyName, StringComparison.OrdinalIgnoreCase)
         && ExecutableNameFingerprint.IsValid
         && ProcessNameFingerprint.IsValid
         && WindowClassFingerprint.IsValid
@@ -108,6 +137,7 @@ public sealed record OpenAiDesktopIdentity(
             ["application_identity_hash"] = ApplicationIdentityFingerprint.Value,
             ["application_version_hash"] = ApplicationVersionFingerprint.Value,
             ["application_version_status"] = ApplicationVersionStatus,
+            ["package_identity_status"] = PackageIdentityStatus,
             ["package_family_name"] = PackageFamilyName,
             ["package_full_name_hash"] = PackageFullNameFingerprint.Value,
             ["executable_name_hash"] = ExecutableNameFingerprint.Value,
@@ -161,6 +191,7 @@ public sealed record OpenAiDesktopIdentity(
         identity = identity with
         {
             PackageFamilyName = packageFamilyName,
+            PackageIdentityStatus = packageIdentityStatus,
             WindowBranding = windowBranding
         };
         return identity.IsComplete;
@@ -174,12 +205,12 @@ public sealed record OpenAiDesktopIdentity(
     {
         value = string.Empty;
         if (!diagnostics.TryGetValue(key, out var candidate)
-            || !string.Equals(candidate, expected, StringComparison.Ordinal))
+            || !string.Equals(candidate, expected, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
 
-        value = candidate;
+        value = expected;
         return true;
     }
 
@@ -190,19 +221,12 @@ public sealed record OpenAiDesktopIdentity(
     {
         value = string.Empty;
         if (!diagnostics.TryGetValue(key, out var candidate)
-            || string.IsNullOrWhiteSpace(candidate))
+            || !IsMeaningfulEvidenceValue(candidate))
         {
             return false;
         }
 
         var normalized = candidate.Trim();
-        if (normalized.Equals("unknown", StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("unavailable", StringComparison.OrdinalIgnoreCase)
-            || normalized.Equals("not_available", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
         value = normalized;
         return true;
     }
