@@ -3170,6 +3170,13 @@ notice confirms that the marker is ready to paste without exposing it in the
 operation journal or canary evidence. If the clipboard is unavailable, the
 notice provides a manual fallback and records only the clipboard failure.
 
+**Diagnostic correction (2026-08-26):** Installed canary failures before text
+capture now retain a stable `target_verification_failed` code alongside the
+raw-free discovery status. Installer identities containing the `+commit`
+suffix are accepted, so the evidence can bind to the actual installed
+candidate instead of falling back to `unbound`. The installed acceptance
+artifact is still pending and must be rerun on the rebuilt candidate.
+
 ## 353. Deepen composer access behind ProtectedComposerSession
 
 **What to build:** Introduce a target-scoped `ProtectedComposerSession`
@@ -3525,3 +3532,46 @@ artifact.
 - [x] Read the armed canary from resident session state at callback time.
 - [x] Preserve target identity in the callback fixture.
 - [x] Exercise the canonical trace stages before overlay admission.
+
+## 362. Preserve structural path suffixes during sensitive-term matching
+
+**What to build:** When a sensitive term identifies a host component inside a
+structured workspace or container path, replace only that host component and
+preserve the path syntax and suffix unchanged. For example, a configured
+hostname in `host:/mnt/host/` may be pseudonymized while `/mnt/host/` remains
+usable and readable. A plain sensitive hostname must remain configurable as a
+separate dictionary term.
+
+**Blocked by:** 352; the protected keyboard acceptance gate must have a
+raw-free installed failure artifact before matching behavior is extended.
+
+**State owner:** The sanitizer policy owns term classification and replacement
+boundaries; the protected-send transaction owns only the resulting sanitized
+text. The path parser/matcher owns structural token boundaries and must not
+publish raw values in diagnostics.
+
+**Fail-closed state:** An ambiguous or malformed structured path is not
+partially rewritten. It returns the existing safe failure result and leaves the
+original text out of diagnostics and cloud submission.
+
+**Allowed transitions:** `input -> structured_match -> host_only_replaced ->
+sanitized_output`, or `input -> ambiguous -> failed_closed`.
+
+**Deterministic proof:** Tests cover case-insensitive hostname matching,
+structured host/path separation, repeated separators, malformed paths, and
+plain hostname terms. Assertions must verify both the replaced host and the
+unchanged suffix without using live cloud submission.
+
+**Highest required seam:** Sanitizer output consumed by the protected-send
+transaction, followed by the existing installed keyboard acceptance path.
+
+**Evidence target:** `locally_verified` sanitizer matrix, then `live_verified`
+only when the unchanged installed canary and protected-send evidence remain
+green.
+
+- [ ] Add a structural matcher that distinguishes host tokens from path
+      suffixes.
+- [ ] Preserve the suffix exactly after host replacement.
+- [ ] Add regression tests for `host:/mnt/host/` and malformed input.
+- [ ] Document that a plain hostname can still be added as its own sensitive
+      term.

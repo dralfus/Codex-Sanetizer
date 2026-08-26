@@ -111,11 +111,11 @@ public sealed class ResidentCanaryTests
         {
             File.WriteAllText(
                 Path.Combine(directory, "install-identity.txt"),
-                "installer_identity=CodexRedactionGateSetup-0.1.20260826.t1200.exe\n");
+                "installer_identity=CodexRedactionGateSetup-0.1.20260826.t1200+37c329d.exe\n");
 
             Assert.That(
                 ResidentCanaryBuildIdentity.ReadInstallerIdentity(directory),
-                Is.EqualTo("CodexRedactionGateSetup-0.1.20260826.t1200.exe"));
+                Is.EqualTo("CodexRedactionGateSetup-0.1.20260826.t1200+37c329d.exe"));
 
             File.WriteAllText(
                 Path.Combine(directory, "install-identity.txt"),
@@ -124,6 +124,43 @@ public sealed class ResidentCanaryTests
         }
         finally
         {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void ProductionRunner_ReportsSpecificTargetVerificationFailure()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "codex-redaction-gate-canary-runner-tests",
+            Guid.NewGuid().ToString("N"));
+        var runner = new ResidentCanaryProductionRunner(
+            DefaultStorageLayout.Create(directory),
+            new FixedDiscovery(TextSurfaceDiscoveryResult.Failure(OsInteractionStatusIds.FocusLost)),
+            new FixedConfirmationOverlay());
+        var arm = new ResidentCanaryArm(1, "chatgpt-desktop", "CS_CANARY_TEST", 1);
+
+        try
+        {
+            var result = runner.Run(
+                new NativeSubmitTargetIdentity(1, "chatgpt-desktop", "1234"),
+                arm,
+                (_, _) => true,
+                () => true,
+                () => new CanaryLease());
+
+            Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.FocusLost));
+            Assert.That(result.Diagnostics["canary_code"], Is.EqualTo("target_verification_failed"));
+            Assert.That(result.Diagnostics["canary_stage"], Is.EqualTo("target_verification"));
+            Assert.That(result.Diagnostics["cloud_submission"], Is.EqualTo("false"));
+        }
+        finally
+        {
+            runner.Dispose();
             if (Directory.Exists(directory))
             {
                 Directory.Delete(directory, recursive: true);
@@ -585,5 +622,17 @@ public sealed class ResidentCanaryTests
         public void Dispose()
         {
         }
+    }
+
+    private sealed class FixedDiscovery : IActiveTextSurfaceDiscovery
+    {
+        private readonly TextSurfaceDiscoveryResult _result;
+
+        public FixedDiscovery(TextSurfaceDiscoveryResult result)
+        {
+            _result = result;
+        }
+
+        public TextSurfaceDiscoveryResult DiscoverActiveSurface() => _result;
     }
 }

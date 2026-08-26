@@ -366,7 +366,7 @@ internal static class ResidentCanaryBuildIdentity
                 var identity = line[prefix.Length..].Trim();
                 return identity.Length > 0 && identity.Length <= 256
                     && identity.All(character => char.IsLetterOrDigit(character)
-                        || character is '.' or '-' or '_')
+                        || character is '.' or '-' or '_' or '+')
                     ? identity
                     : "unbound";
             }
@@ -439,6 +439,7 @@ internal sealed class ResidentCanaryProductionRunner : IDisposable
             return Failure(discovery.Status, discovery.Surface, new Dictionary<string, string>
             {
                 ["canary_stage"] = "target_verification",
+                ["canary_code"] = "target_verification_failed",
                 ["canary_cleanup"] = "true",
                 ["cloud_submission"] = "false"
             });
