@@ -32,7 +32,10 @@ public sealed record FocusedElementSnapshot(
     bool CanReadTextPattern,
     bool CanUseKeyboardTextInput,
     string ElementRuntimeIdHash,
-    string FocusResolutionStage = "unknown");
+    string FocusResolutionStage = "unknown",
+    string PackageFullName = "",
+    string ExecutableName = "",
+    string ApplicationVersion = "");
 
 public interface IFocusedElementSnapshotProvider
 {
@@ -193,7 +196,13 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
 
     private static IReadOnlyDictionary<string, string> Diagnostics(FocusedElementSnapshot snapshot)
     {
-        var applicationVersion = ApplicationVersion(snapshot.WindowHandle);
+        var applicationVersion = string.IsNullOrWhiteSpace(snapshot.ApplicationVersion)
+            ? ApplicationVersion(snapshot.WindowHandle)
+            : snapshot.ApplicationVersion;
+        var stableProcessName = OpenAiDesktopIdentity.NormalizeProductId(snapshot.ProcessName);
+        var stableExecutableName = OpenAiDesktopIdentity.NormalizeExecutableName(
+            string.IsNullOrWhiteSpace(snapshot.ExecutableName) ? snapshot.ProcessName : snapshot.ExecutableName);
+        var packageFullName = PackageFullName(snapshot.WindowHandle, snapshot.PackageFullName);
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["window_title_length"] = snapshot.WindowTitle.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -201,9 +210,10 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
             ["application_identity_hash"] = Hash(OpenAiDesktopIdentity.NormalizeProductId(snapshot.ProcessName)),
             ["application_version_hash"] = Hash(applicationVersion),
             ["application_version_status"] = ApplicationVersionStatus(applicationVersion),
-            ["package_full_name_hash"] = Hash($"{snapshot.ProcessName}|{applicationVersion}|{snapshot.WindowClassName}"),
-            ["executable_name_hash"] = Hash(snapshot.ProcessName),
-            ["process_name_hash"] = Hash(snapshot.ProcessName),
+            ["package_identity_status"] = string.IsNullOrWhiteSpace(packageFullName) ? "unavailable" : "available",
+            ["package_full_name_hash"] = Hash(packageFullName),
+            ["executable_name_hash"] = Hash(stableExecutableName),
+            ["process_name_hash"] = Hash(stableProcessName),
             ["target_process_hash"] = Hash($"{snapshot.ProcessName}|{snapshot.WindowHandle.ToInt64():X}"),
             ["window_identity_hash"] = Hash($"{snapshot.WindowClassName}|{snapshot.WindowHandle.ToInt64():X}"),
             ["window_class_hash"] = Hash(snapshot.WindowClassName),
@@ -247,6 +257,35 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
             : "available";
     }
 
+    private static string PackageFullName(IntPtr window, string snapshotPackageFullName)
+    {
+        if (!string.IsNullOrWhiteSpace(snapshotPackageFullName))
+        {
+            return snapshotPackageFullName;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            NativeFocusedElementSnapshotProvider.NativeMethods.GetWindowThreadProcessId(window, out var processId);
+            if (processId == 0)
+            {
+                return string.Empty;
+            }
+
+            using var process = Process.GetProcessById((int)processId);
+            return PackageMethods.TryGetPackageFullName(process.Handle);
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
+    }
+
     private static string Hash(string value)
     {
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
@@ -276,6 +315,30 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
         }
 
         return merged;
+    }
+
+    private static class PackageMethods
+    {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int GetPackageFullName(
+            IntPtr process,
+            ref uint packageFullNameLength,
+            StringBuilder packageFullName);
+
+        internal static string TryGetPackageFullName(IntPtr process)
+        {
+            uint length = 0;
+            var result = GetPackageFullName(process, ref length, new StringBuilder(1));
+            if (result != 122 || length == 0)
+            {
+                return string.Empty;
+            }
+
+            var packageFullName = new StringBuilder((int)length);
+            return GetPackageFullName(process, ref length, packageFullName) == 0
+                ? packageFullName.ToString()
+                : string.Empty;
+        }
     }
 }
 
@@ -421,7 +484,8 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
                 textPattern is not null,
                 element.Current.HasKeyboardFocus && element.Current.IsKeyboardFocusable && element.Current.IsEnabled,
                 runtimeHash,
-                resolution.Stage);
+                resolution.Stage,
+                ExecutableName: GetExecutableName(window));
         }
         catch (ElementNotAvailableException)
         {
@@ -596,6 +660,28 @@ public sealed class NativeFocusedElementSnapshotProvider : IFocusedElementSnapsh
 
         [DllImport("user32.dll")]
         public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    }
+
+    private static string GetExecutableName(IntPtr handle)
+    {
+        _ = NativeMethods.GetWindowThreadProcessId(handle, out var processId);
+        if (processId == 0)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var executablePath = Process.GetProcessById((int)processId).MainModule?.FileName;
+            return string.IsNullOrWhiteSpace(executablePath)
+                ? string.Empty
+                : System.IO.Path.GetFileName(executablePath);
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
     }
 }
 

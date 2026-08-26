@@ -6,14 +6,12 @@ namespace CodexRedactionGate;
 
 internal static class ChatGptDesktopCompatibility
 {
-    private const string ProfileId = "chatgpt-desktop";
-
     internal static IReadOnlyList<string> RequiredEvidenceKeys => OpenAiDesktopIdentity.RequiredEvidenceKeys;
 
     public static SubmitBindingProfile RequirePinnedFingerprint(SubmitBindingProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        return string.Equals(profile.ProfileId, ProfileId, StringComparison.Ordinal)
+        return OpenAiDesktopIdentity.IsSupportedProfileId(profile.ProfileId)
             && profile.IsProtected
             && (profile.CompatibilityEvidence is null || !profile.CompatibilityEvidence.IsComplete)
             ? profile with
@@ -34,7 +32,7 @@ internal static class ChatGptDesktopCompatibility
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(discovery);
         evidence = null;
-        if (!string.Equals(profile.ProfileId, ProfileId, StringComparison.Ordinal)
+        if (!OpenAiDesktopIdentity.IsSupportedProfileId(profile.ProfileId)
             || !discovery.Succeeded
             || discovery.Surface is null
             || profile.SubmitBinding is null
@@ -75,6 +73,7 @@ internal static class ChatGptDesktopCompatibility
             sendControlFingerprint)
         {
             DesktopIdentity = desktopIdentity,
+            PackageIdentityStatus = discovery.Diagnostics["package_identity_status"],
             VerifiedTargetFingerprint = TransientTargetFingerprint.TryCreate(discovery.Diagnostics)
         };
         return true;

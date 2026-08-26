@@ -350,6 +350,61 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void WindowsFocusedComposerDiscovery_UsesOneStableFingerprintForCodexAndChatGptAliases()
+    {
+        const string packageFullName = "OpenAI.Codex_1.0.0.0_x64__2p2nqsd0c76g";
+        var codexResult = new WindowsFocusedComposerDiscovery(
+            SurfaceProfileCatalog.Default,
+            new FakeFocusedElementSnapshotProvider(CreateFocusedElementSnapshot(
+                windowTitle: "Codex",
+                processName: "Codex",
+                controlType: "ControlType.Edit",
+                canReadValue: true,
+                canWriteValue: true,
+                packageFullName: packageFullName,
+                executableName: "codex.exe",
+                applicationVersion: "1.0.0.0"))).DiscoverActiveSurface();
+        var chatGptResult = new WindowsFocusedComposerDiscovery(
+            SurfaceProfileCatalog.Default,
+            new FakeFocusedElementSnapshotProvider(CreateFocusedElementSnapshot(
+                windowTitle: "ChatGPT",
+                processName: "ChatGPT",
+                controlType: "ControlType.Edit",
+                canReadValue: true,
+                canWriteValue: true,
+                packageFullName: packageFullName,
+                executableName: "ChatGPT.exe",
+                applicationVersion: "1.0.0.0"))).DiscoverActiveSurface();
+
+        Assert.That(codexResult.Succeeded, Is.True);
+        Assert.That(chatGptResult.Succeeded, Is.True);
+        Assert.That(codexResult.Diagnostics["package_identity_status"], Is.EqualTo("available"));
+        Assert.That(chatGptResult.Diagnostics["package_identity_status"], Is.EqualTo("available"));
+        Assert.That(OpenAiDesktopIdentity.TryCreate(codexResult.Diagnostics, out var codexIdentity), Is.True);
+        Assert.That(OpenAiDesktopIdentity.TryCreate(chatGptResult.Diagnostics, out var chatGptIdentity), Is.True);
+        Assert.That(codexIdentity, Is.Not.Null);
+        Assert.That(chatGptIdentity, Is.Not.Null);
+
+        foreach (var key in new[]
+        {
+            "application_identity_hash",
+            "application_version_hash",
+            "application_version_status",
+            "package_identity_status",
+            "package_full_name_hash",
+            "executable_name_hash",
+            "process_name_hash",
+            "window_class_hash",
+            "element_framework_id",
+            "element_control_type",
+            "composer_class_hash"
+        })
+        {
+            Assert.That(codexResult.Diagnostics[key], Is.EqualTo(chatGptResult.Diagnostics[key]), key);
+        }
+    }
+
+    [Test]
     public void WindowsFocusedComposerDiscovery_RejectsNonComposerFocusedElement()
     {
         var discovery = new WindowsFocusedComposerDiscovery(
@@ -854,7 +909,10 @@ public partial class SanitizerTests
         bool canReadTextPattern = true,
         bool canUseKeyboardTextInput = true,
         string frameworkId = "Win32",
-        string className = "TextBox")
+        string className = "TextBox",
+        string packageFullName = "",
+        string executableName = "",
+        string applicationVersion = "")
     {
         return new FocusedElementSnapshot(
             true,
@@ -876,7 +934,10 @@ public partial class SanitizerTests
             IsValueReadOnly: !canWriteValue,
             CanReadTextPattern: canReadTextPattern,
             CanUseKeyboardTextInput: canUseKeyboardTextInput,
-            ElementRuntimeIdHash: "focusedhash");
+            ElementRuntimeIdHash: "focusedhash",
+            PackageFullName: packageFullName,
+            ExecutableName: executableName,
+            ApplicationVersion: applicationVersion);
     }
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureProgramOutput(Func<int> action)

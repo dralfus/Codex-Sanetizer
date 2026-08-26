@@ -3011,6 +3011,25 @@ warnings/errors. Manual-test release `0.1.20260823.t1841` was published to
 `artifacts/publish` and launched as the only resident tray process on
 2026-08-23.
 
+**Reopened after review (2026-08-26):** The stable identity currently
+normalizes only `application_identity_hash`. Package, executable, and process
+fingerprints still vary with the `Codex`/`ChatGPT` process alias, and the field
+named `package_full_name_hash` is not derived from the installed Store package
+identity. The completed history above remains valid evidence for the partial
+implementation, but the ticket is open until the full compatibility identity
+is stable across supported aliases.
+
+- [ ] Derive package evidence from the actual installed OpenAI Desktop package
+      identity, or explicitly mark package identity unavailable and fail closed.
+- [ ] Canonicalize supported Codex/ChatGPT process and executable aliases in
+      every persisted compatibility field, or remove alias-dependent fields
+      from persisted comparison.
+- [ ] Add a deterministic full-fingerprint comparison between mixed Codex and
+      ChatGPT process/executable/window branding, not only an assertion for the
+      product-id field.
+- [ ] Prove that changing only a supported alias does not require setup, while
+      an actual version or composer-shape change still does.
+
 ## 351. Enforce an evidence-state contract for product fixes
 
 **What to build:** Add a repository-wide development contract and machine-
@@ -3080,9 +3099,25 @@ release build invokes the standalone validator smoke. The synthetic smoke remain
 `implemented`-only and is no longer included in the aggregate release
 readiness result.
 
+**Reopened after review (2026-08-26):** The release script proves that the
+validator can reject synthetic records, but it does not require a real
+repository evidence record bound to the current commit/build. Therefore a
+missing or stale ticket record does not yet block a release claim as required
+by this ticket. Ticket 357 remains the later product-wide installer/release
+gate; this ticket must first provide the usable current-record repository seam.
+
+- [ ] Add a machine-readable evidence-record location and discovery contract
+      for protected behavior tickets.
+- [ ] Publish a real `locally_verified` record for 351 bound to the current
+      schema, reproduction, commit, build, and validator artifact.
+- [ ] Make the release contract check fail when a required current record is
+      missing, stale, mismatched, or below its declared evidence target.
+- [ ] Keep synthetic smoke records diagnostic-only and prove they cannot
+      satisfy the current-record gate.
+
 ## 352. Add a resident-owned installed keyboard protected-Send canary
 
-**Current state (2026-08-26):** `[x]` The installed candidate from
+**Current state (2026-08-26):** `[>]` The installed candidate from
 `f7dd69d` produced the required raw-free `reproduced_red` artifact. The first
 protected Send was suppressed, the canary reached `send_observed` and
 `transaction_started`, then terminated fail-closed without a second Send.
@@ -3184,6 +3219,21 @@ profile generation, and `ctrl_enter` binding. The single user Send was
 suppressed; the terminal failure was recorded after approximately five
 seconds. A later Send must not be counted as part of this canary attempt.
 
+**Reopened after review (2026-08-26):** The accepted installed red artifact is
+bound correctly, but the implementation can still substitute a hash of
+`ProfileId` for missing compatibility evidence and accepts `unbound` artifact
+fields. A diagnostic failure artifact and evidence eligible to advance an
+evidence state are not yet distinct.
+
+- [ ] Refuse to arm or publish successful canary evidence unless compatibility
+      evidence and every required build/profile/binding field are fully bound.
+- [ ] Represent incomplete failure diagnostics explicitly as non-advancing
+      diagnostic artifacts; never fabricate a compatibility fingerprint.
+- [ ] Make evidence validation reject `unbound` or fallback identities whenever
+      an artifact is used to satisfy `reproduced_red` or a higher target.
+- [ ] Add deterministic tests proving diagnostic failures remain observable but
+      cannot authorize evidence progression.
+
 ## 353. Deepen composer access behind ProtectedComposerSession
 
 **What to build:** Introduce a target-scoped `ProtectedComposerSession`
@@ -3234,6 +3284,21 @@ trace, and terminal publication; its observable stage ordering remains covered
 by the existing suite. The session matrix covers target change, foreground
 refusal, write mismatch, replay failure, adapter exception, and the Windows
 verified adapter path without timers or cloud access.
+
+**Reopened after review (2026-08-26):** The production access implementation
+retains an `AutomationElement` and reuses it from separately created STA
+threads. The deterministic matrix also lacks distinct STA-creation/execution,
+replay-unavailable, and partial-replay cases. These gaps violate the original
+state and proof criteria even though the existing suite remains green.
+
+- [ ] Retain only opaque target/window/focused-element identity between
+      operations; reacquire `AutomationElement` inside each bounded STA action.
+- [ ] Add an injectable STA execution boundary and prove creation and execution
+      failures produce typed fail-closed outcomes with no later side effect.
+- [ ] Model and test replay unavailable separately from replay partially
+      observed/indeterminate.
+- [ ] Run the same target-change, focus, STA, write-verification, and replay
+      matrix against both reference and injected Windows access boundaries.
 
 ## 354. Introduce ProtectedSendTransaction beside legacy orchestration
 
@@ -3551,6 +3616,22 @@ artifact.
 - [x] Preserve target identity in the callback fixture.
 - [x] Exercise the canonical trace stages before overlay admission.
 
+**Reopened after review (2026-08-26):** Classification records the canary
+attempt only in diagnostics, while execution reads mutable current canary state
+again. A queued gesture that was already classified and suppressed as a canary
+can therefore fall through to the ordinary protected-Send runner after the
+attempt advances or terminates.
+
+- [ ] Carry one immutable typed canary-admission token from callback
+      classification into execution context.
+- [ ] Execute exactly the admitted attempt, or terminate that gesture
+      fail-closed when the token is stale; never fall through to normal Send.
+- [ ] Add a deterministic queued/repeated-Send race where the first attempt
+      advances before the second callback executes.
+- [ ] Prove original input stays suppressed, canary runner count is at most
+      one, and normal runner count remains zero for every canary-classified
+      gesture.
+
 ## 362. Preserve structural path suffixes during sensitive-term matching
 
 **What to build:** When a sensitive term identifies a host component inside a
@@ -3593,3 +3674,46 @@ green.
 - [ ] Add regression tests for `host:/mnt/host/` and malformed input.
 - [ ] Document that a plain hostname can still be added as its own sensitive
       term.
+
+## 363. Preserve the complete Windows clipboard during composer access
+
+**What to build:** Reading or replacing an OpenAI Desktop composer through the
+keyboard/clipboard fallback preserves the user's complete pre-existing Windows
+clipboard, including text, images, file lists, and custom formats. Protection
+must not silently clear unrelated clipboard data.
+
+**Blocked by:** 353, because clipboard fallback must run through the corrected
+target-scoped Windows composer session and bounded STA access path.
+
+**State owner:** The bounded Windows composer-access operation owns one
+clipboard snapshot and restoration attempt. The resident, tray, and
+transaction consume only the typed operation outcome.
+
+**Fail-closed state:** If a complete snapshot cannot be captured or restored,
+the operation does not report success or replay Send. It returns one raw-free
+typed failure and leaves protected Send suppressed.
+
+**Allowed transitions:** `clipboard_capture -> temporary_text_operation ->
+clipboard_restore -> operation_result`, or any stage to `failed_closed`; restore
+is attempted exactly once per acquired snapshot even after capture/write
+failure.
+
+**Deterministic proof:** Inject an STA clipboard boundary and cover text,
+image-only, file-list, mixed/custom, empty, and temporarily locked clipboard
+states without live cloud access or sleeps. Assert exact restoration and no raw
+clipboard content in diagnostics.
+
+**Red-capable reproduction:** Start with an image-only or file-list clipboard,
+run the current composer capture fallback, and prove the existing implementation
+clears it instead of restoring it.
+
+**Highest required seam:** Production-shaped Windows composer access with an
+injected clipboard/STA boundary.
+
+**Evidence target:** `locally_verified`, followed by the existing installed
+keyboard canary after 353 and 356 are green.
+
+- [ ] Capture the complete clipboard data object regardless of text formats.
+- [ ] Restore all captured formats with bounded retry and typed failure.
+- [ ] Add the deterministic clipboard-format and locked-clipboard matrix.
+- [ ] Verify failure diagnostics are raw-free and Send remains suppressed.

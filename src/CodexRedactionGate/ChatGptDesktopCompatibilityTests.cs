@@ -67,6 +67,20 @@ public sealed class ChatGptDesktopCompatibilityTests
     }
 
     [Test]
+    public void CompatibilityIdentity_RejectsUnavailablePackageIdentity()
+    {
+        var discovery = ChatGptDiscoveryFixture.CreateBuilder()
+            .WithoutPackageIdentity()
+            .Build();
+
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", discovery);
+
+        Assert.That(profile.IsProtected, Is.False);
+        Assert.That(profile.CapabilityStatus, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+    }
+
+    [Test]
     public void ActiveSendControlEvidence_IsRequiredToMatchPinnedFingerprint()
     {
         var discovery = VerifiedChatGptDiscovery();

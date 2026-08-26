@@ -199,6 +199,8 @@ public sealed record SurfaceCompatibilityEvidence(
 {
     public OpenAiDesktopIdentity? DesktopIdentity { get; init; }
 
+    public string PackageIdentityStatus { get; init; } = "unavailable";
+
     [JsonIgnore]
     public TransientTargetFingerprint? VerifiedTargetFingerprint { get; init; }
 
@@ -206,6 +208,7 @@ public sealed record SurfaceCompatibilityEvidence(
     public string VerificationId => FingerprintValue(VerificationFingerprint);
 
     public bool IsComplete => EffectiveDesktopIdentity?.IsComplete == true
+        && string.Equals(PackageIdentityStatus, "available", StringComparison.Ordinal)
         && VerificationFingerprint.IsValid
         && SendControlEvidenceFingerprint?.IsValid == true;
 
@@ -224,6 +227,7 @@ public sealed record SurfaceCompatibilityEvidence(
         var diagnostics = EffectiveDesktopIdentity is { } identity
             ? new Dictionary<string, string>(identity.ToComparisonDiagnostics(), StringComparer.Ordinal)
             : new Dictionary<string, string>(StringComparer.Ordinal);
+        diagnostics["package_identity_status"] = PackageIdentityStatus;
         diagnostics["submit_binding"] = SubmitBinding;
         diagnostics["newline_binding"] = NewlineBinding;
         diagnostics["send_control_evidence_hash"] = SendControlEvidenceFingerprint is { } sendControl
@@ -566,7 +570,7 @@ public static class SubmitBindingOnboardingVerifier
             CompatibilityEvidence: evidence,
             Diagnostics: diagnostics);
 
-        if (string.Equals(profileId, "chatgpt-desktop", StringComparison.Ordinal)
+        if (OpenAiDesktopIdentity.IsSupportedProfileId(profileId)
             && evidence is null)
         {
             if (!ChatGptDesktopCompatibility.TryCreate(profile, discovery, discovery.Diagnostics, out var compatibilityEvidence))
@@ -657,7 +661,7 @@ public static class SurfaceCompatibilityEvaluator
             return new SurfaceCompatibilityResult(profile.CapabilityStatus, diagnostics);
         }
 
-        if (string.Equals(profile.ProfileId, "chatgpt-desktop", StringComparison.Ordinal)
+        if (OpenAiDesktopIdentity.IsSupportedProfileId(profile.ProfileId)
             && (profile.CompatibilityEvidence is null
                 || !profile.CompatibilityEvidence.IsComplete
                 || activeEvidence is null))

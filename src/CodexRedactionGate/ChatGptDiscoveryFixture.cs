@@ -21,9 +21,10 @@ internal sealed class ChatGptDiscoveryFixtureBuilder
             ["application_identity_hash"] = ChatGptDiscoveryFixture.Fingerprint("application"),
             ["application_version_hash"] = ChatGptDiscoveryFixture.Fingerprint("version"),
             ["application_version_status"] = "available",
+            ["package_identity_status"] = "available",
             ["package_full_name_hash"] = ChatGptDiscoveryFixture.Fingerprint("package"),
-            ["executable_name_hash"] = ChatGptDiscoveryFixture.Fingerprint("executable"),
-            ["process_name_hash"] = ChatGptDiscoveryFixture.Fingerprint("process"),
+            ["executable_name_hash"] = ChatGptDiscoveryFixture.Fingerprint(OpenAiDesktopIdentity.ProductId),
+            ["process_name_hash"] = ChatGptDiscoveryFixture.Fingerprint(OpenAiDesktopIdentity.ProductId),
             ["target_process_hash"] = ChatGptDiscoveryFixture.Fingerprint("process-instance"),
             ["window_identity_hash"] = ChatGptDiscoveryFixture.Fingerprint("window"),
             ["window_class_hash"] = ChatGptDiscoveryFixture.Fingerprint("window-class"),
@@ -72,6 +73,14 @@ internal sealed class ChatGptDiscoveryFixtureBuilder
     internal ChatGptDiscoveryFixtureBuilder WithoutApplicationIdentityFingerprint()
     {
         _diagnostics.Remove("application_identity_hash");
+        _allowIncomplete = true;
+        return this;
+    }
+
+    internal ChatGptDiscoveryFixtureBuilder WithoutPackageIdentity()
+    {
+        _diagnostics.Remove("package_identity_status");
+        _diagnostics.Remove("package_full_name_hash");
         _allowIncomplete = true;
         return this;
     }

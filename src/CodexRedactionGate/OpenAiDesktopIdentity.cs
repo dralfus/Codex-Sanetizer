@@ -25,11 +25,24 @@ public sealed record OpenAiDesktopIdentity(
             : processName;
     }
 
+    internal static string NormalizeExecutableName(string executableName)
+    {
+        return IsOpenAiProcess(executableName)
+            ? ProductId
+            : executableName;
+    }
+
+    internal static bool IsSupportedProfileId(string profileId)
+    {
+        return profileId is "codex-desktop" or "chatgpt-desktop";
+    }
+
     internal static IReadOnlyList<string> RequiredEvidenceKeys { get; } = new[]
     {
         "application_identity_hash",
         "application_version_hash",
         "application_version_status",
+        "package_identity_status",
         "package_full_name_hash",
         "executable_name_hash",
         "process_name_hash",
@@ -78,6 +91,8 @@ public sealed record OpenAiDesktopIdentity(
                 !diagnostics.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value))
             || !diagnostics.TryGetValue("application_version_status", out var versionStatus)
             || !string.Equals(versionStatus, "available", StringComparison.Ordinal)
+            || !diagnostics.TryGetValue("package_identity_status", out var packageIdentityStatus)
+            || !string.Equals(packageIdentityStatus, "available", StringComparison.Ordinal)
             || !TryReadFingerprint(diagnostics, "application_identity_hash", out var applicationIdentity)
             || !TryReadFingerprint(diagnostics, "application_version_hash", out var applicationVersion)
             || !TryReadFingerprint(diagnostics, "package_full_name_hash", out var packageFullName)
@@ -120,9 +135,10 @@ public sealed record OpenAiDesktopIdentity(
 
     private static bool IsOpenAiProcess(string value)
     {
-        return string.Equals(value, "codex", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(value, "chatgpt", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(value, "chat gpt", StringComparison.OrdinalIgnoreCase);
+        var normalized = System.IO.Path.GetFileNameWithoutExtension(value.Trim());
+        return string.Equals(normalized, "codex", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, "chatgpt", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(normalized, "chat gpt", StringComparison.OrdinalIgnoreCase);
     }
 }
 
