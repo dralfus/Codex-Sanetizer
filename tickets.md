@@ -3082,8 +3082,9 @@ readiness result.
 
 ## 352. Add a resident-owned installed keyboard protected-Send canary
 
-**Current state (2026-08-26):** `[>]` The implementation slice is committed in
-`2d99fe2b`. The remaining acceptance step is to run **Run resident Send canary**
+**Current state (2026-08-26):** `[>]` The implementation slice and resident
+admission remediation are committed in `69a68046` (based on `2d99fe2b`). The
+remaining acceptance step is to run **Run resident Send canary**
 from the installed tray candidate and persist the raw-free `reproduced_red`
 artifact. Do not start 353 until that artifact exists.
 
@@ -3156,7 +3157,7 @@ overlay. The cause was that canary routing was checked only after ordinary
 sanitizer classification; a marker that was not yet in the resident policy
 could therefore take the normal pass-through path.
 
-**Remediation in progress (2026-08-26):** Armed canary admission now runs before
+**Remediation committed (2026-08-26, `69a68046`):** Armed canary admission now runs before
 ordinary keyboard classification for the exact selected profile and configured
 Send binding, and returns `SuppressOriginalInput=true`. Focused tests cover both
 classification and the suppressed-hook callback. The fix still requires a
