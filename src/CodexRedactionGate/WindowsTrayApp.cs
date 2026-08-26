@@ -575,7 +575,8 @@ internal sealed class WindowsTrayApplicationContext : ApplicationContext
             (action, stage, status, resultCode, attemptId) =>
                 _operationJournal.Append("coordinator", action, stage, status, resultCode, attemptId),
             localReadinessCheck,
-            requireResidentReadiness);
+            requireResidentReadiness,
+            copyCanaryMarker: marker => Clipboard.SetText(marker));
         _residentWorkflowCoordinator.SetupCompleted += result =>
         {
             try

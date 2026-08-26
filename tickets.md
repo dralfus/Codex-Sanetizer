@@ -3164,6 +3164,12 @@ classification and the suppressed-hook callback. The fix still requires a
 rebuilt installed candidate and a new canary run before the red artifact can be
 accepted as corrected.
 
+**UX update (2026-08-26):** After the resident canary reaches `armed`, the
+synthetic marker is copied to the Windows clipboard by the tray adapter. The
+notice confirms that the marker is ready to paste without exposing it in the
+operation journal or canary evidence. If the clipboard is unavailable, the
+notice provides a manual fallback and records only the clipboard failure.
+
 ## 353. Deepen composer access behind ProtectedComposerSession
 
 **What to build:** Introduce a target-scoped `ProtectedComposerSession`

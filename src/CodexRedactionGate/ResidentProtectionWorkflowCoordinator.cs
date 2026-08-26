@@ -24,6 +24,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
     private readonly Action<string, string, string, string, long> _publishOperationEvent;
     private readonly Func<LocalReadinessResult> _localReadinessCheck;
     private readonly bool _requireResidentReadiness;
+    private readonly Action<string>? _copyCanaryMarker;
     private int _setupScheduled;
     private int _workflowInProgress;
     private int _residentStarted;
@@ -41,7 +42,8 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         Action<Exception, string, string> captureFailure,
         Action<string, string, string, string, long>? publishOperationEvent = null,
         Func<LocalReadinessResult>? localReadinessCheck = null,
-        bool requireResidentReadiness = true)
+        bool requireResidentReadiness = true,
+        Action<string>? copyCanaryMarker = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
@@ -56,6 +58,7 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         _publishOperationEvent = publishOperationEvent ?? ((_, _, _, _, _) => { });
         _localReadinessCheck = localReadinessCheck ?? (() => LocalReadinessWorkflow.Run(_layout));
         _requireResidentReadiness = requireResidentReadiness;
+        _copyCanaryMarker = copyCanaryMarker;
     }
 
     public event Action<FirstRunSetupResult?>? SetupCompleted;
@@ -180,9 +183,18 @@ internal sealed class ResidentProtectionWorkflowCoordinator
             return;
         }
 
-        PublishNotice(
-            $"Resident canary armed. Paste marker {armed.Arm.Marker} into the selected OpenAI Desktop composer and press its protected Send key.",
-            false);
+        if (TryCopyCanaryMarker(armed.Arm.Marker))
+        {
+            PublishNotice(
+                "Resident canary armed. Its marker was copied to the clipboard. Paste it into the selected OpenAI Desktop composer and press its protected Send key.",
+                false);
+        }
+        else
+        {
+            PublishNotice(
+                $"Resident canary armed, but the marker could not be copied. Type {armed.Arm.Marker} manually into the selected OpenAI Desktop composer and press its protected Send key.",
+                true);
+        }
     }
 
     public void StartLocalReadiness()
@@ -925,6 +937,25 @@ internal sealed class ResidentProtectionWorkflowCoordinator
         catch (Exception exception)
         {
             _captureFailure(exception, "resident_workflow", "notice_dispatch_failed");
+        }
+    }
+
+    private bool TryCopyCanaryMarker(string marker)
+    {
+        if (_copyCanaryMarker is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            _copyCanaryMarker(marker);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            _captureFailure(exception, "resident_canary", "clipboard_copy_failed");
+            return false;
         }
     }
 

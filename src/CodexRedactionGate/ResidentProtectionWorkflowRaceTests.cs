@@ -96,6 +96,122 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void ResidentWorkflow_StartResidentCanaryCopiesMarkerToClipboard()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = CreateWorkflowProfile() with { ProfileId = "chatgpt-desktop" };
+        Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
+        Assert.That(ActivePromptProtectionTargetStore.Save(layout, profile.ProfileId).Succeeded, Is.True);
+
+        var hook = new FakeNativeSubmitHookHost();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
+        var protection = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => CreateSubmittedResult(profile.ProfileId),
+            hook,
+            controller,
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile,
+            storageLayout: layout,
+            residentCanaryRunner: (_, _, _, _, _, _) => throw new InvalidOperationException("Canary should not run before Send."));
+        var runtime = new ResidentProtectionRuntimeFacade(protection);
+        var notices = new List<(string Message, bool IsFailure)>();
+        string? copiedMarker = null;
+        var coordinator = CreateWorkflowCoordinator(
+            runtime,
+            layout,
+            setupResult: null,
+            setupCandidate: _ => null,
+            retryCandidate: () => null,
+            recoveredRuntime: null,
+            copyCanaryMarker: marker => copiedMarker = marker,
+            notice: (message, isFailure) => notices.Add((message, isFailure)),
+            captureFailure: null);
+
+        try
+        {
+            Assert.That(protection.Start(), Is.True);
+
+            coordinator.StartResidentCanary();
+
+            Assert.That(copiedMarker, Does.StartWith("CS_CANARY_"));
+            Assert.That(notices, Has.Count.EqualTo(1));
+            Assert.That(notices[0].Message, Does.Contain("copied to the clipboard"));
+            Assert.That(notices[0].Message, Does.Not.Contain(copiedMarker));
+            Assert.That(notices[0].IsFailure, Is.False);
+        }
+        finally
+        {
+            protection.Stop();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void ResidentWorkflow_StartResidentCanaryShowsManualMarkerWhenClipboardFails()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = CreateWorkflowProfile() with { ProfileId = "chatgpt-desktop" };
+        Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
+        Assert.That(ActivePromptProtectionTargetStore.Save(layout, profile.ProfileId).Succeeded, Is.True);
+
+        var hook = new FakeNativeSubmitHookHost();
+        var controller = new NativeSubmitInterceptionController(
+            profile,
+            new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)));
+        var protection = TrayProtectionController.CreateTest(
+            new FakeTrayHotkeyHost(),
+            () => CreateSubmittedResult(profile.ProfileId),
+            hook,
+            controller,
+            () => CreateSubmittedResult(profile.ProfileId),
+            profile,
+            storageLayout: layout,
+            residentCanaryRunner: (_, _, _, _, _, _) => throw new InvalidOperationException("Canary should not run before Send."));
+        var runtime = new ResidentProtectionRuntimeFacade(protection);
+        var notices = new List<(string Message, bool IsFailure)>();
+        Exception? capturedFailure = null;
+        var coordinator = CreateWorkflowCoordinator(
+            runtime,
+            layout,
+            setupResult: null,
+            setupCandidate: _ => null,
+            retryCandidate: () => null,
+            recoveredRuntime: null,
+            copyCanaryMarker: _ => throw new InvalidOperationException("clipboard unavailable"),
+            notice: (message, isFailure) => notices.Add((message, isFailure)),
+            captureFailure: exception => capturedFailure = exception);
+
+        try
+        {
+            Assert.That(protection.Start(), Is.True);
+
+            coordinator.StartResidentCanary();
+
+            Assert.That(notices, Has.Count.EqualTo(1));
+            Assert.That(notices[0].Message, Does.Contain("could not be copied"));
+            Assert.That(notices[0].Message, Does.Contain("CS_CANARY_"));
+            Assert.That(notices[0].IsFailure, Is.True);
+            Assert.That(capturedFailure?.Message, Is.EqualTo("clipboard unavailable"));
+        }
+        finally
+        {
+            protection.Stop();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
     public void ResidentWorkflow_ReloadThatLeavesSetupRequiredCannotPublishSetupComplete()
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -448,8 +564,29 @@ public partial class SanitizerTests
         Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?> setupCandidate,
         Func<NativeSubmitRuntimeSet?> retryCandidate,
         Func<ResidentProtectionRuntime>? recoveredRuntime = null)
+        => CreateWorkflowCoordinator(
+            runtime,
+            layout,
+            setupResult,
+            setupCandidate,
+            retryCandidate,
+            recoveredRuntime,
+            copyCanaryMarker: null,
+            notice: null,
+            captureFailure: null);
+
+    private static ResidentProtectionWorkflowCoordinator CreateWorkflowCoordinator(
+        IResidentProtectionWorkflowPort runtime,
+        DefaultStorageLayout layout,
+        FirstRunSetupResult? setupResult,
+        Func<IReadOnlyList<SubmitBindingProfile>, NativeSubmitRuntimeSet?> setupCandidate,
+        Func<NativeSubmitRuntimeSet?> retryCandidate,
+        Func<ResidentProtectionRuntime>? recoveredRuntime,
+        Action<string>? copyCanaryMarker,
+        Action<string, bool>? notice,
+        Action<Exception>? captureFailure)
     {
-        return new ResidentProtectionWorkflowCoordinator(
+        var coordinator = new ResidentProtectionWorkflowCoordinator(
             runtime,
             layout,
             () => new WorkflowSetupController(_ => setupResult
@@ -466,7 +603,14 @@ public partial class SanitizerTests
                 VaultInitialized: true),
             action => action(),
             action => action(),
-            (_, _, _) => { });
+            (exception, _, _) => captureFailure?.Invoke(exception),
+            copyCanaryMarker: copyCanaryMarker);
+        if (notice is not null)
+        {
+            coordinator.Notice += notice;
+        }
+
+        return coordinator;
     }
 
     private static FirstRunSetupResult SuccessfulSetupResult(
