@@ -199,30 +199,39 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
         var applicationVersion = string.IsNullOrWhiteSpace(snapshot.ApplicationVersion)
             ? ApplicationVersion(snapshot.WindowHandle)
             : snapshot.ApplicationVersion;
-        var stableProcessName = OpenAiDesktopIdentity.NormalizeProductId(snapshot.ProcessName);
-        var stableExecutableName = OpenAiDesktopIdentity.NormalizeExecutableName(
-            string.IsNullOrWhiteSpace(snapshot.ExecutableName) ? snapshot.ProcessName : snapshot.ExecutableName);
+        var canonicalProcessName = OpenAiDesktopIdentity.NormalizeProductId(snapshot.ProcessName);
+        var canonicalExecutableName = OpenAiDesktopIdentity.NormalizeExecutableName(snapshot.ExecutableName);
         var packageFullName = PackageFullName(snapshot.WindowHandle, snapshot.PackageFullName);
+        var packageFamilyName = OpenAiDesktopIdentity.NormalizePackageFamilyName(packageFullName);
+        var packageIdentityStatus = OpenAiDesktopIdentity.IsSupportedPackageFullName(packageFullName)
+            ? "available"
+            : "unavailable";
+        var windowBranding = OpenAiDesktopIdentity.NormalizeWindowBranding(snapshot.WindowTitle);
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["window_title_length"] = snapshot.WindowTitle.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["process_name_length"] = snapshot.ProcessName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["application_identity_hash"] = Hash(OpenAiDesktopIdentity.NormalizeProductId(snapshot.ProcessName)),
-            ["application_version_hash"] = Hash(applicationVersion),
+            ["application_identity_hash"] = HashIfPresent(canonicalProcessName),
+            ["application_version_hash"] = HashIfPresent(
+                string.Equals(ApplicationVersionStatus(applicationVersion), "available", StringComparison.Ordinal)
+                    ? applicationVersion
+                    : string.Empty),
             ["application_version_status"] = ApplicationVersionStatus(applicationVersion),
-            ["package_identity_status"] = string.IsNullOrWhiteSpace(packageFullName) ? "unavailable" : "available",
-            ["package_full_name_hash"] = Hash(packageFullName),
-            ["executable_name_hash"] = Hash(stableExecutableName),
-            ["process_name_hash"] = Hash(stableProcessName),
-            ["target_process_hash"] = Hash($"{snapshot.ProcessName}|{snapshot.WindowHandle.ToInt64():X}"),
-            ["window_identity_hash"] = Hash($"{snapshot.WindowClassName}|{snapshot.WindowHandle.ToInt64():X}"),
-            ["window_class_hash"] = Hash(snapshot.WindowClassName),
-            ["composer_class_hash"] = Hash(snapshot.ElementClassName),
+            ["package_identity_status"] = packageIdentityStatus,
+            ["package_family_name"] = packageFamilyName,
+            ["package_full_name_hash"] = HashIfPresent(packageFullName),
+            ["executable_name_hash"] = HashIfPresent(canonicalExecutableName),
+            ["process_name_hash"] = HashIfPresent(canonicalProcessName),
+            ["target_process_hash"] = HashIfPresent($"{snapshot.ProcessName}|{snapshot.WindowHandle.ToInt64():X}"),
+            ["window_identity_hash"] = HashIfPresent($"{snapshot.WindowClassName}|{snapshot.WindowHandle.ToInt64():X}"),
+            ["window_class_hash"] = HashIfPresent(snapshot.WindowClassName),
+            ["composer_class_hash"] = HashIfPresent(snapshot.ElementClassName),
+            ["window_branding"] = windowBranding,
             ["window_class_name_length"] = snapshot.WindowClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["element_control_type"] = snapshot.ElementControlType,
             ["element_class_name_length"] = snapshot.ElementClassName.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["element_automation_id_length"] = snapshot.ElementAutomationId.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["element_framework_id"] = string.IsNullOrEmpty(snapshot.ElementFrameworkId) ? "unknown" : snapshot.ElementFrameworkId,
+            ["element_framework_id"] = snapshot.ElementFrameworkId,
             ["has_keyboard_focus"] = snapshot.HasKeyboardFocus.ToString().ToLowerInvariant(),
             ["is_keyboard_focusable"] = snapshot.IsKeyboardFocusable.ToString().ToLowerInvariant(),
             ["is_enabled"] = snapshot.IsEnabled.ToString().ToLowerInvariant(),
@@ -252,7 +261,8 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
 
     private static string ApplicationVersionStatus(string applicationVersion)
     {
-        return string.Equals(applicationVersion, "unknown", StringComparison.Ordinal)
+        return string.IsNullOrWhiteSpace(applicationVersion)
+            || string.Equals(applicationVersion, "unknown", StringComparison.OrdinalIgnoreCase)
             ? "unavailable"
             : "available";
     }
@@ -278,7 +288,7 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
             }
 
             using var process = Process.GetProcessById((int)processId);
-            return PackageMethods.TryGetPackageFullName(process.Handle);
+            return WindowsPackageIdentity.TryGetPackageFullName(process.Handle);
         }
         catch (Exception)
         {
@@ -289,6 +299,11 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
     private static string Hash(string value)
     {
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    }
+
+    private static string HashIfPresent(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : Hash(value);
     }
 
     private static IReadOnlyDictionary<string, string> Merge(
@@ -317,7 +332,7 @@ public sealed class WindowsFocusedComposerDiscovery : IActiveTextSurfaceDiscover
         return merged;
     }
 
-    private static class PackageMethods
+    private static class WindowsPackageIdentity
     {
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern int GetPackageFullName(

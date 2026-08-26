@@ -22,12 +22,14 @@ internal sealed class ChatGptDiscoveryFixtureBuilder
             ["application_version_hash"] = ChatGptDiscoveryFixture.Fingerprint("version"),
             ["application_version_status"] = "available",
             ["package_identity_status"] = "available",
+            ["package_family_name"] = "OpenAI.Codex",
             ["package_full_name_hash"] = ChatGptDiscoveryFixture.Fingerprint("package"),
             ["executable_name_hash"] = ChatGptDiscoveryFixture.Fingerprint(OpenAiDesktopIdentity.ProductId),
             ["process_name_hash"] = ChatGptDiscoveryFixture.Fingerprint(OpenAiDesktopIdentity.ProductId),
             ["target_process_hash"] = ChatGptDiscoveryFixture.Fingerprint("process-instance"),
             ["window_identity_hash"] = ChatGptDiscoveryFixture.Fingerprint("window"),
             ["window_class_hash"] = ChatGptDiscoveryFixture.Fingerprint("window-class"),
+            ["window_branding"] = OpenAiDesktopIdentity.ProductId,
             ["composer_class_hash"] = ChatGptDiscoveryFixture.Fingerprint("composer"),
             ["element_control_type"] = "ControlType.Group",
             ["element_framework_id"] = "Chrome",
@@ -45,6 +47,12 @@ internal sealed class ChatGptDiscoveryFixtureBuilder
 
     internal ChatGptDiscoveryFixtureBuilder WithPackageFullNameFingerprint(string fingerprint)
         => WithFingerprint("package_full_name_hash", fingerprint);
+
+    internal ChatGptDiscoveryFixtureBuilder WithWindowBranding(string branding)
+    {
+        _diagnostics["window_branding"] = OpenAiDesktopIdentity.NormalizeWindowBranding(branding);
+        return this;
+    }
 
     internal ChatGptDiscoveryFixtureBuilder WithExecutableNameFingerprint(string fingerprint)
         => WithFingerprint("executable_name_hash", fingerprint);

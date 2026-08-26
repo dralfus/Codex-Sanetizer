@@ -391,10 +391,12 @@ public partial class SanitizerTests
             "application_version_hash",
             "application_version_status",
             "package_identity_status",
+            "package_family_name",
             "package_full_name_hash",
             "executable_name_hash",
             "process_name_hash",
             "window_class_hash",
+            "window_branding",
             "element_framework_id",
             "element_control_type",
             "composer_class_hash"

@@ -8,6 +8,30 @@ internal static class ChatGptDesktopCompatibility
 {
     internal static IReadOnlyList<string> RequiredEvidenceKeys => OpenAiDesktopIdentity.RequiredEvidenceKeys;
 
+    internal static bool IsTransientTargetDiagnosticKey(string key)
+    {
+        var normalized = key.StartsWith("surface.", StringComparison.Ordinal)
+            ? key["surface.".Length..]
+            : key;
+        return normalized is "target_process_hash" or "window_identity_hash" or "focused_element_hash";
+    }
+
+    internal static IReadOnlyDictionary<string, string> PersistedDiscoveryDiagnostics(
+        IReadOnlyDictionary<string, string> discoveryDiagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(discoveryDiagnostics);
+        var persisted = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var item in discoveryDiagnostics)
+        {
+            if (!IsTransientTargetDiagnosticKey(item.Key))
+            {
+                persisted[item.Key] = item.Value;
+            }
+        }
+
+        return persisted;
+    }
+
     public static SubmitBindingProfile RequirePinnedFingerprint(SubmitBindingProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);

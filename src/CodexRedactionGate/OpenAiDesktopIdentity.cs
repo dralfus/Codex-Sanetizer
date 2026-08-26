@@ -17,19 +17,52 @@ public sealed record OpenAiDesktopIdentity(
     OpaqueFingerprint ComposerClassFingerprint)
 {
     public const string ProductId = "openai-desktop";
+    internal const string SupportedPackageFamilyName = "OpenAI.Codex";
 
-    internal static string NormalizeProductId(string processName)
+    public string PackageFamilyName { get; init; } = "unknown";
+
+    public string WindowBranding { get; init; } = "unknown";
+
+    internal static string NormalizeProductId(string? processName)
     {
         return IsOpenAiProcess(processName)
             ? ProductId
-            : processName;
+            : processName?.Trim() ?? string.Empty;
     }
 
-    internal static string NormalizeExecutableName(string executableName)
+    internal static string NormalizeExecutableName(string? executableName)
     {
         return IsOpenAiProcess(executableName)
             ? ProductId
-            : executableName;
+            : executableName?.Trim() ?? string.Empty;
+    }
+
+    internal static string NormalizeWindowBranding(string? windowTitle)
+    {
+        return !string.IsNullOrWhiteSpace(windowTitle)
+            && (windowTitle.Contains("codex", StringComparison.OrdinalIgnoreCase)
+                || windowTitle.Contains("chatgpt", StringComparison.OrdinalIgnoreCase))
+            ? ProductId
+            : "unknown";
+    }
+
+    internal static string NormalizePackageFamilyName(string? packageFullName)
+    {
+        if (string.IsNullOrWhiteSpace(packageFullName))
+        {
+            return string.Empty;
+        }
+
+        var separator = packageFullName.IndexOf('_');
+        return separator > 0 ? packageFullName[..separator] : packageFullName;
+    }
+
+    internal static bool IsSupportedPackageFullName(string? packageFullName)
+    {
+        return string.Equals(
+            NormalizePackageFamilyName(packageFullName),
+            SupportedPackageFamilyName,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool IsSupportedProfileId(string profileId)
@@ -43,10 +76,12 @@ public sealed record OpenAiDesktopIdentity(
         "application_version_hash",
         "application_version_status",
         "package_identity_status",
+        "package_family_name",
         "package_full_name_hash",
         "executable_name_hash",
         "process_name_hash",
         "window_class_hash",
+        "window_branding",
         "composer_class_hash",
         "element_control_type",
         "element_framework_id"
@@ -57,9 +92,11 @@ public sealed record OpenAiDesktopIdentity(
         && ApplicationVersionFingerprint.IsValid
         && string.Equals(ApplicationVersionStatus, "available", StringComparison.Ordinal)
         && PackageFullNameFingerprint.IsValid
+        && string.Equals(PackageFamilyName, SupportedPackageFamilyName, StringComparison.Ordinal)
         && ExecutableNameFingerprint.IsValid
         && ProcessNameFingerprint.IsValid
         && WindowClassFingerprint.IsValid
+        && string.Equals(WindowBranding, ProductId, StringComparison.Ordinal)
         && FrameworkFingerprint.IsValid
         && ControlTypeFingerprint.IsValid
         && ComposerClassFingerprint.IsValid;
@@ -71,10 +108,12 @@ public sealed record OpenAiDesktopIdentity(
             ["application_identity_hash"] = ApplicationIdentityFingerprint.Value,
             ["application_version_hash"] = ApplicationVersionFingerprint.Value,
             ["application_version_status"] = ApplicationVersionStatus,
+            ["package_family_name"] = PackageFamilyName,
             ["package_full_name_hash"] = PackageFullNameFingerprint.Value,
             ["executable_name_hash"] = ExecutableNameFingerprint.Value,
             ["process_name_hash"] = ProcessNameFingerprint.Value,
             ["window_class_hash"] = WindowClassFingerprint.Value,
+            ["window_branding"] = WindowBranding,
             ["element_framework_id"] = FrameworkFingerprint.Value,
             ["element_control_type"] = ControlTypeFingerprint.Value,
             ["composer_class_hash"] = ComposerClassFingerprint.Value
@@ -93,6 +132,10 @@ public sealed record OpenAiDesktopIdentity(
             || !string.Equals(versionStatus, "available", StringComparison.Ordinal)
             || !diagnostics.TryGetValue("package_identity_status", out var packageIdentityStatus)
             || !string.Equals(packageIdentityStatus, "available", StringComparison.Ordinal)
+            || !TryReadCanonicalValue(diagnostics, "package_family_name", SupportedPackageFamilyName, out var packageFamilyName)
+            || !TryReadCanonicalValue(diagnostics, "window_branding", ProductId, out var windowBranding)
+            || !TryReadMeaningfulValue(diagnostics, "element_framework_id", out var frameworkId)
+            || !TryReadMeaningfulValue(diagnostics, "element_control_type", out var controlType)
             || !TryReadFingerprint(diagnostics, "application_identity_hash", out var applicationIdentity)
             || !TryReadFingerprint(diagnostics, "application_version_hash", out var applicationVersion)
             || !TryReadFingerprint(diagnostics, "package_full_name_hash", out var packageFullName)
@@ -112,10 +155,56 @@ public sealed record OpenAiDesktopIdentity(
             executableName,
             processName,
             windowClass,
-            OpaqueFingerprint.FromSource(diagnostics["element_framework_id"]),
-            OpaqueFingerprint.FromSource(diagnostics["element_control_type"]),
+            OpaqueFingerprint.FromSource(frameworkId),
+            OpaqueFingerprint.FromSource(controlType),
             composerClass);
+        identity = identity with
+        {
+            PackageFamilyName = packageFamilyName,
+            WindowBranding = windowBranding
+        };
         return identity.IsComplete;
+    }
+
+    private static bool TryReadCanonicalValue(
+        IReadOnlyDictionary<string, string> diagnostics,
+        string key,
+        string expected,
+        out string value)
+    {
+        value = string.Empty;
+        if (!diagnostics.TryGetValue(key, out var candidate)
+            || !string.Equals(candidate, expected, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        value = candidate;
+        return true;
+    }
+
+    private static bool TryReadMeaningfulValue(
+        IReadOnlyDictionary<string, string> diagnostics,
+        string key,
+        out string value)
+    {
+        value = string.Empty;
+        if (!diagnostics.TryGetValue(key, out var candidate)
+            || string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        var normalized = candidate.Trim();
+        if (normalized.Equals("unknown", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("unavailable", StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals("not_available", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        value = normalized;
+        return true;
     }
 
     private static bool TryReadFingerprint(
@@ -133,8 +222,13 @@ public sealed record OpenAiDesktopIdentity(
         return false;
     }
 
-    private static bool IsOpenAiProcess(string value)
+    private static bool IsOpenAiProcess(string? value)
     {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
         var normalized = System.IO.Path.GetFileNameWithoutExtension(value.Trim());
         return string.Equals(normalized, "codex", StringComparison.OrdinalIgnoreCase)
             || string.Equals(normalized, "chatgpt", StringComparison.OrdinalIgnoreCase)

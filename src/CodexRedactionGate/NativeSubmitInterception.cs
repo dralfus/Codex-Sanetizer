@@ -549,7 +549,7 @@ public static class SubmitBindingOnboardingVerifier
             return Failed(profileId, OsInteractionStatusIds.SurfaceUnverified, diagnostics, evidence);
         }
 
-        foreach (var item in discovery.Diagnostics)
+        foreach (var item in ChatGptDesktopCompatibility.PersistedDiscoveryDiagnostics(discovery.Diagnostics))
         {
             diagnostics[$"surface.{item.Key}"] = item.Value;
         }

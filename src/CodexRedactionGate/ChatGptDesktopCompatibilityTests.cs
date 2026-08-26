@@ -119,6 +119,85 @@ public sealed class ChatGptDesktopCompatibilityTests
     }
 
     [Test]
+    public void CompatibilityEvidence_NormalizesCodexAndChatGptWindowBranding()
+    {
+        var codexDiscovery = ChatGptDiscoveryFixture.CreateBuilder()
+            .WithWindowBranding("Codex")
+            .Build();
+        var chatGptDiscovery = ChatGptDiscoveryFixture.CreateBuilder()
+            .WithWindowBranding("ChatGPT")
+            .Build();
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", codexDiscovery);
+
+        var result = SurfaceCompatibilityEvaluator.Evaluate(
+            profile,
+            chatGptDiscovery.Surface,
+            ChatGptDesktopCompatibility.ActiveEvidence(profile, chatGptDiscovery));
+
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.Protected));
+    }
+
+    [Test]
+    public void VerifyUserBindings_DoesNotPersistTransientTargetDiagnostics()
+    {
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop", "Ctrl+Enter", "Enter", VerifiedChatGptDiscovery());
+
+        var transientKeys = new[]
+        {
+            "surface.target_process_hash",
+            "surface.window_identity_hash",
+            "surface.focused_element_hash"
+        };
+        var serialized = System.Text.Json.JsonSerializer.Serialize(profile);
+
+        foreach (var key in transientKeys)
+        {
+            Assert.That(profile.Diagnostics.ContainsKey(key), Is.False, key);
+            Assert.That(serialized, Does.Not.Contain(key), key);
+        }
+
+        Assert.That(profile.CompatibilityEvidence!.VerifiedTargetFingerprint?.IsComplete, Is.True);
+    }
+
+    [Test]
+    public void CompatibilityIdentity_RejectsUnsupportedPackageFamilyAndUnknownBranding()
+    {
+        var unsupportedPackage = new Dictionary<string, string>(
+            VerifiedChatGptDiscovery().Diagnostics,
+            StringComparer.Ordinal)
+        {
+            ["package_family_name"] = "Microsoft.WindowsCalculator",
+            ["window_branding"] = OpenAiDesktopIdentity.ProductId
+        };
+        var unknownBranding = new Dictionary<string, string>(
+            VerifiedChatGptDiscovery().Diagnostics,
+            StringComparer.Ordinal)
+        {
+            ["package_family_name"] = "OpenAI.Codex",
+            ["window_branding"] = "unknown"
+        };
+
+        Assert.That(OpenAiDesktopIdentity.TryCreate(unsupportedPackage, out _), Is.False);
+        Assert.That(OpenAiDesktopIdentity.TryCreate(unknownBranding, out _), Is.False);
+    }
+
+    [Test]
+    public void CompatibilityIdentity_RejectsPlaceholderFrameworkAndControlEvidence()
+    {
+        var diagnostics = new Dictionary<string, string>(
+            VerifiedChatGptDiscovery().Diagnostics,
+            StringComparer.Ordinal)
+        {
+            ["element_framework_id"] = "unknown",
+            ["element_control_type"] = ""
+        };
+
+        Assert.That(OpenAiDesktopIdentity.TryCreate(diagnostics, out _), Is.False);
+    }
+
+    [Test]
     public void TransientTargetFingerprint_UsesTheOpaqueFingerprintContractForRuntimeIds()
     {
         var fingerprint = TransientTargetFingerprint.FingerprintRuntimeId(new[] { 42, 7, 9 });
