@@ -379,12 +379,51 @@ internal static class ResidentCanaryBuildIdentity
         return "unbound";
     }
 
-    internal static string SafeCompatibilityFingerprint(TextSurfaceDescriptor surface)
+    internal static bool TryGetCompatibilityFingerprint(
+        SubmitBindingProfile profile,
+        out string fingerprint)
     {
-        var value = surface.Metadata.TryGetValue("compatibility_fingerprint")
-            ?? surface.ProfileId;
-        return OpaqueFingerprint.FromSource(value).Value;
+        ArgumentNullException.ThrowIfNull(profile);
+        fingerprint = "unbound";
+        if (profile.CompatibilityEvidence?.IsComplete != true
+            || !OpaqueFingerprint.TryParse(
+                profile.CompatibilityEvidence.VerificationId,
+                out var parsed))
+        {
+            return false;
+        }
+
+        fingerprint = parsed.Value;
+        return true;
     }
+
+    internal static bool HasCompleteEvidenceBinding(SubmitBindingProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        return SafeBinding(profile) is not ("unknown" or "unbound")
+            && TryGetCompatibilityFingerprint(profile, out _)
+            && IsBoundVersion(BuildVersion.Current)
+            && IsBoundCommit(SourceCommit())
+            && IsBoundHash(ExecutableSha256())
+            && IsBoundVersion(InstallerIdentity());
+    }
+
+    private static bool IsBoundVersion(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value != "unbound"
+        && value.All(character => char.IsLetterOrDigit(character)
+            || character is '.' or '-' or '_' or '+');
+
+    private static bool IsBoundCommit(string? value) =>
+        value is not null
+        && value != "unbound"
+        && value.Length is >= 7 and <= 64
+        && value.All(character => character is >= 'a' and <= 'f' or >= '0' and <= '9');
+
+    private static bool IsBoundHash(string? value) =>
+        value is not null
+        && value.Length == 64
+        && value.All(character => character is >= 'a' and <= 'f' or >= '0' and <= '9');
 
     internal static string SafeBinding(SubmitBindingProfile profile)
     {
@@ -630,8 +669,11 @@ internal sealed record ResidentCanaryEvidence(
     string SourceCommit,
     string ExecutableSha256,
     string InstallerIdentity,
-    string CompatibilityFingerprint)
+    string CompatibilityFingerprint,
+    string EvidenceDisposition = "diagnostic")
 {
+    internal bool IsAdvancingEvidence => EvidenceDisposition == "advancing";
+
     internal static ResidentCanaryEvidence Passed(
         long attemptId,
         string profileId,
@@ -656,7 +698,8 @@ internal sealed record ResidentCanaryEvidence(
             installerIdentity,
             compatibilityFingerprint,
             "passed",
-            "terminal_passed");
+            "terminal_passed",
+            "advancing");
 
     internal static ResidentCanaryEvidence Failed(
         long attemptId,
@@ -683,7 +726,17 @@ internal sealed record ResidentCanaryEvidence(
             installerIdentity,
             compatibilityFingerprint,
             "failed",
-            reason);
+            reason,
+            IsCompleteIdentity(
+                profileId,
+                submitBinding,
+                buildVersion,
+                sourceCommit,
+                executableSha256,
+                installerIdentity,
+                compatibilityFingerprint)
+                ? "advancing"
+                : "diagnostic");
 
     private static ResidentCanaryEvidence Create(
         long attemptId,
@@ -698,7 +751,8 @@ internal sealed record ResidentCanaryEvidence(
         string installerIdentity,
         string compatibilityFingerprint,
         string outcome,
-        string terminalReason) => new(
+        string terminalReason,
+        string evidenceDisposition) => new(
             "1",
             "352",
             "installed_keyboard_canary",
@@ -715,7 +769,48 @@ internal sealed record ResidentCanaryEvidence(
             sourceCommit,
             executableSha256,
             installerIdentity,
-            compatibilityFingerprint);
+            compatibilityFingerprint,
+            evidenceDisposition);
+
+    private static bool IsCompleteIdentity(
+        string profileId,
+        string submitBinding,
+        string buildVersion,
+        string sourceCommit,
+        string executableSha256,
+        string installerIdentity,
+        string compatibilityFingerprint)
+    {
+        return IsProfile(profileId)
+            && IsBinding(submitBinding)
+            && submitBinding is not "unknown" and not "unbound"
+            && IsVersion(buildVersion)
+            && IsCommit(sourceCommit)
+            && sourceCommit != "unbound"
+            && IsHash(executableSha256)
+            && IsVersion(installerIdentity)
+            && installerIdentity != "unbound"
+            && IsHash(compatibilityFingerprint);
+    }
+
+    private static bool IsProfile(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.All(character => char.IsLetterOrDigit(character) || character is '-' or '_');
+
+    private static bool IsBinding(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.All(character => char.IsLetterOrDigit(character) || character is '+' or '_' or '-');
+
+    private static bool IsVersion(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.All(character => char.IsLetterOrDigit(character) || character is '.' or '-' or '_' or '+');
+
+    private static bool IsCommit(string? value) => value == "unbound" || IsHash(value);
+
+    private static bool IsHash(string? value) =>
+        value is not null
+        && value.Length is >= 7 and <= 64
+        && value.All(character => character is >= 'a' and <= 'f' or >= '0' and <= '9');
 }
 
 internal sealed class ResidentCanaryEvidenceStore
@@ -804,9 +899,10 @@ internal sealed class ResidentCanaryEvidenceStore
             && evidence.SensitiveContentExcluded
             && IsVersion(evidence.BuildVersion)
             && IsCommit(evidence.SourceCommit)
-            && IsHashOrUnbound(evidence.ExecutableSha256)
-            && IsVersionOrUnbound(evidence.InstallerIdentity)
-            && IsHashOrUnbound(evidence.CompatibilityFingerprint);
+            && evidence.EvidenceDisposition is "advancing" or "diagnostic"
+            && (evidence.EvidenceDisposition == "advancing"
+                ? IsCompleteIdentity(evidence)
+                : evidence.Outcome == "failed" && !IsCompleteIdentity(evidence));
     }
 
     private static bool IsToken(string? value) =>
@@ -829,12 +925,20 @@ internal sealed class ResidentCanaryEvidenceStore
 
     private static bool IsCommit(string? value) => value == "unbound" || IsHash(value);
 
-    private static bool IsHashOrUnbound(string? value) => value == "unbound" || IsHash(value);
-
-    private static bool IsVersionOrUnbound(string? value) => value == "unbound" || IsVersion(value);
-
     private static bool IsHash(string? value) =>
         value is not null
         && value.Length is >= 7 and <= 64
         && value.All(character => character is >= 'a' and <= 'f' or >= '0' and <= '9');
+
+    private static bool IsCompleteIdentity(ResidentCanaryEvidence evidence) =>
+        IsProfile(evidence.ProfileId)
+        && IsBinding(evidence.SubmitBinding)
+        && evidence.SubmitBinding is not "unknown" and not "unbound"
+        && IsVersion(evidence.BuildVersion)
+        && IsCommit(evidence.SourceCommit)
+        && evidence.SourceCommit != "unbound"
+        && IsHash(evidence.ExecutableSha256)
+        && IsVersion(evidence.InstallerIdentity)
+        && evidence.InstallerIdentity != "unbound"
+        && IsHash(evidence.CompatibilityFingerprint);
 }

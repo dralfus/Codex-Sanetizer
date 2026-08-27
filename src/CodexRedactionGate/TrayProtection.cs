@@ -3540,15 +3540,29 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 
         var cleanupSucceeded = result.Diagnostics.TryGetValue("canary_cleanup", out var cleanup)
             && string.Equals(cleanup, "true", StringComparison.Ordinal);
+        var evidenceBindingComplete = ResidentCanaryBuildIdentity.HasCompleteEvidenceBinding(runtime.Profile);
         var succeeded = result.Submitted
             && cleanupSucceeded
             && result.Diagnostics.TryGetValue("cloud_submission", out var cloudSubmission)
-            && string.Equals(cloudSubmission, "false", StringComparison.Ordinal);
+            && string.Equals(cloudSubmission, "false", StringComparison.Ordinal)
+            && evidenceBindingComplete;
         var code = succeeded
             ? "passed"
             : result.Diagnostics.TryGetValue("canary_code", out var failureCode)
                 ? failureCode
-                : result.Status;
+                : evidenceBindingComplete
+                    ? result.Status
+                    : "evidence_binding_incomplete";
+        if (!succeeded && result.Submitted)
+        {
+            result = result with
+            {
+                Status = OsInteractionStatusIds.FailedClosed,
+                Applied = false,
+                Submitted = false,
+                Diagnostics = MergeDiagnostics(result.Diagnostics, ("canary_code", code))
+            };
+        }
         var completed = _residentCanary.Complete(arm, succeeded, code, cleanupSucceeded);
         var evidenceSaved = SaveResidentCanaryEvidence(runtime, arm, completed);
         if (!evidenceSaved)
@@ -3572,6 +3586,11 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         ResidentCanaryArm arm,
         ResidentCanaryExecutionResult result)
     {
+        var compatibilityFingerprint = ResidentCanaryBuildIdentity.TryGetCompatibilityFingerprint(
+            runtime.Profile,
+            out var boundCompatibilityFingerprint)
+            ? boundCompatibilityFingerprint
+            : "unbound";
         var evidence = result.Succeeded
             ? ResidentCanaryEvidence.Passed(
                 arm.AttemptId,
@@ -3584,8 +3603,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 ResidentCanaryBuildIdentity.SourceCommit(),
                 ResidentCanaryBuildIdentity.ExecutableSha256(),
                 ResidentCanaryBuildIdentity.InstallerIdentity(),
-                runtime.Profile.CompatibilityEvidence?.VerificationId
-                    ?? OpaqueFingerprint.FromSource(runtime.Profile.ProfileId).Value)
+                compatibilityFingerprint)
             : ResidentCanaryEvidence.Failed(
                 arm.AttemptId,
                 arm.ProfileId,
@@ -3598,8 +3616,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 ResidentCanaryBuildIdentity.SourceCommit(),
                 ResidentCanaryBuildIdentity.ExecutableSha256(),
                 ResidentCanaryBuildIdentity.InstallerIdentity(),
-                runtime.Profile.CompatibilityEvidence?.VerificationId
-                    ?? OpaqueFingerprint.FromSource(runtime.Profile.ProfileId).Value);
+                compatibilityFingerprint);
         return new ResidentCanaryEvidenceStore(_storageLayout).TrySave(evidence);
     }
 

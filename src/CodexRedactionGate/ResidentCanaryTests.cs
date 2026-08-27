@@ -198,9 +198,9 @@ public sealed class ResidentCanaryTests
             stages: new[] { "requested", "armed", "terminal_passed" },
             cleanupSucceeded: true,
             buildVersion: "0.1.test",
-            sourceCommit: "unbound",
+            sourceCommit: new string('c', 40),
             executableSha256: new string('a', 64),
-            installerIdentity: "unbound",
+            installerIdentity: "installer_candidate",
             compatibilityFingerprint: new string('b', 64));
 
         try
@@ -223,6 +223,125 @@ public sealed class ResidentCanaryTests
                 Directory.Delete(directory, recursive: true);
             }
         }
+    }
+
+    [Test]
+    public void EvidenceStore_RejectsPassedCanaryWithoutBoundCompatibilityEvidence()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-canary-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var evidence = ResidentCanaryEvidence.Passed(
+            attemptId: 42,
+            profileId: "chatgpt-desktop",
+            targetGeneration: 7,
+            submitBinding: "Ctrl+Enter",
+            stages: new[] { "requested", "armed", "terminal_passed" },
+            cleanupSucceeded: true,
+            buildVersion: "0.1.test",
+            sourceCommit: new string('c', 40),
+            executableSha256: new string('a', 64),
+            installerIdentity: "installer_candidate",
+            compatibilityFingerprint: "unbound");
+
+        try
+        {
+            Assert.That(new ResidentCanaryEvidenceStore(layout).TrySave(evidence), Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void EvidenceStore_PersistsIncompleteFailureAsDiagnosticOnly()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-canary-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var evidence = ResidentCanaryEvidence.Failed(
+            attemptId: 7,
+            profileId: "chatgpt-desktop",
+            targetGeneration: 9,
+            submitBinding: "unknown",
+            stages: new[] { "requested", "terminal_failed" },
+            reason: "target_verification_failed",
+            cleanupSucceeded: true,
+            buildVersion: "0.1.test",
+            sourceCommit: "unbound",
+            executableSha256: "unbound",
+            installerIdentity: "unbound",
+            compatibilityFingerprint: "unbound");
+
+        try
+        {
+            var store = new ResidentCanaryEvidenceStore(layout);
+            Assert.That(store.TrySave(evidence), Is.True);
+            Assert.That(store.TryLoad(out var loaded), Is.True);
+            Assert.That(loaded!.EvidenceDisposition, Is.EqualTo("diagnostic"));
+            Assert.That(loaded.IsAdvancingEvidence, Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void EvidenceStore_RejectsUnboundIdentityWhenFailureClaimsAdvancingEvidence()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-canary-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var evidence = ResidentCanaryEvidence.Failed(
+            attemptId: 8,
+            profileId: "chatgpt-desktop",
+            targetGeneration: 9,
+            submitBinding: "unknown",
+            stages: new[] { "requested", "terminal_failed" },
+            reason: "target_verification_failed",
+            cleanupSucceeded: true,
+            buildVersion: "0.1.test",
+            sourceCommit: "unbound",
+            executableSha256: "unbound",
+            installerIdentity: "unbound",
+            compatibilityFingerprint: "unbound") with
+        {
+            EvidenceDisposition = "advancing"
+        };
+
+        try
+        {
+            Assert.That(new ResidentCanaryEvidenceStore(layout).TrySave(evidence), Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
+    public void BuildIdentity_DoesNotUseProfileIdAsCompatibilityFingerprintFallback()
+    {
+        var profile = new SubmitBindingProfile(
+            "chatgpt-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+
+        Assert.That(ResidentCanaryBuildIdentity.TryGetCompatibilityFingerprint(profile, out var fingerprint), Is.False);
+        Assert.That(fingerprint, Is.EqualTo("unbound"));
     }
 
     [Test]
@@ -420,12 +539,16 @@ public sealed class ResidentCanaryTests
                 () => true,
                 () => new CanaryLease());
 
-            Assert.That(result.Submitted, Is.True);
+            Assert.That(result.Submitted, Is.False);
+            Assert.That(result.Diagnostics["canary_code"], Is.EqualTo("evidence_binding_incomplete"));
             Assert.That(result.Diagnostics["cloud_submission"], Is.EqualTo("false"));
             Assert.That(canaryRunnerCalls, Is.EqualTo(1));
             Assert.That(productionRunnerCalls, Is.EqualTo(0));
             Assert.That(completionCalls, Is.EqualTo(1));
-            Assert.That(File.Exists(Path.Combine(layout.SettingsDirectory, "resident-canary.json")), Is.True);
+            var store = new ResidentCanaryEvidenceStore(layout);
+            Assert.That(store.TryLoad(out var evidence), Is.True);
+            Assert.That(evidence!.EvidenceDisposition, Is.EqualTo("diagnostic"));
+            Assert.That(evidence.IsAdvancingEvidence, Is.False);
         }
         finally
         {
