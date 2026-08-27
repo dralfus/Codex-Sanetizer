@@ -735,6 +735,7 @@ internal sealed record ResidentCanaryEvidence(
                 executableSha256,
                 installerIdentity,
                 compatibilityFingerprint)
+                && IsReproducedFailure(reason, stages)
                 ? "advancing"
                 : "diagnostic");
 
@@ -792,6 +793,12 @@ internal sealed record ResidentCanaryEvidence(
             && installerIdentity != "unbound"
             && IsHash(compatibilityFingerprint);
     }
+
+    private static bool IsReproducedFailure(string reason, IReadOnlyList<string> stages) =>
+        reason != "cancelled"
+        && reason != "evidence_binding_incomplete"
+        && stages.Contains("send_observed", StringComparer.Ordinal)
+        && stages.Contains("transaction_started", StringComparer.Ordinal);
 
     private static bool IsProfile(string? value) =>
         !string.IsNullOrWhiteSpace(value)
@@ -902,7 +909,8 @@ internal sealed class ResidentCanaryEvidenceStore
             && evidence.EvidenceDisposition is "advancing" or "diagnostic"
             && (evidence.EvidenceDisposition == "advancing"
                 ? IsCompleteIdentity(evidence)
-                : evidence.Outcome == "failed" && !IsCompleteIdentity(evidence));
+                : evidence.Outcome == "failed"
+                    && (!IsCompleteIdentity(evidence) || evidence.TerminalReason == "cancelled"));
     }
 
     private static bool IsToken(string? value) =>

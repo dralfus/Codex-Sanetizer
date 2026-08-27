@@ -1,6 +1,6 @@
 # Ближайший план разработки Code Sanitizer
 
-**Актуально на:** 2026-08-26
+**Актуально на:** 2026-08-27
 **Назначение:** сохранить историю построенного prompt-защитного пути и показать
 текущий путь к доказуемой, устойчивой архитектуре до расширения защиты файлов.
 
@@ -242,6 +242,7 @@ production state machine.
 | 2026-08-26 | **352** | UX canary: resident marker автоматически копируется в Windows clipboard после стадии `armed`; при отказе показывается ручной fallback, marker не попадает в журнал или evidence. | `[x]` focused workflow tests `3/3`; installed `reproduced_red` acceptance остаётся pending |
 | 2026-08-26 | **352** | Исправлена потеря installer identity с `+commit` и добавлен raw-free `target_verification_failed` для отказа до capture; второй Send после terminal canary не считается частью той же попытки. | `[x]` exact installed red evidence для `0.1.20260826.t1633+f7dd69d`; следующий кодовый шаг — 353 |
 | 2026-08-27 | **351** | Current evidence record `artifacts/evidence/351.json` имеет machine-discovery contract, публикуется атомарно после сборки кандидата и внешнего verification artifact и проверяется по exact source/build/executable/validator/verification binding; synthetic smoke остаётся diagnostic-only. Bootstrap исправлен: gate проверяет опубликованный candidate, а не удалённый временный путь. | `[x]` focused `26/26`, full suite `1909/1909`, current-record gate passed |
+| 2026-08-27 | **352** | После review убран hidden release-identity gate из resident runtime; canary arm требует compatibility evidence, а неполная build/install identity при публикации сохраняется как raw-free non-advancing `failed/diagnostic` artifact. Complete-identity cancellation также сохраняется как diagnostic. | `[x]` focused canary/workflow `31/31`, full suite `1915/1915`; 352 code slice complete, installed/live green remains owned by 356 |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от

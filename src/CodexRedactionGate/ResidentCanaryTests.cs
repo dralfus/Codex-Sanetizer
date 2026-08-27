@@ -328,6 +328,65 @@ public sealed class ResidentCanaryTests
     }
 
     [Test]
+    public void EvidenceStore_DoesNotAdvanceForCancellationEvenWithCompleteIdentity()
+    {
+        var evidence = ResidentCanaryEvidence.Failed(
+            attemptId: 9,
+            profileId: "chatgpt-desktop",
+            targetGeneration: 9,
+            submitBinding: "ctrl_enter",
+            stages: new[] { "requested", "armed", "cancelled" },
+            reason: "cancelled",
+            cleanupSucceeded: true,
+            buildVersion: "0.1.test",
+            sourceCommit: new string('c', 40),
+            executableSha256: new string('a', 64),
+            installerIdentity: "installer_candidate",
+            compatibilityFingerprint: new string('b', 64));
+
+        Assert.That(evidence.EvidenceDisposition, Is.EqualTo("diagnostic"));
+        Assert.That(evidence.IsAdvancingEvidence, Is.False);
+    }
+
+    [Test]
+    public void EvidenceStore_PersistsCompleteIdentityCancellationAsDiagnostic()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-canary-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var evidence = ResidentCanaryEvidence.Failed(
+            attemptId: 10,
+            profileId: "chatgpt-desktop",
+            targetGeneration: 9,
+            submitBinding: "ctrl_enter",
+            stages: new[] { "requested", "armed", "cancelled" },
+            reason: "cancelled",
+            cleanupSucceeded: true,
+            buildVersion: "0.1.test",
+            sourceCommit: new string('c', 40),
+            executableSha256: new string('a', 64),
+            installerIdentity: "installer_candidate",
+            compatibilityFingerprint: new string('b', 64));
+
+        try
+        {
+            var store = new ResidentCanaryEvidenceStore(layout);
+
+            Assert.That(store.TrySave(evidence), Is.True);
+            Assert.That(store.TryLoad(out var loaded), Is.True);
+            Assert.That(loaded!.TerminalReason, Is.EqualTo("cancelled"));
+            Assert.That(loaded.EvidenceDisposition, Is.EqualTo("diagnostic"));
+            Assert.That(loaded.IsAdvancingEvidence, Is.False);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Test]
     public void BuildIdentity_DoesNotUseProfileIdAsCompatibilityFingerprintFallback()
     {
         var profile = new SubmitBindingProfile(
@@ -342,6 +401,55 @@ public sealed class ResidentCanaryTests
 
         Assert.That(ResidentCanaryBuildIdentity.TryGetCompatibilityFingerprint(profile, out var fingerprint), Is.False);
         Assert.That(fingerprint, Is.EqualTo("unbound"));
+    }
+
+    [Test]
+    public void Controller_RefusesToArmCanaryWithoutCompatibilityEvidence()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-canary-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = new SubmitBindingProfile(
+            "chatgpt-desktop",
+            Enabled: true,
+            BindingSource: "user_verified",
+            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding,
+            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
+            CapabilityStatus: OsInteractionStatusIds.Protected,
+            CompatibilityEvidence: null,
+            Diagnostics: new Dictionary<string, string>());
+        var controller = TrayProtectionController.CreateTest(
+            new CanaryHotkeyHost(),
+            () => throw new AssertionException("Manual scan must not run."),
+            new CanaryHookHost(),
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () => throw new AssertionException("Protected runner must not run."),
+            profile,
+            storageLayout: layout,
+            residentCanaryRunner: (_, _, _, _, _, _) => throw new AssertionException("Canary must not run."));
+
+        try
+        {
+            Assert.That(controller.Start(), Is.True);
+            var action = controller.StartOperationalAction(
+                "resident_canary",
+                "requested",
+                true,
+                "focus_composer_and_send_marker");
+            Assert.That(action.Started, Is.True, action.Code);
+
+            var arm = controller.ArmResidentCanary(action.AttemptId, _ => { });
+
+            Assert.That(arm.Started, Is.False);
+            Assert.That(arm.Code, Is.EqualTo("compatibility_unavailable"));
+        }
+        finally
+        {
+            controller.Stop();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     [Test]
@@ -539,8 +647,9 @@ public sealed class ResidentCanaryTests
                 () => true,
                 () => new CanaryLease());
 
-            Assert.That(result.Submitted, Is.False);
+            Assert.That(result.Submitted, Is.True);
             Assert.That(result.Diagnostics["canary_code"], Is.EqualTo("evidence_binding_incomplete"));
+            Assert.That(result.Diagnostics["canary_evidence"], Is.EqualTo("diagnostic"));
             Assert.That(result.Diagnostics["cloud_submission"], Is.EqualTo("false"));
             Assert.That(canaryRunnerCalls, Is.EqualTo(1));
             Assert.That(productionRunnerCalls, Is.EqualTo(0));
@@ -548,6 +657,7 @@ public sealed class ResidentCanaryTests
             var store = new ResidentCanaryEvidenceStore(layout);
             Assert.That(store.TryLoad(out var evidence), Is.True);
             Assert.That(evidence!.EvidenceDisposition, Is.EqualTo("diagnostic"));
+            Assert.That(evidence.TerminalReason, Is.EqualTo("evidence_binding_incomplete"));
             Assert.That(evidence.IsAdvancingEvidence, Is.False);
         }
         finally
@@ -693,15 +803,11 @@ public sealed class ResidentCanaryTests
 
     private static SubmitBindingProfile CreateProtectedProfile(string profileId)
     {
-        return new SubmitBindingProfile(
+        return SubmitBindingOnboardingVerifier.VerifyUserBindings(
             profileId,
-            Enabled: true,
-            BindingSource: "user_verified",
-            SubmitBinding: SubmitKeyBinding.Parse("Enter").Binding,
-            NewlineBinding: SubmitKeyBinding.Parse("Ctrl+Enter").Binding,
-            CapabilityStatus: OsInteractionStatusIds.Protected,
-            CompatibilityEvidence: null,
-            Diagnostics: new Dictionary<string, string>());
+            "Enter",
+            "Ctrl+Enter",
+            ChatGptDiscoveryFixture.CreateVerified());
     }
 
     private sealed class CanaryHotkeyHost : ITrayHotkeyHost

@@ -386,6 +386,11 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             return new ResidentCanaryStartResult(false, "profile_unavailable", null);
         }
 
+        if (runtime.Profile.CompatibilityEvidence?.IsComplete != true)
+        {
+            return new ResidentCanaryStartResult(false, "compatibility_unavailable", null);
+        }
+
         lock (_residentCanaryCompletionGate)
         {
             var result = _residentCanary.Arm(
@@ -3540,41 +3545,43 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 
         var cleanupSucceeded = result.Diagnostics.TryGetValue("canary_cleanup", out var cleanup)
             && string.Equals(cleanup, "true", StringComparison.Ordinal);
-        var evidenceBindingComplete = ResidentCanaryBuildIdentity.HasCompleteEvidenceBinding(runtime.Profile);
         var succeeded = result.Submitted
             && cleanupSucceeded
             && result.Diagnostics.TryGetValue("cloud_submission", out var cloudSubmission)
-            && string.Equals(cloudSubmission, "false", StringComparison.Ordinal)
-            && evidenceBindingComplete;
+            && string.Equals(cloudSubmission, "false", StringComparison.Ordinal);
         var code = succeeded
             ? "passed"
             : result.Diagnostics.TryGetValue("canary_code", out var failureCode)
                 ? failureCode
-                : evidenceBindingComplete
-                    ? result.Status
-                    : "evidence_binding_incomplete";
-        if (!succeeded && result.Submitted)
+                : result.Status;
+        var completed = _residentCanary.Complete(arm, succeeded, code, cleanupSucceeded);
+        var evidenceBindingComplete = ResidentCanaryBuildIdentity.HasCompleteEvidenceBinding(runtime.Profile);
+        var evidenceSaved = SaveResidentCanaryEvidence(runtime, arm, completed);
+        if (completed.Succeeded && !evidenceBindingComplete)
         {
             result = result with
             {
-                Status = OsInteractionStatusIds.FailedClosed,
-                Applied = false,
-                Submitted = false,
-                Diagnostics = MergeDiagnostics(result.Diagnostics, ("canary_code", code))
+                Diagnostics = MergeDiagnostics(
+                    MergeDiagnostics(
+                        result.Diagnostics,
+                        ("canary_evidence", evidenceSaved ? "diagnostic" : "diagnostic_write_failed")),
+                    ("canary_code", "evidence_binding_incomplete"))
             };
         }
-        var completed = _residentCanary.Complete(arm, succeeded, code, cleanupSucceeded);
-        var evidenceSaved = SaveResidentCanaryEvidence(runtime, arm, completed);
+
         if (!evidenceSaved)
         {
-            result = result with
+            if (!completed.Succeeded || evidenceBindingComplete)
             {
-                Status = OsInteractionStatusIds.FailedClosed,
-                Applied = false,
-                Submitted = false,
-                Diagnostics = MergeDiagnostics(result.Diagnostics, ("canary_code", "evidence_write_failed"))
-            };
-            completed = completed with { Succeeded = false, Code = "evidence_write_failed" };
+                result = result with
+                {
+                    Status = OsInteractionStatusIds.FailedClosed,
+                    Applied = false,
+                    Submitted = false,
+                    Diagnostics = MergeDiagnostics(result.Diagnostics, ("canary_code", "evidence_write_failed"))
+                };
+                completed = completed with { Succeeded = false, Code = "evidence_write_failed" };
+            }
         }
 
         CompleteResidentCanary(completed);
@@ -3617,7 +3624,31 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 ResidentCanaryBuildIdentity.ExecutableSha256(),
                 ResidentCanaryBuildIdentity.InstallerIdentity(),
                 compatibilityFingerprint);
-        return new ResidentCanaryEvidenceStore(_storageLayout).TrySave(evidence);
+        var store = new ResidentCanaryEvidenceStore(_storageLayout);
+        if (store.TrySave(evidence))
+        {
+            return true;
+        }
+
+        if (!result.Succeeded || ResidentCanaryBuildIdentity.HasCompleteEvidenceBinding(runtime.Profile))
+        {
+            return false;
+        }
+
+        var diagnostic = ResidentCanaryEvidence.Failed(
+            arm.AttemptId,
+            arm.ProfileId,
+            arm.TargetGeneration,
+            ResidentCanaryBuildIdentity.SafeBinding(runtime.Profile),
+            result.Stages,
+            "evidence_binding_incomplete",
+            result.CleanupSucceeded,
+            BuildVersion.Current,
+            ResidentCanaryBuildIdentity.SourceCommit(),
+            ResidentCanaryBuildIdentity.ExecutableSha256(),
+            ResidentCanaryBuildIdentity.InstallerIdentity(),
+            compatibilityFingerprint);
+        return store.TrySave(diagnostic);
     }
 
     private void CompleteResidentCanary(ResidentCanaryExecutionResult result)

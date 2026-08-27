@@ -100,7 +100,11 @@ public partial class SanitizerTests
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         var layout = DefaultStorageLayout.Create(directory);
-        var profile = CreateWorkflowProfile() with { ProfileId = "chatgpt-desktop" };
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            ChatGptDiscoveryFixture.CreateVerified());
         Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
         Assert.That(ActivePromptProtectionTargetStore.Save(layout, profile.ProfileId).Succeeded, Is.True);
 
@@ -158,7 +162,11 @@ public partial class SanitizerTests
     {
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         var layout = DefaultStorageLayout.Create(directory);
-        var profile = CreateWorkflowProfile() with { ProfileId = "chatgpt-desktop" };
+        var profile = SubmitBindingOnboardingVerifier.VerifyUserBindings(
+            "chatgpt-desktop",
+            "Enter",
+            "Ctrl+Enter",
+            ChatGptDiscoveryFixture.CreateVerified());
         Assert.That(SubmitBindingProfileStore.Save(layout, new[] { profile }).Succeeded, Is.True);
         Assert.That(ActivePromptProtectionTargetStore.Save(layout, profile.ProfileId).Succeeded, Is.True);
 

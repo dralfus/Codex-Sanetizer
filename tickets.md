@@ -3262,14 +3262,28 @@ bound correctly, but the implementation can still substitute a hash of
 fields. A diagnostic failure artifact and evidence eligible to advance an
 evidence state are not yet distinct.
 
-- [ ] Refuse to arm or publish successful canary evidence unless compatibility
-      evidence and every required build/profile/binding field are fully bound.
-- [ ] Represent incomplete failure diagnostics explicitly as non-advancing
+- [x] Refuse to arm without current compatibility evidence and refuse to publish
+      successful/advancing canary evidence unless every required build,
+      profile, and binding field is fully bound. Release identity is checked at
+      evidence publication, not as a hidden gate on ordinary resident Send.
+- [x] Represent incomplete failure diagnostics explicitly as non-advancing
       diagnostic artifacts; never fabricate a compatibility fingerprint.
-- [ ] Make evidence validation reject `unbound` or fallback identities whenever
+- [x] Make evidence validation reject `unbound` or fallback identities whenever
       an artifact is used to satisfy `reproduced_red` or a higher target.
-- [ ] Add deterministic tests proving diagnostic failures remain observable but
-      cannot authorize evidence progression.
+- [x] Add deterministic tests proving diagnostic failures remain observable but
+      cannot authorize evidence progression, including complete-identity
+      cancellation and late incomplete identity.
+
+**Review resolution (2026-08-27):** The resident canary now requires current
+compatibility evidence before arm, but does not use release/build identity as a
+second hidden resident-admission gate. A successful canary with incomplete
+release identity cannot be serialized as `advancing`; it is persisted as a
+raw-free `failed/diagnostic` artifact with `evidence_binding_incomplete`, while
+the resident operation result remains independent. Complete-identity
+cancellation is also persisted as diagnostic rather than being misreported as
+an evidence-write failure. The profile ID is never used as a compatibility
+fallback. Focused canary/workflow tests pass (`31/31`); full suite passes
+(`1915/1915`).
 
 ## 353. Deepen composer access behind ProtectedComposerSession
 
