@@ -188,7 +188,8 @@ focused identity tests `30/30`, полный suite `1898/1898` и Release build 
 target diagnostics не сохраняются. `codex-desktop` и `chatgpt-desktop` остаются
 раздельными operational selectors поверх общей stable identity. Installer
 `0.1.20260822.t1325` остаётся в истории как предыдущий candidate и не содержит
-ремонт 350; новый runtime/release evidence для 351+ ещё не опубликован.
+ремонт 350; для 351 текущая evidence-запись публикуется после сборки
+candidate и проверяется тем же release gate.
 
 ### Этап 1.6. Сделать protected Send доказуемым глубоким модулем
 
@@ -230,7 +231,7 @@ production state machine.
 
 | Дата | Тикет | Добавлено в доказательство | Результат |
 |---|---:|---|---|
-| 2026-08-26 | **351** | Typed evidence-state contract, schema и transition history, raw-free сериализация, внешняя проверка artifact binding, отдельный validator smoke в release publish. | `[x]` `1846/1846`, contract CLI passed, release publish validator smoke passed, final review без замечаний |
+| 2026-08-26 | **351** | Typed evidence-state contract, schema и transition history, raw-free сериализация, внешняя проверка artifact binding, отдельный validator smoke в release publish. | `[x]` `1909/1909`, contract CLI passed, release publish validator smoke passed |
 | 2026-08-26 | **352** | Следующий новый рабочий пункт: resident-owned canary должен сначала воспроизвести текущий установленный keyboard Send-путь на том же production seam. | `[ ]` реализация не начиналась |
 | 2026-08-26 | **352** | Resident-owned canary, lifecycle, target-generation guard, production UIA/write wiring, overlay trace, raw-free evidence и installer identity sidecar добавлены; ложный green replay запрещён. | `[>]` deterministic `1856/1856`, build и installer smoke прошли; installed red artifact и безопасный production replay ещё не доказаны |
 | 2026-08-26 | **352** | После финальной проверки commit `69a68046` содержит canary и remediation admission поверх `2d99fe2b`; deterministic suite проверен как `1857/1857`. | `[>]` следующая пользовательская операция: rebuilt installed canary с сохранением `reproduced_red`; 353 заблокирована до этого артефакта |
@@ -240,7 +241,7 @@ production state machine.
 | 2026-08-26 | **361** | Callback admission использует resident armed state; fixture содержит `window_handle`, а trace начинается с обязательных `composer_read` и `sanitized`. | `[x]` focused canary callback test passed; installed 352 acceptance остаётся pending |
 | 2026-08-26 | **352** | UX canary: resident marker автоматически копируется в Windows clipboard после стадии `armed`; при отказе показывается ручной fallback, marker не попадает в журнал или evidence. | `[x]` focused workflow tests `3/3`; installed `reproduced_red` acceptance остаётся pending |
 | 2026-08-26 | **352** | Исправлена потеря installer identity с `+commit` и добавлен raw-free `target_verification_failed` для отказа до capture; второй Send после terminal canary не считается частью той же попытки. | `[x]` exact installed red evidence для `0.1.20260826.t1633+f7dd69d`; следующий кодовый шаг — 353 |
-| 2026-08-26 | **351** | Current evidence record `artifacts/evidence/351.json` имеет machine-discovery contract, публикуется атомарно после сборки кандидата и внешнего verification artifact и проверяется по exact source/build/executable/validator/verification binding; synthetic smoke остаётся diagnostic-only. | `[>]` focused `26/26`; кодовый gate готов, финальная запись будет опубликована после проверки итогового кандидата |
+| 2026-08-27 | **351** | Current evidence record `artifacts/evidence/351.json` имеет machine-discovery contract, публикуется атомарно после сборки кандидата и внешнего verification artifact и проверяется по exact source/build/executable/validator/verification binding; synthetic smoke остаётся diagnostic-only. Bootstrap исправлен: gate проверяет опубликованный candidate, а не удалённый временный путь. | `[x]` focused `26/26`, full suite `1909/1909`, current-record gate passed |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от

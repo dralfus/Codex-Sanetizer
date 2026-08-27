@@ -150,18 +150,23 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sourceCommit)) {
     throw "Unable to resolve the current source commit for evidence validation."
 }
 
-$publishedBuildVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($evidenceSmokeExecutable).ProductVersion
+$releaseExecutable = Join-Path $output "CodexRedactionGate.exe"
+if (-not (Test-Path -LiteralPath $releaseExecutable)) {
+    throw "Release executable was not copied to the candidate output: $releaseExecutable"
+}
+
+$publishedBuildVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($releaseExecutable).ProductVersion
 if ([string]::IsNullOrWhiteSpace($publishedBuildVersion)) {
     throw "Published executable has no build version for evidence validation."
 }
 
-$publishedExecutableSha256 = (Get-FileHash -LiteralPath $evidenceSmokeExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+$publishedExecutableSha256 = (Get-FileHash -LiteralPath $releaseExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
 $verificationArtifact = Join-Path $repoRoot "artifacts\evidence\351-proof.txt"
 if (-not (Test-Path -LiteralPath $verificationArtifact)) {
     throw "Current evidence verification artifact is missing: $verificationArtifact"
 }
 $verificationArtifactSha256 = (Get-FileHash -LiteralPath $verificationArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
-& $evidenceSmokeExecutable --evidence-current-record-check `
+& $releaseExecutable --evidence-current-record-check `
     $repoRoot `
     $publishedBuildVersion `
     $sourceCommit `

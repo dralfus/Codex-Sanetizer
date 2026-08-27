@@ -3144,6 +3144,14 @@ mismatched; the product executable cannot publish its own record.
 The synthetic `--evidence-contract-smoke` remains diagnostic-only and cannot
 pass the current-record gate. Focused tests: `26/26`.
 
+**Final bootstrap verification (2026-08-27):** `build-release.ps1` now copies
+the candidate before checking current evidence and validates the copied
+`artifacts/publish/CodexRedactionGate.exe`; the previous implementation tried
+to inspect a temporary publish path that had already been removed. After the
+script fix, the current-record gate passed against the published EXE and the
+record/proof hashes. The final source commit and candidate must still be
+rebound by the release sequence after this documentation change.
+
 ## 352. Add a resident-owned installed keyboard protected-Send canary
 
 **Current state (2026-08-26):** `[>]` The installed candidate from
