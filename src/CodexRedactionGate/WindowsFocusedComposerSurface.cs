@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Automation;
 using System.Windows.Forms;
 
@@ -718,6 +719,164 @@ internal interface IVerifiedComposerReplay
     VerifiedComposerReplayResult Replay(AutomationElement? element, string sendKeysText);
 }
 
+internal enum StaFailureKind
+{
+    Creation,
+    Execution,
+    Timeout
+}
+
+internal sealed record StaExecutionResult<T>(
+    bool Succeeded,
+    T? Value,
+    StaFailureKind? FailureKind)
+{
+    public static StaExecutionResult<T> Success(T value) => new(true, value, null);
+
+    public static StaExecutionResult<T> Failure(StaFailureKind failureKind) =>
+        new(false, default, failureKind);
+}
+
+internal interface IStaExecutionBoundary
+{
+    StaExecutionResult<T> Execute<T>(Func<T> action);
+}
+
+internal interface INativeVerifiedComposerTarget
+{
+}
+
+internal sealed record NativeComposerTextReadAttempt(
+    bool Succeeded,
+    string? Text,
+    string CaptureStrategy,
+    IReadOnlyDictionary<string, string> Diagnostics);
+
+internal sealed record NativeComposerTextWriteAttempt(
+    bool Succeeded,
+    string Status,
+    IReadOnlyDictionary<string, string> Diagnostics);
+
+/// <summary>
+/// Lowest injectable Windows seam. A target is reacquired for each STA action
+/// and remains usable only inside that action; the public capture, replace and
+/// submit control flow stays in <see cref="NativeVerifiedComposerTextAccess"/>.
+/// </summary>
+internal interface INativeVerifiedComposerTargetOperations
+{
+    INativeVerifiedComposerTarget? Reacquire(TextSurfaceDescriptor surface);
+
+    NativeComposerTextReadAttempt ReadText(
+        INativeVerifiedComposerTarget target,
+        TextSurfaceDescriptor surface);
+
+    NativeComposerTextWriteAttempt WriteText(
+        INativeVerifiedComposerTarget target,
+        TextSurfaceDescriptor surface,
+        string text);
+
+    VerifiedComposerReplayResult Replay(
+        INativeVerifiedComposerTarget target,
+        string sendKeysText);
+}
+
+internal sealed class NativeStaExecutionBoundary : IStaExecutionBoundary
+{
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(2);
+    private readonly ThreadBoundStaExecutionWorker _worker = new();
+    private readonly TimeSpan _timeout;
+
+    public NativeStaExecutionBoundary()
+        : this(DefaultTimeout)
+    {
+    }
+
+    internal NativeStaExecutionBoundary(TimeSpan timeout)
+    {
+        _timeout = timeout < TimeSpan.Zero
+            ? throw new ArgumentOutOfRangeException(nameof(timeout))
+            : timeout;
+    }
+
+    public StaExecutionResult<T> Execute<T>(Func<T> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        return _worker.Execute(action, _timeout);
+    }
+
+    private sealed class ThreadBoundStaExecutionWorker
+    {
+        public StaExecutionResult<T> Execute<T>(Func<T> action, TimeSpan timeout)
+        {
+            ArgumentNullException.ThrowIfNull(action);
+            if (timeout < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeout));
+            }
+
+            const int pending = 0;
+            const int running = 1;
+            const int cancelledBeforeStart = 2;
+            var startState = pending;
+            T? result = default;
+            Exception? executionException = null;
+            var startClaimed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Thread thread;
+            try
+            {
+                thread = new Thread(() =>
+                {
+                    try
+                    {
+                        if (Interlocked.CompareExchange(ref startState, running, pending) != pending)
+                        {
+                            startClaimed.TrySetResult(false);
+                            return;
+                        }
+
+                        startClaimed.TrySetResult(true);
+                        result = action();
+                    }
+                    catch (Exception exception)
+                    {
+                        executionException = exception;
+                    }
+                    finally
+                    {
+                        completed.TrySetResult(true);
+                    }
+                });
+                thread.IsBackground = true;
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+            }
+            catch (Exception)
+            {
+                return StaExecutionResult<T>.Failure(StaFailureKind.Creation);
+            }
+
+            if (!startClaimed.Task.Wait(timeout)
+                && Interlocked.CompareExchange(ref startState, cancelledBeforeStart, pending) == pending)
+            {
+                return StaExecutionResult<T>.Failure(StaFailureKind.Timeout);
+            }
+
+            if (Volatile.Read(ref startState) != running)
+            {
+                return StaExecutionResult<T>.Failure(StaFailureKind.Timeout);
+            }
+
+            completed.Task.GetAwaiter().GetResult();
+
+            return executionException is null
+                ? StaExecutionResult<T>.Success(result!)
+                : StaExecutionResult<T>.Failure(StaFailureKind.Execution);
+        }
+    }
+}
+
 internal sealed class NativeVerifiedComposerReplay : IVerifiedComposerReplay
 {
     public VerifiedComposerReplayResult Replay(AutomationElement? element, string sendKeysText)
@@ -729,6 +888,22 @@ internal sealed class NativeVerifiedComposerReplay : IVerifiedComposerReplay
         try
         {
             element.SetFocus();
+        }
+        catch (InvalidOperationException)
+        {
+            return UnavailableResult();
+        }
+        catch (COMException)
+        {
+            return UnavailableResult();
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return UnavailableResult();
+        }
+
+        try
+        {
             SendKeys.SendWait(sendKeysText);
             Thread.Sleep(120);
             return new VerifiedComposerReplayResult(
@@ -742,15 +917,15 @@ internal sealed class NativeVerifiedComposerReplay : IVerifiedComposerReplay
         }
         catch (InvalidOperationException)
         {
-            return FailedResult();
+            return IndeterminateResult();
         }
         catch (COMException)
         {
-            return FailedResult();
+            return IndeterminateResult();
         }
         catch (System.ComponentModel.Win32Exception)
         {
-            return FailedResult();
+            return IndeterminateResult();
         }
         finally
         {
@@ -758,14 +933,26 @@ internal sealed class NativeVerifiedComposerReplay : IVerifiedComposerReplay
         }
     }
 
-    private static VerifiedComposerReplayResult FailedResult()
+    private static VerifiedComposerReplayResult UnavailableResult()
+    {
+        return new VerifiedComposerReplayResult(
+            false,
+            OsInteractionStatusIds.ReplayUnavailable,
+            new Dictionary<string, string>
+            {
+                ["replay_outcome"] = "unavailable",
+                ["modifiers_released"] = "true"
+            });
+    }
+
+    private static VerifiedComposerReplayResult IndeterminateResult()
     {
         return new VerifiedComposerReplayResult(
             false,
             OsInteractionStatusIds.ReplayIndeterminate,
             new Dictionary<string, string>
             {
-                ["replay_outcome"] = "unavailable",
+                ["replay_outcome"] = "partial_or_indeterminate",
                 ["modifiers_released"] = "true"
             });
     }
@@ -831,9 +1018,8 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
     private const int FocusVerificationDelayMilliseconds = 25;
     private readonly Func<TextSurfaceDiscoveryResult> _surfaceDiscovery;
     private readonly IVerifiedComposerReplay _replay;
-    private readonly object _capturedElementGate = new();
-    private AutomationElement? _capturedElement;
-    private string? _capturedSurfaceId;
+    private readonly IStaExecutionBoundary _staExecution;
+    private readonly INativeVerifiedComposerTargetOperations _targetOperations;
 
     public NativeVerifiedComposerTextAccess()
         : this(
@@ -844,87 +1030,49 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
 
     internal NativeVerifiedComposerTextAccess(
         Func<TextSurfaceDiscoveryResult> surfaceDiscovery,
-        IVerifiedComposerReplay? replay = null)
+        IVerifiedComposerReplay? replay = null,
+        IStaExecutionBoundary? staExecution = null,
+        INativeVerifiedComposerTargetOperations? targetOperations = null)
     {
         _surfaceDiscovery = surfaceDiscovery ?? throw new ArgumentNullException(nameof(surfaceDiscovery));
         _replay = replay ?? new NativeVerifiedComposerReplay();
+        _staExecution = staExecution ?? new NativeStaExecutionBoundary();
+        _targetOperations = targetOperations ?? new AutomationElementTargetOperations(this, _replay);
     }
 
     public TextCaptureResult CaptureText(TextSurfaceDescriptor surface)
     {
         try
         {
-            return RunSta(() =>
+            var execution = _staExecution.Execute(() =>
             {
-                var element = GetCurrentVerifiedElement(surface);
-                if (element is null)
+                var target = _targetOperations.Reacquire(surface);
+                if (target is null)
                 {
                     return new TextCaptureResult(false, OsInteractionStatusIds.NotComposer, null, new Dictionary<string, string>());
                 }
 
-                var pattern = GetValuePattern(element);
-                var text = pattern?.Current.Value;
-                var captureStrategy = "value-pattern";
-                if (text is null)
+                var read = _targetOperations.ReadText(target, surface);
+                if (!read.Succeeded || string.IsNullOrEmpty(read.Text))
                 {
-                    var textPattern = GetTextPattern(element);
-                    if (textPattern is null)
-                    {
-                        return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
-                    }
-
-                    text = textPattern.DocumentRange.GetText(MaxTextPatternCaptureLength) ?? string.Empty;
-                    captureStrategy = "text-pattern";
-
-                    if (CanUseKeyboardWriteFallback(surface, element))
-                    {
-                        var clipboardText = CaptureFormattedKeyboardText(element);
-                        if (clipboardText is null)
-                        {
-                            return new TextCaptureResult(
-                                false,
-                                OsInteractionStatusIds.CaptureFailed,
-                                null,
-                                new Dictionary<string, string>
-                                {
-                                    ["capture_strategy"] = "verified-keyboard-copy",
-                                    ["format_capture_status"] = "unavailable",
-                                    ["format_preserved"] = "false"
-                                });
-                        }
-
-                        if (!ComposerTextFormatting.HasSameContentIgnoringWhitespace(text, clipboardText))
-                        {
-                            return new TextCaptureResult(
-                                false,
-                                OsInteractionStatusIds.CaptureFailed,
-                                null,
-                                new Dictionary<string, string>
-                                {
-                                    ["capture_strategy"] = "verified-keyboard-copy",
-                                    ["format_capture_status"] = "source_mismatch",
-                                    ["format_preserved"] = "false"
-                                });
-                        }
-
-                        text = clipboardText;
-                        captureStrategy = "verified-keyboard-copy";
-                    }
+                    return new TextCaptureResult(
+                        false,
+                        OsInteractionStatusIds.CaptureFailed,
+                        null,
+                        read.Diagnostics);
                 }
 
-                if (string.IsNullOrEmpty(text))
-                {
-                    return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
-                }
-
-                var normalizedText = ComposerTextFormatting.NormalizeLineEndings(text);
+                var normalizedText = ComposerTextFormatting.NormalizeLineEndings(read.Text);
 
                 return new TextCaptureResult(
                     true,
                     "captured",
                     normalizedText,
-                    ComposerTextFormatting.Diagnostics(text, normalizedText, captureStrategy));
+                    ComposerTextFormatting.Diagnostics(read.Text, normalizedText, read.CaptureStrategy));
             });
+            return execution.Succeeded
+                ? execution.Value!
+                : StaCaptureFailure(execution.FailureKind!.Value);
         }
         catch (InvalidOperationException)
         {
@@ -950,57 +1098,20 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
 
         try
         {
-            return RunSta(() =>
+            var execution = _staExecution.Execute(() =>
             {
-                var element = GetCurrentVerifiedElement(surface);
-                if (element is null)
+                var target = _targetOperations.Reacquire(surface);
+                if (target is null)
                 {
                     return new TextReplacementResult(false, OsInteractionStatusIds.NotComposer, new Dictionary<string, string>());
                 }
 
-                var pattern = GetValuePattern(element);
-                if (pattern is not null && !pattern.Current.IsReadOnly)
-                {
-                    pattern.SetValue(text);
-                    return new TextReplacementResult(
-                        true,
-                        OsInteractionStatusIds.Applied,
-                        new Dictionary<string, string>
-                        {
-                            ["write_length"] = text.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                            ["write_strategy"] = "value-pattern"
-                        });
-                }
-
-                if (!CanUseKeyboardWriteFallback(surface, element))
-                {
-                    return new TextReplacementResult(false, OsInteractionStatusIds.WriteFailed, new Dictionary<string, string>());
-                }
-
-                if (!TryPasteIntoVerifiedElement(element, text))
-                {
-                    return new TextReplacementResult(
-                        false,
-                        OsInteractionStatusIds.WriteFailed,
-                        new Dictionary<string, string>
-                        {
-                            ["write_strategy"] = "verified-keyboard-paste",
-                            ["write_focus"] = "not_verified",
-                            ["write_verification"] = "pasted_text_mismatch"
-                        });
-                }
-
-                return new TextReplacementResult(
-                    true,
-                    OsInteractionStatusIds.Applied,
-                    new Dictionary<string, string>
-                    {
-                        ["write_length"] = text.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        ["write_strategy"] = "verified-keyboard-paste",
-                        ["write_focus"] = "restored_and_verified",
-                        ["write_verification"] = "exact_keyboard_round_trip"
-                    });
+                var write = _targetOperations.WriteText(target, surface, text);
+                return new TextReplacementResult(write.Succeeded, write.Status, write.Diagnostics);
             });
+            return execution.Succeeded
+                ? execution.Value!
+                : StaWriteFailure(execution.FailureKind!.Value);
         }
         catch (InvalidOperationException)
         {
@@ -1024,10 +1135,10 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
     {
         try
         {
-            return RunSta(() =>
+            var execution = _staExecution.Execute(() =>
             {
-                var element = GetCurrentVerifiedElement(surface);
-                if (element is null)
+                var target = _targetOperations.Reacquire(surface);
+                if (target is null)
                 {
                     return new SubmitActionResult(false, OsInteractionStatusIds.NotComposer, new Dictionary<string, string>());
                 }
@@ -1041,7 +1152,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                         new Dictionary<string, string> { ["submit_binding"] = "unknown" });
                 }
 
-                var replay = _replay.Replay(element, sendKeysText);
+                var replay = _targetOperations.Replay(target, sendKeysText);
                 var diagnostics = new Dictionary<string, string>(replay.Diagnostics)
                 {
                     ["submit_strategy"] = "verified-composer-binding",
@@ -1049,6 +1160,9 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                 };
                 return new SubmitActionResult(replay.Succeeded, replay.Status, diagnostics);
             });
+            return execution.Succeeded
+                ? execution.Value!
+                : StaSubmitFailure(execution.FailureKind!.Value);
         }
         catch (InvalidOperationException)
         {
@@ -1072,16 +1186,6 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             surface.ProfileId,
             ReferenceOnlyInputSource.ProfileId,
             StringComparison.Ordinal);
-
-        if (IntPtr.TryParse(
-                expectedWindowHandle,
-                System.Globalization.NumberStyles.HexNumber,
-                null,
-                out var cachedWindowHandle)
-            && TryGetCapturedElement(surface, cachedWindowHandle, expectedRuntimeIdHash, requireCapturedIdentity, out var capturedElement))
-        {
-            return capturedElement;
-        }
 
         var discovery = _surfaceDiscovery();
         if (!discovery.Succeeded || discovery.Surface is null)
@@ -1119,7 +1223,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                 if (element is not null
                     && (!requireCapturedIdentity || MatchesCapturedRuntimeId(element, expectedRuntimeIdHash!)))
                 {
-                    return RememberCapturedElement(surface, element);
+                    return element;
                 }
             }
 
@@ -1128,7 +1232,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                 var fingerprintMatch = FindElementByRuntimeIdHash(windowHandle, expectedRuntimeIdHash!);
                 if (fingerprintMatch is not null)
                 {
-                    return RememberCapturedElement(surface, fingerprintMatch);
+                    return fingerprintMatch;
                 }
             }
 
@@ -1143,7 +1247,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                 if (MatchesVerifiedSurfaceWindow(windowHandle, fallbackHandle, fallbackOwningWindow)
                     && (!requireCapturedIdentity || MatchesCapturedRuntimeId(fallback, expectedRuntimeIdHash!)))
                 {
-                    return RememberCapturedElement(surface, fallback);
+                    return fallback;
                 }
             }
         }
@@ -1151,89 +1255,160 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         return null; // Fail closed if we cannot verify the element
     }
 
-    private bool TryGetCapturedElement(
-        TextSurfaceDescriptor surface,
-        IntPtr expectedWindowHandle,
-        string? expectedRuntimeIdHash,
-        bool requireCapturedIdentity,
-        out AutomationElement? element)
+    private sealed class AutomationElementTarget : INativeVerifiedComposerTarget
     {
-        element = null;
-        AutomationElement? captured;
-        string? capturedSurfaceId;
-        lock (_capturedElementGate)
+        public AutomationElementTarget(AutomationElement element)
         {
-            captured = _capturedElement;
-            capturedSurfaceId = _capturedSurfaceId;
+            Element = element ?? throw new ArgumentNullException(nameof(element));
         }
 
-        if (captured is null
-            || !string.Equals(capturedSurfaceId, surface.SurfaceId, StringComparison.Ordinal)
-            || !IsExpectedWindowForeground(expectedWindowHandle))
+        public AutomationElement Element { get; }
+    }
+
+    private sealed class AutomationElementTargetOperations : INativeVerifiedComposerTargetOperations
+    {
+        private readonly NativeVerifiedComposerTextAccess _owner;
+        private readonly IVerifiedComposerReplay _replay;
+
+        public AutomationElementTargetOperations(
+            NativeVerifiedComposerTextAccess owner,
+            IVerifiedComposerReplay replay)
         {
-            return false;
+            _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+            _replay = replay ?? throw new ArgumentNullException(nameof(replay));
         }
 
-        try
+        public INativeVerifiedComposerTarget? Reacquire(TextSurfaceDescriptor surface)
         {
-            var elementWindow = new IntPtr(captured.Current.NativeWindowHandle);
-            var owningWindow = FindOwningWindow(captured);
-            if (!MatchesVerifiedSurfaceWindow(expectedWindowHandle, elementWindow, owningWindow)
-                || (requireCapturedIdentity
-                    && (string.IsNullOrWhiteSpace(expectedRuntimeIdHash)
-                        || !MatchesCapturedRuntimeId(captured, expectedRuntimeIdHash)))
-                || !captured.Current.IsEnabled
-                || !captured.Current.IsKeyboardFocusable)
+            var element = _owner.GetCurrentVerifiedElement(surface);
+            return element is null ? null : new AutomationElementTarget(element);
+        }
+
+        public NativeComposerTextReadAttempt ReadText(
+            INativeVerifiedComposerTarget target,
+            TextSurfaceDescriptor surface)
+        {
+            var element = RequireAutomationElement(target);
+            var pattern = GetValuePattern(element);
+            var text = pattern?.Current.Value;
+            var captureStrategy = "value-pattern";
+            if (text is null)
             {
-                return false;
+                var textPattern = GetTextPattern(element);
+                if (textPattern is null)
+                {
+                    return ReadFailure();
+                }
+
+                text = textPattern.DocumentRange.GetText(MaxTextPatternCaptureLength) ?? string.Empty;
+                captureStrategy = "text-pattern";
+
+                if (CanUseKeyboardWriteFallback(surface, element))
+                {
+                    var clipboardText = CaptureFormattedKeyboardText(element);
+                    if (clipboardText is null)
+                    {
+                        return ReadFailure(new Dictionary<string, string>
+                        {
+                            ["capture_strategy"] = "verified-keyboard-copy",
+                            ["format_capture_status"] = "unavailable",
+                            ["format_preserved"] = "false"
+                        });
+                    }
+
+                    if (!ComposerTextFormatting.HasSameContentIgnoringWhitespace(text, clipboardText))
+                    {
+                        return ReadFailure(new Dictionary<string, string>
+                        {
+                            ["capture_strategy"] = "verified-keyboard-copy",
+                            ["format_capture_status"] = "source_mismatch",
+                            ["format_preserved"] = "false"
+                        });
+                    }
+
+                    text = clipboardText;
+                    captureStrategy = "verified-keyboard-copy";
+                }
             }
 
-            element = captured;
-            return true;
-        }
-        catch (ElementNotAvailableException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-        catch (COMException)
-        {
-            return false;
-        }
-    }
-
-    private AutomationElement RememberCapturedElement(TextSurfaceDescriptor surface, AutomationElement element)
-    {
-        lock (_capturedElementGate)
-        {
-            _capturedSurfaceId = surface.SurfaceId;
-            _capturedElement = element;
+            return new NativeComposerTextReadAttempt(
+                true,
+                text,
+                captureStrategy,
+                new Dictionary<string, string>());
         }
 
-        return element;
-    }
-
-    private static bool IsExpectedWindowForeground(IntPtr expectedWindow)
-    {
-        if (!OperatingSystem.IsWindows() || expectedWindow == IntPtr.Zero)
+        public NativeComposerTextWriteAttempt WriteText(
+            INativeVerifiedComposerTarget target,
+            TextSurfaceDescriptor surface,
+            string text)
         {
-            return false;
+            var element = RequireAutomationElement(target);
+            var pattern = GetValuePattern(element);
+            if (pattern is not null && !pattern.Current.IsReadOnly)
+            {
+                pattern.SetValue(text);
+                return new NativeComposerTextWriteAttempt(
+                    true,
+                    OsInteractionStatusIds.Applied,
+                    new Dictionary<string, string>
+                    {
+                        ["write_length"] = text.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["write_strategy"] = "value-pattern"
+                    });
+            }
+
+            if (!CanUseKeyboardWriteFallback(surface, element))
+            {
+                return WriteFailure();
+            }
+
+            if (!TryPasteIntoVerifiedElement(element, text))
+            {
+                return WriteFailure(new Dictionary<string, string>
+                {
+                    ["write_strategy"] = "verified-keyboard-paste",
+                    ["write_focus"] = "not_verified",
+                    ["write_verification"] = "pasted_text_mismatch"
+                });
+            }
+
+            return new NativeComposerTextWriteAttempt(
+                true,
+                OsInteractionStatusIds.Applied,
+                new Dictionary<string, string>
+                {
+                    ["write_length"] = text.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ["write_strategy"] = "verified-keyboard-paste",
+                    ["write_focus"] = "restored_and_verified",
+                    ["write_verification"] = "exact_keyboard_round_trip"
+                });
         }
 
-        var foreground = NativeMethods.GetForegroundWindow();
-        if (foreground == IntPtr.Zero)
-        {
-            return false;
-        }
+        public VerifiedComposerReplayResult Replay(
+            INativeVerifiedComposerTarget target,
+            string sendKeysText) =>
+            _replay.Replay(RequireAutomationElement(target), sendKeysText);
 
-        var root = NativeMethods.GetAncestor(foreground, 2);
-        return MatchesVerifiedSurfaceWindow(
-            expectedWindow,
-            foreground,
-            root == IntPtr.Zero ? foreground : root);
+        private static AutomationElement RequireAutomationElement(INativeVerifiedComposerTarget target) =>
+            target is AutomationElementTarget automationTarget
+                ? automationTarget.Element
+                : throw new InvalidOperationException("The target does not belong to the native UIA access boundary.");
+
+        private static NativeComposerTextReadAttempt ReadFailure(
+            IReadOnlyDictionary<string, string>? diagnostics = null) =>
+            new(
+                false,
+                null,
+                "unavailable",
+                diagnostics ?? new Dictionary<string, string>());
+
+        private static NativeComposerTextWriteAttempt WriteFailure(
+            IReadOnlyDictionary<string, string>? diagnostics = null) =>
+            new(
+                false,
+                OsInteractionStatusIds.WriteFailed,
+                diagnostics ?? new Dictionary<string, string>());
     }
 
     private static bool MatchesCapturedRuntimeId(AutomationElement element, string expectedRuntimeIdHash)
@@ -1385,33 +1560,26 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         return false;
     }
 
-    private static T RunSta<T>(Func<T> action)
-    {
-        T? result = default;
-        Exception? exception = null;
-        var thread = new Thread(() =>
+    private static TextCaptureResult StaCaptureFailure(StaFailureKind failureKind) =>
+        new(false, OsInteractionStatusIds.CaptureFailed, null, StaFailureDiagnostics(failureKind));
+
+    private static TextReplacementResult StaWriteFailure(StaFailureKind failureKind) =>
+        new(false, OsInteractionStatusIds.WriteFailed, StaFailureDiagnostics(failureKind));
+
+    private static SubmitActionResult StaSubmitFailure(StaFailureKind failureKind) =>
+        new(false, OsInteractionStatusIds.SubmitFailed, StaFailureDiagnostics(failureKind));
+
+    private static IReadOnlyDictionary<string, string> StaFailureDiagnostics(StaFailureKind failureKind) =>
+        new Dictionary<string, string>
         {
-            try
+            ["sta_failure"] = failureKind switch
             {
-                result = action();
-            }
-            catch (Exception ex)
-            {
-                exception = ex;
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-
-        if (exception is not null)
-        {
-            throw exception;
-        }
-
-        return result!;
-    }
+                StaFailureKind.Creation => "creation",
+                StaFailureKind.Timeout => "timeout",
+                _ => "execution"
+            },
+            ["failed_closed"] = "true"
+        };
 
     private static AutomationElement? FindElementByAutomationId(IntPtr windowHandle, string automationId)
     {

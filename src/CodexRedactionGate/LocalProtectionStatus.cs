@@ -395,6 +395,12 @@ internal sealed record LocalProtectionStatusView(IReadOnlyList<LocalProtectionSt
                 "Send blocked: protected replay failed",
                 "The protected replay did not complete; the original Send stayed blocked. Focus the composer and send again.",
                 LocalProtectionStatusAction.None),
+            "replay_unavailable" => new LocalProtectionStatusRow(
+                "Automatic prompt protection",
+                "Selected-app send interception",
+                "Send blocked: protected replay unavailable",
+                "The protected replay could not start; the original Send stayed blocked. Focus the composer and send again.",
+                LocalProtectionStatusAction.None),
             "replay_indeterminate" => new LocalProtectionStatusRow(
                 "Automatic prompt protection",
                 "Selected-app send interception",

@@ -564,7 +564,8 @@ public sealed class OsInteractionOrchestrator
 
     private static string ReplayStatus(string status)
     {
-        return status is OsInteractionStatusIds.ReplayIndeterminate
+        return status is OsInteractionStatusIds.ReplayUnavailable
+            or OsInteractionStatusIds.ReplayIndeterminate
             or OsInteractionStatusIds.StaleComposer
             or OsInteractionStatusIds.FocusLost
             or OsInteractionStatusIds.FailedClosed

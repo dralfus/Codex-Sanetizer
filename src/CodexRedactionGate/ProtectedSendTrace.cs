@@ -89,6 +89,7 @@ internal readonly record struct ProtectedSendTraceResultCode
         OsInteractionStatusIds.NativeSubmitSetupRequired,
         OsInteractionStatusIds.ProfilesUnavailable,
         OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported,
+        OsInteractionStatusIds.ReplayUnavailable,
         OsInteractionStatusIds.ReplayIndeterminate
     };
 

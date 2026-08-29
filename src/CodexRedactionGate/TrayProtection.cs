@@ -4180,7 +4180,7 @@ internal static class TrayStatusFormatter
             or "setup_required" or "binding_not_verified" or "composer_changed" or "canceled"
             or "local_protection_unavailable" or "policy_blocked" or "protection_unavailable"
             or "content_blocked" or "trace_unavailable" or "settings_unavailable"
-            or "replay_indeterminate"
+            or "replay_unavailable" or "replay_indeterminate"
             ? value
             : "unavailable";
     }
@@ -4219,7 +4219,7 @@ internal static class TrayStatusFormatter
                 or OsInteractionStatusIds.NativeSubmitSetupRequired or OsInteractionStatusIds.TraceUnavailable
                 or OsInteractionStatusIds.ProfilesUnavailable
                 or OsInteractionStatusIds.ProgrammaticUiaInvokeUnsupported
-                or OsInteractionStatusIds.ReplayIndeterminate
+                or OsInteractionStatusIds.ReplayUnavailable or OsInteractionStatusIds.ReplayIndeterminate
                 or LocalProtectionRecovery.ReadyCode or LocalProtectionRecovery.RecoveryRequiredCode
                 or LocalProtectionRecovery.ConfirmationRequiredCode or LocalProtectionRecovery.RecoveredCode
                 or LocalProtectionRecovery.RecoveryFailedCode or LocalProtectionRecovery.RecoveryNotRequiredCode

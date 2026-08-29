@@ -2201,6 +2201,7 @@ public partial class SanitizerTests
             (OsInteractionStatusIds.WriteFailed, "write_failed"),
             (OsInteractionStatusIds.VerificationFailed, "verification_failed"),
             (OsInteractionStatusIds.SubmitFailed, "submit_failed"),
+            (OsInteractionStatusIds.ReplayUnavailable, "replay_unavailable"),
             (OsInteractionStatusIds.ReplayIndeterminate, "replay_indeterminate"),
             (OsInteractionStatusIds.FailedClosed, "protection_unavailable"),
             (OsInteractionStatusIds.TraceUnavailable, "trace_unavailable"),
@@ -2233,6 +2234,13 @@ public partial class SanitizerTests
 
             Assert.That(controller.State.ProtectedSendAttemptStatus, Is.EqualTo(expectedAttemptStatus), flowStatus);
             Assert.That(controller.State.ProtectedSendAttemptStatus, Is.Not.EqualTo("sent_safely"), flowStatus);
+            if (flowStatus is OsInteractionStatusIds.ReplayUnavailable or OsInteractionStatusIds.ReplayIndeterminate)
+            {
+                var menuStatus = TrayStatusFormatter.FormatMenuStatus(controller.State);
+                Assert.That(menuStatus, Does.Contain($"protected_send_attempt={expectedAttemptStatus}"), flowStatus);
+                Assert.That(menuStatus, Does.Contain($"last={flowStatus}"), flowStatus);
+            }
+
             if (flowStatus == OsInteractionStatusIds.TraceUnavailable)
             {
                 Assert.That(controller.State.ReadinessStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
@@ -6846,9 +6854,11 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
     }
 
-    [TestCase(1)]
-    [TestCase(2)]
-    public void ReferenceComposerAcceptance_ReplayFailureBlocksWithoutSuccessTrace(int replayModeValue)
+    [TestCase(1, OsInteractionStatusIds.ReplayUnavailable)]
+    [TestCase(2, OsInteractionStatusIds.ReplayIndeterminate)]
+    public void ReferenceComposerAcceptance_ReplayFailurePublishesDistinctTerminalStatus(
+        int replayModeValue,
+        string expectedTerminalStatus)
     {
         var replayMode = (ReferenceComposerReplayMode)replayModeValue;
         var report = ReferenceComposerAcceptanceRunner.Run(
@@ -6867,7 +6877,8 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("send_injected"));
         Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
         Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
-        Assert.That(report.Trace[^1].ResultCode, Is.EqualTo(OsInteractionStatusIds.ReplayIndeterminate));
+        Assert.That(report.Trace[^1].ResultCode, Is.EqualTo(expectedTerminalStatus));
+        Assert.That(report.ReplayDiagnostics["composer_access"], Is.EqualTo("native_verified_composer_text_access"));
         Assert.That(report.ReplayDiagnostics["replay_outcome"], Is.EqualTo(replayMode == ReferenceComposerReplayMode.Partial ? "partial" : "unavailable"));
         Assert.That(report.ReplayDiagnostics["modifiers_released"], Is.EqualTo("true"));
     }
@@ -6907,6 +6918,11 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Scenarios.All(scenario => scenario.Passed && scenario.RawFree && scenario.CleanupPassed), Is.True);
         Assert.That(report.Scenarios.Select(scenario => scenario.ScenarioId).Count(id => id.StartsWith("run1.", StringComparison.Ordinal)), Is.EqualTo(9));
         Assert.That(report.Scenarios.Select(scenario => scenario.ScenarioId).Count(id => id.StartsWith("run2.", StringComparison.Ordinal)), Is.EqualTo(9));
+        Assert.That(report.Scenarios.Single(scenario => scenario.ScenarioId == "run1.replay_unavailable").TerminalStatus,
+            Is.EqualTo(OsInteractionStatusIds.ReplayUnavailable));
+        Assert.That(report.Scenarios.Single(scenario => scenario.ScenarioId == "run1.replay_partial").TerminalStatus,
+            Is.EqualTo(OsInteractionStatusIds.ReplayIndeterminate));
+        Assert.That(report.Scenarios.All(scenario => scenario.ComposerAccess == "native_verified_composer_text_access"), Is.True);
     }
 
     [Test]

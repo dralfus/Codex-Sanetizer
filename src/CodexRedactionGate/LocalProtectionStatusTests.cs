@@ -228,6 +228,7 @@ public sealed class LocalProtectionStatusTests
             ("write_failed", "Send blocked: replacement write failed", LocalProtectionStatusAction.None, "original Send stayed blocked"),
             ("verification_failed", "Send blocked: replacement verification failed", LocalProtectionStatusAction.None, "original Send stayed blocked"),
             ("submit_failed", "Send blocked: protected replay failed", LocalProtectionStatusAction.None, "original Send stayed blocked"),
+            ("replay_unavailable", "Send blocked: protected replay unavailable", LocalProtectionStatusAction.None, "original Send stayed blocked"),
             ("replay_indeterminate", "Send blocked: protected replay uncertain", LocalProtectionStatusAction.None, "original Send stayed blocked"),
             ("local_protection_unavailable", "Send blocked: local protection unavailable", LocalProtectionStatusAction.RepairLocalProtection, "Repair local protection"),
             ("policy_blocked", "Send blocked by policy", LocalProtectionStatusAction.None, "contact the administrator"),

@@ -300,6 +300,7 @@ internal sealed class ProtectedSendPipeline
             OsInteractionStatusIds.WriteFailed => new("write_failed", "retry_protection"),
             OsInteractionStatusIds.VerificationFailed => new("verification_failed", "retry_protection"),
             OsInteractionStatusIds.SubmitFailed => new("submit_failed", "retry_protection"),
+            OsInteractionStatusIds.ReplayUnavailable => new("replay_unavailable", "retry_protection"),
             OsInteractionStatusIds.Canceled => new("canceled", "edit_or_send_again"),
             OsInteractionStatusIds.ReplayIndeterminate => new("replay_indeterminate", "retry_protection"),
             OsInteractionStatusIds.TraceUnavailable => new("trace_unavailable", "retry_protection"),

@@ -3342,14 +3342,35 @@ threads. The deterministic matrix also lacks distinct STA-creation/execution,
 replay-unavailable, and partial-replay cases. These gaps violate the original
 state and proof criteria even though the existing suite remains green.
 
-- [ ] Retain only opaque target/window/focused-element identity between
+- [x] Retain only opaque target/window/focused-element identity between
       operations; reacquire `AutomationElement` inside each bounded STA action.
-- [ ] Add an injectable STA execution boundary and prove creation and execution
+- [x] Add an injectable STA execution boundary and prove creation and execution
       failures produce typed fail-closed outcomes with no later side effect.
-- [ ] Model and test replay unavailable separately from replay partially
+- [x] Model and test replay unavailable separately from replay partially
       observed/indeterminate.
-- [ ] Run the same target-change, focus, STA, write-verification, and replay
+- [x] Run the same target-change, focus, STA, write-verification, and replay
       matrix against both reference and injected Windows access boundaries.
+
+**Controller acceptance (2026-08-29): `DONE` at `locally_verified`.** The
+fixed-point diff from `2fe19c71d5618de362d96bfe22a00cd13a38703e` now
+reacquires the UIA element inside each STA action and retains only opaque target
+identity between actions. `IStaExecutionBoundary` and
+`INativeVerifiedComposerTargetOperations` are the only injectable low-level
+seams; the shallow target-access and worker interfaces and the delegating
+reference factory were removed. A pre-start timeout atomically cancels the
+right to begin, while a started action is awaited through completion so no
+late write or replay can occur after a terminal return. `replay_unavailable`
+remains distinct from `replay_indeterminate` through orchestration, trace,
+reference acceptance, local status and tray projection.
+
+Independent evidence: Reviewer `SPEC: PASS`, `CODE_QUALITY: PASS`; build exit
+`0` with zero warnings/errors; targeted terminal projection `6/6`, session
+matrix `24/24`, reference fixture `384/384`; full suite `1933/1933`; `git diff
+--check` exit `0`. Agent routing for the accepted final slice was round-5
+Implementer `Sol/high`, Reviewer `Sol/high`, Verifier `Terra/high`, plus one
+user-authorized `Terra/high` full-suite evidence recovery after the first
+verifier process lost its terminal output. Installed/live OpenAI Desktop is
+`NOT_RUN`: this ticket makes no production-keyboard or cloud-delivery claim.
 
 ## 354. Introduce ProtectedSendTransaction beside legacy orchestration
 

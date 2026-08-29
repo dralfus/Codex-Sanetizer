@@ -592,23 +592,3 @@ internal sealed class WindowsProtectedComposerSessionFactory : IProtectedCompose
         return new ProtectedComposerSession(_surfaceDiscovery, _adapter, _adapter, _submitAction);
     }
 }
-
-/// <summary>
-/// Deterministic reference composition with the same session contract as
-/// production. It has no access to persisted AI profiles or cloud transport.
-/// </summary>
-internal sealed class ReferenceProtectedComposerSessionFactory : IProtectedComposerSessionFactory
-{
-    private readonly ProtectedComposerSessionFactory _inner;
-
-    public ReferenceProtectedComposerSessionFactory(
-        IActiveTextSurfaceDiscovery surfaceDiscovery,
-        ITextSurfaceReader reader,
-        ITextSurfaceWriter writer,
-        ISubmitAction submitAction)
-    {
-        _inner = new ProtectedComposerSessionFactory(surfaceDiscovery, reader, writer, submitAction);
-    }
-
-    public IProtectedComposerSession Create() => _inner.Create();
-}

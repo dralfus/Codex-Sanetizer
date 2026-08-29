@@ -10,7 +10,9 @@ internal sealed record ReferenceComposerReleaseScenarioResult(
     bool Passed,
     bool RawFree,
     bool CleanupPassed,
-    string Status);
+    string Status,
+    string TerminalStatus,
+    string ComposerAccess);
 
 internal sealed record ReferenceComposerReleaseAcceptanceReport(
     string Status,
@@ -120,7 +122,7 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
         foreach (var scenario in report.Scenarios)
         {
             lines.Add(
-                $"scenario: {SafeStatus(scenario.ScenarioId)} status: {SafeStatus(scenario.Status)} raw_free: {scenario.RawFree.ToString().ToLowerInvariant()} cleanup: {scenario.CleanupPassed.ToString().ToLowerInvariant()}");
+                $"scenario: {SafeStatus(scenario.ScenarioId)} status: {SafeStatus(scenario.Status)} terminal_status: {SafeStatus(scenario.TerminalStatus)} composer_access: {SafeStatus(scenario.ComposerAccess)} raw_free: {scenario.RawFree.ToString().ToLowerInvariant()} cleanup: {scenario.CleanupPassed.ToString().ToLowerInvariant()}");
         }
 
         lines.Add($"cleanup: {report.CleanupPassed.ToString().ToLowerInvariant()}");
@@ -196,13 +198,13 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,
                 replayMode: ReferenceComposerReplayMode.Unavailable),
-                ReplayFailureScenario),
+                report => ReplayFailureScenario(report, OsInteractionStatusIds.ReplayUnavailable)),
             RunScenario($"{runId}.replay_partial", () => ReferenceComposerAcceptanceRunner.Run(
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,
                 replayMode: ReferenceComposerReplayMode.Partial),
-                ReplayFailureScenario)
+                report => ReplayFailureScenario(report, OsInteractionStatusIds.ReplayIndeterminate))
         };
     }
 
@@ -217,12 +219,17 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
             var scenarioPassed = passed(report);
             var rawFree = ProtectedSendTrace.IsValidTerminalTrace(report.Trace)
                 && report.SentTexts.All(text => !text.Contains(SensitivePrompt, StringComparison.Ordinal));
+            var composerAccess = report.ReplayDiagnostics.TryGetValue("composer_access", out var reportedComposerAccess)
+                ? reportedComposerAccess
+                : "unavailable";
             return new ReferenceComposerReleaseScenarioResult(
                 scenarioId,
                 scenarioPassed,
                 rawFree,
                 CleanupPassed: report.CleanupPassed,
-                Status: scenarioPassed ? "passed" : "failed_closed");
+                Status: scenarioPassed ? "passed" : "failed_closed",
+                TerminalStatus: report.Trace.LastOrDefault()?.ResultCode ?? OsInteractionStatusIds.FailedClosed,
+                ComposerAccess: composerAccess);
         }
         catch
         {
@@ -231,7 +238,9 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                 Passed: false,
                 RawFree: false,
                 CleanupPassed: false,
-                Status: "failed_closed");
+                Status: "failed_closed",
+                TerminalStatus: OsInteractionStatusIds.FailedClosed,
+                ComposerAccess: "unavailable");
         }
     }
 
@@ -268,10 +277,12 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
         });
     }
 
-    private static bool ReplayFailureScenario(ReferenceComposerAcceptanceReport report)
+    private static bool ReplayFailureScenario(
+        ReferenceComposerAcceptanceReport report,
+        string expectedTerminalStatus)
     {
         return BlockedScenario(report)
-            && report.Trace.LastOrDefault()?.ResultCode == OsInteractionStatusIds.ReplayIndeterminate
+            && report.Trace.LastOrDefault()?.ResultCode == expectedTerminalStatus
             && report.Trace.All(entry => entry.Stage != "send_injected")
             && report.ReplayDiagnostics.TryGetValue("modifiers_released", out var released)
             && released == "true";
