@@ -645,7 +645,8 @@ public sealed class ResidentCanaryTests
                 target,
                 (_, _) => true,
                 () => true,
-                () => new CanaryLease());
+                () => new CanaryLease(),
+                new ResidentCanaryAdmission(armed.Arm!, target));
 
             Assert.That(result.Submitted, Is.True);
             Assert.That(result.Diagnostics["canary_code"], Is.EqualTo("evidence_binding_incomplete"));
@@ -801,6 +802,103 @@ public sealed class ResidentCanaryTests
         }
     }
 
+    [Test]
+    public void Controller_QueuedCanaryCallbacks_ExecuteAdmittedAttemptOrFailClosedWithoutNormalRunner()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "codex-redaction-gate-canary-callback-race-tests", Guid.NewGuid().ToString("N"));
+        var layout = DefaultStorageLayout.Create(directory);
+        var profile = CreateProtectedProfile("chatgpt-desktop");
+        var hook = new CanaryHookHost();
+        var canaryRunnerCalls = 0;
+        var normalRunnerCalls = 0;
+        var surface = TestSurfaceFactory.CreateTestSurface("chatgpt-desktop") with
+        {
+            Metadata = new SurfaceMetadata(
+                SurfaceKind: "test",
+                ComposerStatus: OsInteractionStatusIds.SupportedComposer,
+                WindowHandle: "1")
+        };
+        var controller = TrayProtectionController.CreateTest(
+            new CanaryHotkeyHost(),
+            () => throw new AssertionException("Manual scan must not run."),
+            hook,
+            new NativeSubmitInterceptionController(profile, new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5))),
+            () =>
+            {
+                normalRunnerCalls++;
+                return new OsInteractionResult(
+                    OsInteractionStatusIds.Submitted,
+                    surface,
+                    null,
+                    null,
+                    Applied: true,
+                    Submitted: true,
+                    Diagnostics: new Dictionary<string, string>());
+            },
+            profile,
+            storageLayout: layout,
+            activeSurfaceDiscovery: () => TextSurfaceDiscoveryResult.Success(surface),
+            residentCanaryRunner: (_, target, _, traceStage, _, _) =>
+            {
+                canaryRunnerCalls++;
+                Assert.That(traceStage("composer_read", "capture_verified"), Is.True);
+                Assert.That(traceStage("sanitized", "sanitization_verified"), Is.True);
+                Assert.That(traceStage("overlay_created", "confirmation_requested"), Is.True);
+                return new OsInteractionResult(
+                    OsInteractionStatusIds.Submitted,
+                    target.CapturedSurface,
+                    null,
+                    null,
+                    Applied: true,
+                    Submitted: true,
+                    Diagnostics: new Dictionary<string, string>
+                    {
+                        ["canary_cleanup"] = "true",
+                        ["cloud_submission"] = "false",
+                        ["canary_marker_present"] = "true"
+                    });
+            });
+
+        try
+        {
+            Assert.That(controller.Start(), Is.True);
+            var action = controller.StartOperationalAction(
+                "resident_canary",
+                "requested",
+                true,
+                "focus_composer_and_send_marker");
+            var armed = controller.ArmResidentCanary(action.AttemptId, _ => { });
+            Assert.That(armed.Started, Is.True, armed.Code);
+
+            var firstGesture = new NativeKeyGesture("Enter", TargetWindow: new IntPtr(1), TargetProcessId: 1);
+            var secondGesture = new NativeKeyGesture("Enter", TargetWindow: new IntPtr(1), TargetProcessId: 1);
+            var first = hook.Classify(firstGesture);
+            var second = hook.Classify(secondGesture);
+
+            Assert.That(first.SuppressOriginalInput, Is.True);
+            Assert.That(second.SuppressOriginalInput, Is.True);
+
+            hook.ExecuteSuppressed(firstGesture, first);
+            hook.ExecuteSuppressed(secondGesture, second);
+
+            Assert.That(hook.OriginalInputSuppressedCount, Is.EqualTo(2));
+            Assert.That(canaryRunnerCalls, Is.EqualTo(1));
+            Assert.That(normalRunnerCalls, Is.EqualTo(0));
+            Assert.That(controller.State.LastStatus, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
+            Assert.That(controller.State.LastSubmitted, Is.False);
+            Assert.That(controller.State.ProtectedSendAttemptTrace, Is.Not.Null);
+            Assert.That(controller.State.ProtectedSendAttemptTrace!.Last().Stage, Is.EqualTo("terminal_blocked"));
+        }
+        finally
+        {
+            controller.Stop();
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
     private static SubmitBindingProfile CreateProtectedProfile(string profileId)
     {
         return SubmitBindingOnboardingVerifier.VerifyUserBindings(
@@ -830,6 +928,8 @@ public sealed class ResidentCanaryTests
 
         internal bool OriginalInputSuppressed { get; private set; }
 
+        internal int OriginalInputSuppressedCount { get; private set; }
+
         public string? LastErrorCode => null;
 
         public bool Start(
@@ -851,11 +951,25 @@ public sealed class ResidentCanaryTests
             var classification = Classify(gesture);
             if (classification.SuppressOriginalInput)
             {
-                OriginalInputSuppressed = true;
-                _onSuppressedSubmit?.Invoke(gesture, classification);
+                ExecuteSuppressed(gesture, classification);
             }
 
             return classification;
+        }
+
+        internal void ExecuteSuppressed(
+            NativeKeyGesture gesture,
+            NativeSubmitInterceptionResult classification)
+        {
+            SuppressOriginalInput(classification);
+            _onSuppressedSubmit?.Invoke(gesture, classification);
+        }
+
+        internal void SuppressOriginalInput(NativeSubmitInterceptionResult classification)
+        {
+            Assert.That(classification.SuppressOriginalInput, Is.True);
+            OriginalInputSuppressed = true;
+            OriginalInputSuppressedCount++;
         }
 
         public void Stop()

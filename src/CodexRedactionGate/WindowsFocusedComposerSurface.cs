@@ -742,8 +742,72 @@ internal interface IStaExecutionBoundary
     StaExecutionResult<T> Execute<T>(Func<T> action);
 }
 
+internal interface IClipboardSnapshot
+{
+}
+
+internal sealed record ClipboardSnapshotCapture(bool Succeeded, IClipboardSnapshot? Snapshot)
+{
+    public static ClipboardSnapshotCapture Success(IClipboardSnapshot snapshot) => new(true, snapshot);
+
+    public static ClipboardSnapshotCapture Failure() => new(false, null);
+}
+
+internal sealed record ClipboardBoundaryResult(bool Succeeded)
+{
+    public static ClipboardBoundaryResult Success() => new(true);
+
+    public static ClipboardBoundaryResult Failure() => new(false);
+}
+
+internal sealed record ClipboardTextRead(bool Succeeded, string? Text)
+{
+    public static ClipboardTextRead Success(string text) => new(true, text);
+
+    public static ClipboardTextRead Failure() => new(false, null);
+}
+
+/// <summary>
+/// An STA-bound boundary for preserving the complete clipboard data object while
+/// keyboard fallback temporarily uses its text representation.
+/// </summary>
+internal interface IClipboardAccessBoundary
+{
+    ClipboardSnapshotCapture CaptureSnapshot();
+
+    ClipboardBoundaryResult SetText(string text);
+
+    ClipboardBoundaryResult Clear();
+
+    ClipboardTextRead ReadUnicodeText();
+
+    ClipboardBoundaryResult Restore(IClipboardSnapshot snapshot);
+}
+
+/// <summary>
+/// The keyboard copy/paste portion of the verified composer fallback. It stays
+/// inside the caller's STA operation and is injectable only for deterministic
+/// boundary tests.
+/// </summary>
+internal interface IKeyboardClipboardOperations
+{
+    string? Copy(IKeyboardFallbackComposerTarget target);
+
+    bool Paste(IKeyboardFallbackComposerTarget target, string text);
+}
+
 internal interface INativeVerifiedComposerTarget
 {
+}
+
+/// <summary>
+/// Narrow fallback contract shared by the verified UIA wrapper and deterministic
+/// targets. The target decides only whether its verified surface can use the
+/// keyboard route; clipboard ownership remains with the caller's STA action.
+/// </summary>
+internal interface IKeyboardFallbackComposerTarget : INativeVerifiedComposerTarget
+{
+    bool CanUseKeyboardFallback(TextSurfaceDescriptor surface);
 }
 
 internal sealed record NativeComposerTextReadAttempt(
@@ -756,6 +820,112 @@ internal sealed record NativeComposerTextWriteAttempt(
     bool Succeeded,
     string Status,
     IReadOnlyDictionary<string, string> Diagnostics);
+
+internal static class NativeComposerKeyboardFallback
+{
+    public static bool TryGetTarget(
+        INativeVerifiedComposerTarget target,
+        TextSurfaceDescriptor surface,
+        out IKeyboardFallbackComposerTarget fallbackTarget)
+    {
+        if (target is not IKeyboardFallbackComposerTarget keyboardTarget)
+        {
+            fallbackTarget = null!;
+            return false;
+        }
+
+        fallbackTarget = keyboardTarget;
+        return fallbackTarget.CanUseKeyboardFallback(surface);
+    }
+
+    public static NativeComposerTextReadAttempt Capture(
+        IKeyboardFallbackComposerTarget target,
+        IKeyboardClipboardOperations keyboard,
+        string sourceText)
+    {
+        var clipboardText = keyboard.Copy(target);
+        if (clipboardText is null)
+        {
+            return new NativeComposerTextReadAttempt(
+                false,
+                null,
+                "unavailable",
+                new Dictionary<string, string>
+                {
+                    ["capture_strategy"] = "verified-keyboard-copy",
+                    ["format_capture_status"] = "unavailable",
+                    ["format_preserved"] = "false"
+                });
+        }
+
+        if (!ComposerTextFormatting.HasSameContentIgnoringWhitespace(sourceText, clipboardText))
+        {
+            return new NativeComposerTextReadAttempt(
+                false,
+                null,
+                "unavailable",
+                new Dictionary<string, string>
+                {
+                    ["capture_strategy"] = "verified-keyboard-copy",
+                    ["format_capture_status"] = "source_mismatch",
+                    ["format_preserved"] = "false"
+                });
+        }
+
+        return new NativeComposerTextReadAttempt(
+            true,
+            clipboardText,
+            "verified-keyboard-copy",
+            new Dictionary<string, string>());
+    }
+
+    public static NativeComposerTextWriteAttempt Paste(
+        IKeyboardFallbackComposerTarget target,
+        IKeyboardClipboardOperations keyboard,
+        string text)
+    {
+        if (!keyboard.Paste(target, text))
+        {
+            return new NativeComposerTextWriteAttempt(
+                false,
+                OsInteractionStatusIds.WriteFailed,
+                new Dictionary<string, string>
+                {
+                    ["write_strategy"] = "verified-keyboard-paste",
+                    ["write_focus"] = "not_verified",
+                    ["write_verification"] = "pasted_text_mismatch"
+                });
+        }
+
+        var verification = keyboard.Copy(target);
+        if (!string.Equals(
+                ComposerTextFormatting.NormalizeLineEndings(verification ?? string.Empty),
+                ComposerTextFormatting.NormalizeLineEndings(text),
+                StringComparison.Ordinal))
+        {
+            return new NativeComposerTextWriteAttempt(
+                false,
+                OsInteractionStatusIds.WriteFailed,
+                new Dictionary<string, string>
+                {
+                    ["write_strategy"] = "verified-keyboard-paste",
+                    ["write_focus"] = "restored_and_verified",
+                    ["write_verification"] = "pasted_text_mismatch"
+                });
+        }
+
+        return new NativeComposerTextWriteAttempt(
+            true,
+            OsInteractionStatusIds.Applied,
+            new Dictionary<string, string>
+            {
+                ["write_length"] = text.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["write_strategy"] = "verified-keyboard-paste",
+                ["write_focus"] = "restored_and_verified",
+                ["write_verification"] = "exact_keyboard_round_trip"
+            });
+    }
+}
 
 /// <summary>
 /// Lowest injectable Windows seam. A target is reacquired for each STA action
@@ -1016,10 +1186,13 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
     private const int MaxRuntimeIdSearchElements = 512;
     private const int FocusVerificationAttempts = 8;
     private const int FocusVerificationDelayMilliseconds = 25;
+    private const int ClipboardRestoreAttempts = 2;
     private readonly Func<TextSurfaceDiscoveryResult> _surfaceDiscovery;
     private readonly IVerifiedComposerReplay _replay;
     private readonly IStaExecutionBoundary _staExecution;
     private readonly INativeVerifiedComposerTargetOperations _targetOperations;
+    private readonly IClipboardAccessBoundary _clipboard;
+    private readonly IKeyboardClipboardOperations _keyboardClipboardOperations;
 
     public NativeVerifiedComposerTextAccess()
         : this(
@@ -1032,44 +1205,51 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         Func<TextSurfaceDiscoveryResult> surfaceDiscovery,
         IVerifiedComposerReplay? replay = null,
         IStaExecutionBoundary? staExecution = null,
-        INativeVerifiedComposerTargetOperations? targetOperations = null)
+        INativeVerifiedComposerTargetOperations? targetOperations = null,
+        IClipboardAccessBoundary? clipboard = null,
+        IKeyboardClipboardOperations? keyboardClipboardOperations = null)
     {
         _surfaceDiscovery = surfaceDiscovery ?? throw new ArgumentNullException(nameof(surfaceDiscovery));
         _replay = replay ?? new NativeVerifiedComposerReplay();
         _staExecution = staExecution ?? new NativeStaExecutionBoundary();
-        _targetOperations = targetOperations ?? new AutomationElementTargetOperations(this, _replay);
+        _clipboard = clipboard ?? new WindowsClipboardAccessBoundary();
+        _keyboardClipboardOperations = keyboardClipboardOperations ?? new WindowsKeyboardClipboardOperations(_clipboard);
+        _targetOperations = targetOperations ?? new AutomationElementTargetOperations(this, _replay, _keyboardClipboardOperations);
     }
 
     public TextCaptureResult CaptureText(TextSurfaceDescriptor surface)
     {
         try
         {
-            var execution = _staExecution.Execute(() =>
-            {
-                var target = _targetOperations.Reacquire(surface);
-                if (target is null)
+            var execution = _staExecution.Execute(() => ExecuteWithClipboardProtection(
+                surface,
+                () =>
                 {
-                    return new TextCaptureResult(false, OsInteractionStatusIds.NotComposer, null, new Dictionary<string, string>());
-                }
+                    var target = _targetOperations.Reacquire(surface);
+                    if (target is null)
+                    {
+                        return new TextCaptureResult(false, OsInteractionStatusIds.NotComposer, null, new Dictionary<string, string>());
+                    }
 
-                var read = _targetOperations.ReadText(target, surface);
-                if (!read.Succeeded || string.IsNullOrEmpty(read.Text))
-                {
+                    var read = _targetOperations.ReadText(target, surface);
+                    if (!read.Succeeded || string.IsNullOrEmpty(read.Text))
+                    {
+                        return new TextCaptureResult(
+                            false,
+                            OsInteractionStatusIds.CaptureFailed,
+                            null,
+                            read.Diagnostics);
+                    }
+
+                    var normalizedText = ComposerTextFormatting.NormalizeLineEndings(read.Text);
+
                     return new TextCaptureResult(
-                        false,
-                        OsInteractionStatusIds.CaptureFailed,
-                        null,
-                        read.Diagnostics);
-                }
-
-                var normalizedText = ComposerTextFormatting.NormalizeLineEndings(read.Text);
-
-                return new TextCaptureResult(
-                    true,
-                    "captured",
-                    normalizedText,
-                    ComposerTextFormatting.Diagnostics(read.Text, normalizedText, read.CaptureStrategy));
-            });
+                        true,
+                        "captured",
+                        normalizedText,
+                        ComposerTextFormatting.Diagnostics(read.Text, normalizedText, read.CaptureStrategy));
+                },
+                ClipboardCaptureFailure));
             return execution.Succeeded
                 ? execution.Value!
                 : StaCaptureFailure(execution.FailureKind!.Value);
@@ -1098,17 +1278,20 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
 
         try
         {
-            var execution = _staExecution.Execute(() =>
-            {
-                var target = _targetOperations.Reacquire(surface);
-                if (target is null)
+            var execution = _staExecution.Execute(() => ExecuteWithClipboardProtection(
+                surface,
+                () =>
                 {
-                    return new TextReplacementResult(false, OsInteractionStatusIds.NotComposer, new Dictionary<string, string>());
-                }
+                    var target = _targetOperations.Reacquire(surface);
+                    if (target is null)
+                    {
+                        return new TextReplacementResult(false, OsInteractionStatusIds.NotComposer, new Dictionary<string, string>());
+                    }
 
-                var write = _targetOperations.WriteText(target, surface, text);
-                return new TextReplacementResult(write.Succeeded, write.Status, write.Diagnostics);
-            });
+                    var write = _targetOperations.WriteText(target, surface, text);
+                    return new TextReplacementResult(write.Succeeded, write.Status, write.Diagnostics);
+                },
+                ClipboardWriteFailure));
             return execution.Succeeded
                 ? execution.Value!
                 : StaWriteFailure(execution.FailureKind!.Value);
@@ -1177,6 +1360,68 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             return new SubmitActionResult(false, OsInteractionStatusIds.SubmitFailed, new Dictionary<string, string>());
         }
     }
+
+    private T ExecuteWithClipboardProtection<T>(
+        TextSurfaceDescriptor surface,
+        Func<T> operation,
+        Func<string, T> clipboardFailure)
+    {
+        if (surface.Metadata.TryGetValue("keyboard_write_fallback") != "true")
+        {
+            return operation();
+        }
+
+        var capture = _clipboard.CaptureSnapshot();
+        if (!capture.Succeeded || capture.Snapshot is null)
+        {
+            return clipboardFailure("capture");
+        }
+
+        T result;
+        try
+        {
+            result = operation();
+        }
+        catch
+        {
+            if (!RestoreClipboardWithBoundedRetry(capture.Snapshot))
+            {
+                return clipboardFailure("restore");
+            }
+
+            throw;
+        }
+
+        return RestoreClipboardWithBoundedRetry(capture.Snapshot)
+            ? result
+            : clipboardFailure("restore");
+    }
+
+    private bool RestoreClipboardWithBoundedRetry(IClipboardSnapshot snapshot)
+    {
+        for (var attempt = 0; attempt < ClipboardRestoreAttempts; attempt++)
+        {
+            if (_clipboard.Restore(snapshot).Succeeded)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static TextCaptureResult ClipboardCaptureFailure(string stage) =>
+        new(false, OsInteractionStatusIds.CaptureFailed, null, ClipboardFailureDiagnostics(stage));
+
+    private static TextReplacementResult ClipboardWriteFailure(string stage) =>
+        new(false, OsInteractionStatusIds.WriteFailed, ClipboardFailureDiagnostics(stage));
+
+    private static IReadOnlyDictionary<string, string> ClipboardFailureDiagnostics(string stage) =>
+        new Dictionary<string, string>
+        {
+            ["clipboard_failure"] = stage,
+            ["failed_closed"] = "true"
+        };
 
     private AutomationElement? GetCurrentVerifiedElement(TextSurfaceDescriptor surface)
     {
@@ -1255,7 +1500,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         return null; // Fail closed if we cannot verify the element
     }
 
-    private sealed class AutomationElementTarget : INativeVerifiedComposerTarget
+    private sealed class AutomationElementTarget : IKeyboardFallbackComposerTarget
     {
         public AutomationElementTarget(AutomationElement element)
         {
@@ -1263,19 +1508,26 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         }
 
         public AutomationElement Element { get; }
+
+        public bool CanUseKeyboardFallback(TextSurfaceDescriptor surface) =>
+            CanUseKeyboardWriteFallback(surface, Element);
     }
 
     private sealed class AutomationElementTargetOperations : INativeVerifiedComposerTargetOperations
     {
         private readonly NativeVerifiedComposerTextAccess _owner;
         private readonly IVerifiedComposerReplay _replay;
+        private readonly IKeyboardClipboardOperations _keyboardClipboardOperations;
 
         public AutomationElementTargetOperations(
             NativeVerifiedComposerTextAccess owner,
-            IVerifiedComposerReplay replay)
+            IVerifiedComposerReplay replay,
+            IKeyboardClipboardOperations keyboardClipboardOperations)
         {
             _owner = owner ?? throw new ArgumentNullException(nameof(owner));
             _replay = replay ?? throw new ArgumentNullException(nameof(replay));
+            _keyboardClipboardOperations = keyboardClipboardOperations
+                ?? throw new ArgumentNullException(nameof(keyboardClipboardOperations));
         }
 
         public INativeVerifiedComposerTarget? Reacquire(TextSurfaceDescriptor surface)
@@ -1303,31 +1555,12 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                 text = textPattern.DocumentRange.GetText(MaxTextPatternCaptureLength) ?? string.Empty;
                 captureStrategy = "text-pattern";
 
-                if (CanUseKeyboardWriteFallback(surface, element))
+                if (NativeComposerKeyboardFallback.TryGetTarget(target, surface, out var fallbackTarget))
                 {
-                    var clipboardText = CaptureFormattedKeyboardText(element);
-                    if (clipboardText is null)
-                    {
-                        return ReadFailure(new Dictionary<string, string>
-                        {
-                            ["capture_strategy"] = "verified-keyboard-copy",
-                            ["format_capture_status"] = "unavailable",
-                            ["format_preserved"] = "false"
-                        });
-                    }
-
-                    if (!ComposerTextFormatting.HasSameContentIgnoringWhitespace(text, clipboardText))
-                    {
-                        return ReadFailure(new Dictionary<string, string>
-                        {
-                            ["capture_strategy"] = "verified-keyboard-copy",
-                            ["format_capture_status"] = "source_mismatch",
-                            ["format_preserved"] = "false"
-                        });
-                    }
-
-                    text = clipboardText;
-                    captureStrategy = "verified-keyboard-copy";
+                    return NativeComposerKeyboardFallback.Capture(
+                        fallbackTarget,
+                        _keyboardClipboardOperations,
+                        text);
                 }
             }
 
@@ -1358,31 +1591,15 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                     });
             }
 
-            if (!CanUseKeyboardWriteFallback(surface, element))
+            if (!NativeComposerKeyboardFallback.TryGetTarget(target, surface, out var fallbackTarget))
             {
                 return WriteFailure();
             }
 
-            if (!TryPasteIntoVerifiedElement(element, text))
-            {
-                return WriteFailure(new Dictionary<string, string>
-                {
-                    ["write_strategy"] = "verified-keyboard-paste",
-                    ["write_focus"] = "not_verified",
-                    ["write_verification"] = "pasted_text_mismatch"
-                });
-            }
-
-            return new NativeComposerTextWriteAttempt(
-                true,
-                OsInteractionStatusIds.Applied,
-                new Dictionary<string, string>
-                {
-                    ["write_length"] = text.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    ["write_strategy"] = "verified-keyboard-paste",
-                    ["write_focus"] = "restored_and_verified",
-                    ["write_verification"] = "exact_keyboard_round_trip"
-                });
+            return NativeComposerKeyboardFallback.Paste(
+                fallbackTarget,
+                _keyboardClipboardOperations,
+                text);
         }
 
         public VerifiedComposerReplayResult Replay(
@@ -1473,21 +1690,26 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             && element.Current.IsEnabled;
     }
 
-    private static bool TryPasteIntoVerifiedElement(AutomationElement element, string text)
+    private static bool TryPasteIntoVerifiedElement(
+        AutomationElement element,
+        string text,
+        IClipboardAccessBoundary clipboard)
     {
         if (!TryFocusVerifiedElement(element))
         {
             return false;
         }
 
-        ClipboardSnapshot? clipboardBackup = null;
         try
         {
-            clipboardBackup = ClipboardSnapshot.Capture();
-            Clipboard.SetText(text);
+            if (!clipboard.SetText(text).Succeeded)
+            {
+                return false;
+            }
+
             SendKeys.SendWait("^a");
             SendKeys.SendWait("^v");
-            return WaitForPastedText(element, text);
+            return WaitForPastedText(element, text, clipboard);
         }
         catch (ExternalException)
         {
@@ -1497,18 +1719,17 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         {
             return false;
         }
-        finally
-        {
-            clipboardBackup?.Restore();
-        }
     }
 
-    private static bool WaitForPastedText(AutomationElement element, string expectedText)
+    private static bool WaitForPastedText(
+        AutomationElement element,
+        string expectedText,
+        IClipboardAccessBoundary clipboard)
     {
         var expected = ComposerTextFormatting.NormalizeLineEndings(expectedText);
         for (var attempt = 0; attempt < FocusVerificationAttempts; attempt++)
         {
-            var actual = CaptureFormattedKeyboardText(element);
+            var actual = CaptureFormattedKeyboardText(element, clipboard);
             if (actual is not null
                 && string.Equals(
                     ComposerTextFormatting.NormalizeLineEndings(actual),
@@ -1634,24 +1855,27 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         return null;
     }
 
-    private static string? CaptureFormattedKeyboardText(AutomationElement element)
+    private static string? CaptureFormattedKeyboardText(
+        AutomationElement element,
+        IClipboardAccessBoundary clipboard)
     {
         if (!TryFocusVerifiedElement(element))
         {
             return null;
         }
 
-        ClipboardSnapshot? clipboardBackup = null;
         try
         {
-            clipboardBackup = ClipboardSnapshot.Capture();
-            Clipboard.Clear();
+            if (!clipboard.Clear().Succeeded)
+            {
+                return null;
+            }
+
             SendKeys.SendWait("^a");
             SendKeys.SendWait("^c");
             Thread.Sleep(120);
-            return Clipboard.ContainsText()
-                ? Clipboard.GetText(TextDataFormat.UnicodeText)
-                : null;
+            var copied = clipboard.ReadUnicodeText();
+            return copied.Succeeded ? copied.Text : null;
         }
         catch (ExternalException)
         {
@@ -1660,10 +1884,6 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         catch (InvalidOperationException)
         {
             return null;
-        }
-        finally
-        {
-            clipboardBackup?.Restore();
         }
     }
 
@@ -1676,33 +1896,128 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
     }
 
-    private sealed class ClipboardSnapshot
+    private sealed class WindowsKeyboardClipboardOperations : IKeyboardClipboardOperations
     {
-        private readonly IDataObject? _data;
+        private readonly IClipboardAccessBoundary _clipboard;
 
-        private ClipboardSnapshot(IDataObject? data)
+        public WindowsKeyboardClipboardOperations(IClipboardAccessBoundary clipboard)
         {
-            _data = data;
+            _clipboard = clipboard ?? throw new ArgumentNullException(nameof(clipboard));
         }
 
-        public static ClipboardSnapshot Capture()
-        {
-            return new ClipboardSnapshot(Clipboard.ContainsData(DataFormats.Text) || Clipboard.ContainsData(DataFormats.UnicodeText)
-                ? Clipboard.GetDataObject()
-                : null);
-        }
+        public string? Copy(IKeyboardFallbackComposerTarget target) =>
+            target is AutomationElementTarget automationTarget
+                ? CaptureFormattedKeyboardText(automationTarget.Element, _clipboard)
+                : null;
 
-        public void Restore()
+        public bool Paste(IKeyboardFallbackComposerTarget target, string text) =>
+            target is AutomationElementTarget automationTarget
+            && TryPasteIntoVerifiedElement(automationTarget.Element, text, _clipboard);
+    }
+
+    private sealed class WindowsClipboardAccessBoundary : IClipboardAccessBoundary
+    {
+        public ClipboardSnapshotCapture CaptureSnapshot()
         {
-            if (_data is not null)
+            try
             {
-                Clipboard.SetDataObject(_data, true);
+                // GetDataObject captures every available format. A null object is
+                // a valid empty clipboard snapshot and must restore by clearing.
+                return ClipboardSnapshotCapture.Success(new WindowsClipboardSnapshot(Clipboard.GetDataObject()));
             }
-            else
+            catch (ExternalException)
+            {
+                return ClipboardSnapshotCapture.Failure();
+            }
+            catch (InvalidOperationException)
+            {
+                return ClipboardSnapshotCapture.Failure();
+            }
+        }
+
+        public ClipboardBoundaryResult SetText(string text)
+        {
+            try
+            {
+                Clipboard.SetText(text);
+                return ClipboardBoundaryResult.Success();
+            }
+            catch (ExternalException)
+            {
+                return ClipboardBoundaryResult.Failure();
+            }
+            catch (InvalidOperationException)
+            {
+                return ClipboardBoundaryResult.Failure();
+            }
+        }
+
+        public ClipboardBoundaryResult Clear()
+        {
+            try
             {
                 Clipboard.Clear();
+                return ClipboardBoundaryResult.Success();
+            }
+            catch (ExternalException)
+            {
+                return ClipboardBoundaryResult.Failure();
+            }
+            catch (InvalidOperationException)
+            {
+                return ClipboardBoundaryResult.Failure();
             }
         }
+
+        public ClipboardTextRead ReadUnicodeText()
+        {
+            try
+            {
+                return Clipboard.ContainsText()
+                    ? ClipboardTextRead.Success(Clipboard.GetText(TextDataFormat.UnicodeText))
+                    : ClipboardTextRead.Failure();
+            }
+            catch (ExternalException)
+            {
+                return ClipboardTextRead.Failure();
+            }
+            catch (InvalidOperationException)
+            {
+                return ClipboardTextRead.Failure();
+            }
+        }
+
+        public ClipboardBoundaryResult Restore(IClipboardSnapshot snapshot)
+        {
+            if (snapshot is not WindowsClipboardSnapshot windowsSnapshot)
+            {
+                return ClipboardBoundaryResult.Failure();
+            }
+
+            try
+            {
+                if (windowsSnapshot.Data is null)
+                {
+                    Clipboard.Clear();
+                }
+                else
+                {
+                    Clipboard.SetDataObject(windowsSnapshot.Data, true);
+                }
+
+                return ClipboardBoundaryResult.Success();
+            }
+            catch (ExternalException)
+            {
+                return ClipboardBoundaryResult.Failure();
+            }
+            catch (InvalidOperationException)
+            {
+                return ClipboardBoundaryResult.Failure();
+            }
+        }
+
+        private sealed record WindowsClipboardSnapshot(IDataObject? Data) : IClipboardSnapshot;
     }
 }
 

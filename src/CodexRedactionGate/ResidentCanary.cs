@@ -22,6 +22,10 @@ internal sealed record ResidentCanaryArm(
     string Marker,
     long TargetGeneration);
 
+internal sealed record ResidentCanaryAdmission(
+    ResidentCanaryArm Arm,
+    NativeSubmitTargetIdentity? Target);
+
 internal sealed record ResidentCanaryStartResult(
     bool Started,
     string Code,
@@ -165,6 +169,78 @@ internal sealed class ResidentCanarySession
         }
     }
 
+    internal bool TryCreateAdmission(
+        NativeSubmitTargetIdentity? target,
+        out ResidentCanaryAdmission admission)
+    {
+        lock (_gate)
+        {
+            if (_arm is null || _lifecycle is null || _lifecycle.Current != "armed")
+            {
+                admission = null!;
+                return false;
+            }
+
+            admission = new ResidentCanaryAdmission(_arm, target);
+            return true;
+        }
+    }
+
+    internal bool TryObserveAdmittedSend(
+        ResidentCanaryAdmission admission,
+        string profileId,
+        NativeSubmitTargetIdentity? target,
+        out ResidentCanaryArm arm)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+
+        lock (_gate)
+        {
+            if (_arm is null
+                || _lifecycle is null
+                || !ReferenceEquals(_arm, admission.Arm)
+                || !string.Equals(_arm.ProfileId, profileId, StringComparison.Ordinal)
+                || !TargetMatches(admission.Target, target)
+                || target!.SnapshotGeneration != _arm.TargetGeneration
+                || !_lifecycle.TryAdvance("armed", "send_observed"))
+            {
+                arm = null!;
+                return false;
+            }
+
+            arm = _arm;
+            return true;
+        }
+    }
+
+    internal bool TryFailAdmitted(
+        ResidentCanaryAdmission admission,
+        string code,
+        out ResidentCanaryExecutionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+
+        lock (_gate)
+        {
+            if (_arm is null
+                || _lifecycle is null
+                || !ReferenceEquals(_arm, admission.Arm)
+                || _lifecycle.IsTerminal
+                || !_lifecycle.TryAdvance("terminal_failed"))
+            {
+                result = null!;
+                return false;
+            }
+
+            result = ResidentCanaryExecutionResult.Failed(
+                _arm,
+                code,
+                _lifecycle.Stages,
+                cleanupSucceeded: true);
+            return true;
+        }
+    }
+
     internal bool TryObserveSend(
         long attemptId,
         string profileId,
@@ -300,6 +376,17 @@ internal sealed class ResidentCanarySession
                 cleanupSucceeded: true);
             return true;
         }
+    }
+
+    private static bool TargetMatches(
+        NativeSubmitTargetIdentity? expected,
+        NativeSubmitTargetIdentity? actual)
+    {
+        return expected is not null
+            && actual is not null
+            && expected.SnapshotGeneration == actual.SnapshotGeneration
+            && string.Equals(expected.ProfileId, actual.ProfileId, StringComparison.Ordinal)
+            && string.Equals(expected.WindowHandle, actual.WindowHandle, StringComparison.Ordinal);
     }
 }
 

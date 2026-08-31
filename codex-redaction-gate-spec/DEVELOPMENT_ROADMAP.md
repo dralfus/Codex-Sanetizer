@@ -35,7 +35,7 @@ write/replay показали, что внутренняя реализация 
 
 ## Текущий источник истины
 
-Задачи **351**, **352** и **353** закрыты на требуемом для них уровне evidence. Для 352
+Задачи **351**, **352**, **353**, **361** и **363** закрыты на требуемом для них уровне evidence. Для 352
 установленный кандидат `0.1.20260826.t1633+f7dd69d` сохранил raw-free
 `reproduced_red`: одно нажатие `Ctrl+Enter` было подавлено, canary дошёл до
 `send_observed` и `transaction_started`, а затем завершился fail-closed без
@@ -47,8 +47,8 @@ write/replay показали, что внутренняя реализация 
 отдельно от `replay_indeterminate` во всех локальных проекциях. Независимый
 Reviewer вернул `SPEC: PASS` и `CODE_QUALITY: PASS`, Verifier — `ACCEPTED` при
 full suite `1933/1933`. Live/installed OpenAI Desktop в 353 не проверялся и
-production-keyboard claim не делается. **Следующая задача — 361**, затем **363**;
-только после этих safety-gates начинается **354**.
+production-keyboard claim не делается. Safety-gates **361** и **363** закрыты;
+следующая задача — **354**.
 
 **348 не является следующей задачей:** это итоговый umbrella-тикет, который
 можно закрыть только после convergence-цепочки и всех корректирующих gates.
@@ -62,10 +62,9 @@ production-keyboard claim не делается. **Следующая задач
 |---:|---|---|---|
 | **359** | `[x]` | Release build и restore используют один проверяемый resolver .NET 10 SDK; runtime-only `dotnet.exe` не принимается как SDK. | Независимый prerequisite для tooling |
 | **360** | `[x]` | Restore wrapper явно сообщает состояние NuGet/TLS и сохраняет включённую проверку подписей. | Не меняет 352; live restore зависит от сети |
-| **361** | `[ ]` review follow-up | Базовый callback admission реализован, но immutable typed canary-admission token ещё не переносится из classification в execution. | Выполнить после 353 и до 354, чтобы suppressed canary gesture не мог перейти в обычный Send |
+| **361** | `[x]` | Immutable typed canary-admission token передаётся из callback classification в execution; stale token завершается fail-closed без normal Send. | Закрыт после 353; safety-gate 363 также закрыт, текущая работа — 354 |
 
-`359-360` закрыты. Базовый срез 361 сохранён в истории, но его review-follow-up
-остаётся открытым. Установленный `reproduced_red` для 352 уже получен и не
+`359-361` закрыты. Установленный `reproduced_red` для 352 уже получен и не
 подменяет корректирующие проверки 353, 361 и 363.
 
 ## Карта зависимостей
@@ -87,10 +86,10 @@ flowchart TD
     C352["[x] 352\nResident live canary\ninstalled red evidence recorded"]
     T359["[x] 359\nDeterministic .NET 10 SDK resolver"]
     T360["[x] 360\nSafe NuGet restore diagnosis"]
-    T361["[>] 361\nImmutable canary admission\nclassification -> execution"]
+    T361["[x] 361\nImmutable canary admission\nclassification -> execution"]
     S353["[x] 353\nProtectedComposerSession\nlocally_verified"]
-    C363["[ ] 363\nПолный clipboard snapshot/restore"]
-    T354["[ ] 354\nProtectedSendTransaction\nрядом с legacy"]
+    C363["[x] 363\nПолный clipboard snapshot/restore"]
+    T354["[>] 354\nProtectedSendTransaction\nрядом с legacy"]
     R355["[ ] 355\nReference через production UIA"]
     P356["[ ] 356\nProduction keyboard migration"]
     G357["[ ] 357\nEvidence-gated installer/release"]
@@ -216,9 +215,9 @@ candidate и проверяется тем же release gate.
 | 1 | **351** `[x]` | Единая шкала `proposed -> reproduced_red -> implemented -> locally_verified -> live_verified -> released`; machine-readable current evidence record и fail-closed release gate запрещают подменять реальное доказательство синтетическим smoke. | Нет |
 | 2 | **352** `[x]` | Resident-owned canary на установленном кандидате сохранил raw-free `reproduced_red` с точной installed build; одно нажатие было подавлено, terminal failure доказан. | 351 |
 | 3 | **353** `[x]` | `ProtectedComposerSession` переполучает UIA внутри каждой STA-операции, закрывает late-side-effect timeout и сохраняет typed replay distinction для reference/Windows boundaries. | 352 |
-| 4 | **361** `[>]` review follow-up | Передавать immutable canary-admission token из callback classification в execution; stale token завершается fail-closed без перехода в обычный Send. | 351; после 353 |
-| 5 | **363** `[ ]` | Сохранять и восстанавливать полный Windows clipboard через исправленный session/STA boundary, включая non-text formats и locked clipboard. | 353 |
-| 6 | **354** `[ ]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. | 353; плановые safety-gates 361 и 363 |
+| 4 | **361** `[x]` | Immutable canary-admission token передаётся из callback classification в execution; stale token завершается fail-closed без перехода в normal Send. | 351; после 353 |
+| 5 | **363** `[x]` | Полный Windows clipboard сохраняется и восстанавливается через исправленный session/STA boundary, включая non-text formats и locked clipboard. | 353 |
+| 6 | **354** `[>]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. | 353; safety-gates 361 и 363 закрыты |
 | 7 | **355** `[ ]` | Reference composer использует production `NativeVerifiedComposerTextAccess`, а не прямую запись в fixture TextBox. | 354 |
 | 8 | **356** `[ ]` | Production keyboard Send переведён на transaction; canary 352 становится зелёным без изменения исходного assertion. | 355 |
 | 9 | **357** `[ ]` | Installer и release claim принимают только совпадающее deterministic/reference/live evidence. | 356 |
@@ -258,6 +257,8 @@ production state machine.
 | 2026-08-27 | **361** | Review обнаружил разрыв между callback classification и execution: suppressed canary gesture повторно читает mutable canary state и потенциально может перейти в обычный protected Send. | `[ ]` после 353; требуется immutable typed admission token и queued/repeated-Send race evidence |
 | 2026-08-27 | **363** | Полное сохранение Windows clipboard оформлено отдельным session-level safety gate. | `[ ]` после 353 и до production-access/transaction migration |
 | 2026-08-29 | **353** | Session boundary упрощён до реальных seams `IStaExecutionBoundary` и `INativeVerifiedComposerTargetOperations`; UIA target переполучается внутри STA action, pre-start timeout атомарно отменяет запуск, started action ожидается до завершения, а unavailable/indeterminate replay остаются раздельными. | `[x]` Reviewer `SPEC/CODE_QUALITY: PASS`; build clean; targeted `6/6`, `24/24`, `384/384`; full suite `1933/1933`; Verifier `ACCEPTED`; live/installed `NOT_RUN` |
+| 2026-08-31 | **361** | Immutable `ResidentCanaryAdmission` передаётся из реальной callback classification через execution context и protected-send pipeline; stale admission завершает gesture raw-free без normal runner. | `[x]` RED reproduction normal runner `1` до исправления; Reviewer `SPEC/CODE_QUALITY: PASS`; focused `1/1`, canary `24/24`, full suite `1934/1934`; Verifier `ACCEPTED`; live Windows hook `NOT_RUN` |
+| 2026-08-31 | **363** | Bounded composer-access operation сохраняет полный `IDataObject`; общая production-shaped keyboard fallback ветка восстанавливает clipboard с двумя попытками и typed raw-free failure. Reference composer явно injects fixture boundary, не меняя production default. | `[x]` RED format/exception/reference-fixture reproductions; Reviewer `SPEC/CODE_QUALITY: PASS`; clipboard/session `35/35`, reference integration `1/1`, reference matrix `11/11`, full suite `1946/1946`; Verifier `ACCEPTED`; live clipboard/STA `NOT_RUN` |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от
@@ -266,8 +267,8 @@ evidence теперь требует внешнего build/target binding, hist
 `artifacts/evidence/351.json`, публикуется только после сборки кандидата и
 сравнивается с exact source/build/executable/validator binding. Отсутствие,
 устаревание или рассогласование этой записи останавливает release.
-Задача 353 закрыта на уровне `locally_verified`. Текущий кодовый шаг — 361,
-после него выполняется 363, затем 354 и последующие 355-358. Установленная
+Задачи 353, 361 и 363 закрыты на уровне `locally_verified`. Текущий кодовый
+шаг — 354, после него выполняются 355-358. Установленная
 production-клавиатура по-прежнему не объявляется исправленной до canary-green
 в 356.
 
@@ -298,14 +299,11 @@ production-клавиатура по-прежнему не объявляетс�
 
 ## Что делать прямо сейчас
 
-1. Закрыть **361**: сохранить immutable canary admission от callback
-   classification до execution и доказать queued/repeated-Send race matrix.
-2. Закрыть **363**: доказать полное восстановление Windows clipboard, включая
-   non-text formats и locked clipboard, без raw-data diagnostics.
-3. Выполнить **354-356** маленькими последовательными срезами; после каждого
+**Текущий активный тикет — 354.** Выполнить **354-356** маленькими последовательными срезами; после каждого
    запускать нижние уровни evidence, а после 356 превратить canary 352 в зелёный
    на том же production seam.
-4. Выполнить **357-358**, собрать совпадающий installer и только затем повторно
+
+Далее выполнить **357-358**, собрать совпадающий installer и только затем повторно
    закрыть 348 и возобновить расширение file ingress.
 
 ## Границы, которые нельзя размывать

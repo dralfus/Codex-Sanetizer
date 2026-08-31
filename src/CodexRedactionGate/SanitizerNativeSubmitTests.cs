@@ -6759,7 +6759,8 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         var report = ReferenceComposerAcceptanceRunner.Run(
             new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
             "A harmless local prompt",
-            ReferenceComposerDecision.Approve);
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
 
         Assert.That(report.HookStarted, Is.True);
         Assert.That(report.OriginalInputSuppressed, Is.True);
@@ -6785,7 +6786,8 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         var report = ReferenceComposerAcceptanceRunner.Run(
             new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
             sensitivePrompt,
-            ReferenceComposerDecision.Approve);
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
 
         Assert.That(report.HookStarted, Is.True);
         Assert.That(report.OriginalInputSuppressed, Is.True);
@@ -6799,13 +6801,41 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
     }
 
     [Test]
+    public void ReferenceComposerAcceptance_ClipboardRestoreFailureIsRawFreeAndSuppressesReplay()
+    {
+        const string rawPrompt = "Connect to 192.168.10.25";
+        const string rawClipboardData = "reference-clipboard-secret";
+        var clipboard = new ProductionShapedRestoreFailingClipboardBoundary(rawClipboardData);
+
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
+            rawPrompt,
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: () => clipboard);
+
+        Assert.That(clipboard.CaptureAttempts, Is.EqualTo(1));
+        Assert.That(clipboard.RestoreAttempts, Is.EqualTo(2));
+        Assert.That(clipboard.RestoredExpectedSnapshot, Is.True);
+        Assert.That(report.TerminalStatus, Is.EqualTo(OsInteractionStatusIds.CaptureFailed));
+        Assert.That(report.ReplayDiagnostics["clipboard_failure"], Is.EqualTo("restore"));
+        Assert.That(report.Submitted, Is.False);
+        Assert.That(report.SentTexts, Is.Empty);
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("replayed"));
+        Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("send_injected"));
+        var diagnostics = string.Join("|", report.ReplayDiagnostics.Select(entry => $"{entry.Key}={entry.Value}"));
+        Assert.That(diagnostics, Does.Not.Contain(rawPrompt));
+        Assert.That(diagnostics, Does.Not.Contain(rawClipboardData));
+    }
+
+    [Test]
     public void ReferenceComposerAcceptance_ForegroundRefusalBlocksSuppressedSend()
     {
         var report = ReferenceComposerAcceptanceRunner.Run(
             new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
             "Connect to 192.168.10.25",
             ReferenceComposerDecision.Approve,
-            ReferenceComposerForegroundMode.Refused);
+            ReferenceComposerForegroundMode.Refused,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
 
         Assert.That(report.HookStarted, Is.True);
         Assert.That(report.OriginalInputSuppressed, Is.True);
@@ -6824,7 +6854,8 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
             "Connect to 192.168.10.25",
             ReferenceComposerDecision.Approve,
             ReferenceComposerForegroundMode.Verified,
-            (ReferenceComposerTargetChangeMode)mode);
+            (ReferenceComposerTargetChangeMode)mode,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
 
         Assert.That(report.HookStarted, Is.True);
         Assert.That(report.OriginalInputSuppressed, Is.True);
@@ -6843,7 +6874,8 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
             ReferenceComposerDecision.Approve,
             ReferenceComposerForegroundMode.Verified,
             ReferenceComposerTargetChangeMode.None,
-            ReferenceComposerWriteMode.Unavailable);
+            ReferenceComposerWriteMode.Unavailable,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
 
         Assert.That(report.HookStarted, Is.True);
         Assert.That(report.OriginalInputSuppressed, Is.True);
@@ -6868,7 +6900,8 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
             ReferenceComposerForegroundMode.Verified,
             ReferenceComposerTargetChangeMode.None,
             ReferenceComposerWriteMode.Available,
-            replayMode);
+            replayMode,
+            ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
 
         Assert.That(report.HookStarted, Is.True);
         Assert.That(report.OriginalInputSuppressed, Is.True);
@@ -6890,11 +6923,13 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         var cancelled = ReferenceComposerAcceptanceRunner.Run(
             sanitizer,
             "Connect to 192.168.10.25",
-            ReferenceComposerDecision.Cancel);
+            ReferenceComposerDecision.Cancel,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
         var repeated = ReferenceComposerAcceptanceRunner.Run(
             sanitizer,
             "A harmless local prompt",
-            ReferenceComposerDecision.Approve);
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
 
         Assert.That(cancelled.Submitted, Is.False);
         Assert.That(cancelled.SentTexts, Is.Empty);
@@ -6991,6 +7026,71 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.SensitivePromptPassed, Is.True);
         Assert.That(report.CancellationPassed, Is.True);
         Assert.That(report.RepeatedCleanupPassed, Is.True);
+    }
+
+    private sealed class ProductionShapedRestoreFailingClipboardBoundary : IClipboardAccessBoundary
+    {
+        private System.Windows.Forms.IDataObject? _data;
+
+        public ProductionShapedRestoreFailingClipboardBoundary(string rawClipboardData)
+        {
+            var data = new System.Windows.Forms.DataObject();
+            data.SetText(rawClipboardData, System.Windows.Forms.TextDataFormat.UnicodeText);
+            _data = data;
+        }
+
+        public int CaptureAttempts { get; private set; }
+
+        public int RestoreAttempts { get; private set; }
+
+        public bool RestoredExpectedSnapshot { get; private set; }
+
+        public ClipboardSnapshotCapture CaptureSnapshot()
+        {
+            CaptureAttempts++;
+            return ClipboardSnapshotCapture.Success(new ClipboardSnapshot(_data));
+        }
+
+        public ClipboardBoundaryResult SetText(string text)
+        {
+            var data = new System.Windows.Forms.DataObject();
+            data.SetText(text, System.Windows.Forms.TextDataFormat.UnicodeText);
+            _data = data;
+            return ClipboardBoundaryResult.Success();
+        }
+
+        public ClipboardBoundaryResult Clear()
+        {
+            _data = null;
+            return ClipboardBoundaryResult.Success();
+        }
+
+        public ClipboardTextRead ReadUnicodeText()
+        {
+            if (_data?.GetDataPresent(System.Windows.Forms.DataFormats.UnicodeText, autoConvert: false) != true)
+            {
+                return ClipboardTextRead.Failure();
+            }
+
+            return _data.GetData(System.Windows.Forms.DataFormats.UnicodeText, autoConvert: false) is string text
+                ? ClipboardTextRead.Success(text)
+                : ClipboardTextRead.Failure();
+        }
+
+        public ClipboardBoundaryResult Restore(IClipboardSnapshot snapshot)
+        {
+            RestoreAttempts++;
+            if (snapshot is not ClipboardSnapshot captured
+                || !ReferenceEquals(captured.Data, _data))
+            {
+                return ClipboardBoundaryResult.Failure();
+            }
+
+            RestoredExpectedSnapshot = true;
+            return ClipboardBoundaryResult.Failure();
+        }
+
+        private sealed record ClipboardSnapshot(System.Windows.Forms.IDataObject? Data) : IClipboardSnapshot;
     }
 
     private sealed class FixedSubmitBindingProfileAdapter : ISubmitBindingProfileAdapter

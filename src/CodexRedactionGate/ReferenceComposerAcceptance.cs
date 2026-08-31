@@ -75,7 +75,8 @@ internal static class ReferenceComposerAcceptanceRunner
         ReferenceComposerForegroundMode foregroundMode = ReferenceComposerForegroundMode.Verified,
         ReferenceComposerTargetChangeMode targetChangeMode = ReferenceComposerTargetChangeMode.None,
         ReferenceComposerWriteMode writeMode = ReferenceComposerWriteMode.Available,
-        ReferenceComposerReplayMode replayMode = ReferenceComposerReplayMode.Available)
+        ReferenceComposerReplayMode replayMode = ReferenceComposerReplayMode.Available,
+        Func<IClipboardAccessBoundary>? clipboardBoundaryFactory = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(prompt);
@@ -113,6 +114,7 @@ internal static class ReferenceComposerAcceptanceRunner
                 var discovery = new ReferenceComposerSurfaceDiscovery(targets.GetActiveForm);
                 var profile = CreateProfile();
                 var replay = new ReferenceComposerReplayBoundary(composer, replayMode);
+                IReadOnlyDictionary<string, string> operationDiagnostics = new Dictionary<string, string>();
                 var hookHost = new WindowsNativeSubmitHookHost(new[] { profile });
                 using var overlay = new WindowsConfirmationOverlay(
                     window =>
@@ -145,10 +147,12 @@ internal static class ReferenceComposerAcceptanceRunner
                     ResidentTargetTracedRunner: (target, traceStage, executionGuard, executionLease) =>
                     {
                         var targetAwareDiscovery = new CapturedTargetSurfaceDiscovery(discovery, target);
+                        var clipboard = clipboardBoundaryFactory?.Invoke();
                         var textAccess = new NativeVerifiedComposerTextAccess(
                             targetAwareDiscovery.DiscoverActiveSurface,
                             replay,
-                            new ReferenceComposerStaExecutionBoundary());
+                            new ReferenceComposerStaExecutionBoundary(),
+                            clipboard: clipboard);
                         var adapter = new WindowsVerifiedComposerSurfaceAdapter(textAccess);
                         var orchestrator = new OsInteractionOrchestrator(
                             sanitizer,
@@ -168,11 +172,13 @@ internal static class ReferenceComposerAcceptanceRunner
 
                             return traced;
                         };
-                        return orchestrator.RunOnce(
+                        var result = orchestrator.RunOnce(
                             OsInteractionRunOptions.ConfirmAndSend,
                             acceptanceTrace,
                             executionGuard,
                             executionLease);
+                        operationDiagnostics = result.Diagnostics;
+                        return result;
                     });
                 var runtimeSet = new NativeSubmitRuntimeSet(
                     hookHost,
@@ -229,7 +235,7 @@ internal static class ReferenceComposerAcceptanceRunner
                         state.LastSubmitted,
                         composer.SentTexts.ToArray(),
                         trace.ToArray(),
-                        AcceptanceDiagnostics(replay.Diagnostics),
+                        AcceptanceDiagnostics(replay.Diagnostics, operationDiagnostics),
                         CleanupPassed: false);
                     completed.Set();
                     if (composer.IsHandleCreated && !composer.IsDisposed)
@@ -266,7 +272,7 @@ internal static class ReferenceComposerAcceptanceRunner
                     Submitted: false,
                     composer.SentTexts.ToArray(),
                     controller.State.ProtectedSendAttemptTrace?.ToArray() ?? Array.Empty<ProtectedSendTraceEntry>(),
-                    AcceptanceDiagnostics(replay.Diagnostics),
+                    AcceptanceDiagnostics(replay.Diagnostics, operationDiagnostics),
                     CleanupPassed: false);
             }
             catch (Exception exception)
@@ -430,14 +436,26 @@ internal static class ReferenceComposerAcceptanceRunner
     }
 
     private static IReadOnlyDictionary<string, string> AcceptanceDiagnostics(
-        IReadOnlyDictionary<string, string> replayDiagnostics)
+        IReadOnlyDictionary<string, string> replayDiagnostics,
+        IReadOnlyDictionary<string, string> operationDiagnostics)
     {
         var diagnostics = new Dictionary<string, string>(replayDiagnostics, StringComparer.Ordinal)
         {
             ["composer_access"] = "native_verified_composer_text_access"
         };
+        foreach (var key in new[] { "clipboard_failure", "sta_failure", "failed_closed" })
+        {
+            if (operationDiagnostics.TryGetValue(key, out var value))
+            {
+                diagnostics[key] = value;
+            }
+        }
+
         return diagnostics;
     }
+
+    internal static IClipboardAccessBoundary CreateFixtureClipboardBoundary() =>
+        new ReferenceComposerClipboardAccessBoundary();
 
     private sealed class ReferenceComposerStaExecutionBoundary : IStaExecutionBoundary
     {
@@ -454,6 +472,53 @@ internal static class ReferenceComposerAcceptanceRunner
                 return StaExecutionResult<T>.Failure(StaFailureKind.Execution);
             }
         }
+    }
+
+    private sealed class ReferenceComposerClipboardAccessBoundary : IClipboardAccessBoundary
+    {
+        private IDataObject? _data = new DataObject();
+
+        public ClipboardSnapshotCapture CaptureSnapshot() =>
+            ClipboardSnapshotCapture.Success(new ReferenceComposerClipboardSnapshot(_data));
+
+        public ClipboardBoundaryResult SetText(string text)
+        {
+            var data = new DataObject();
+            data.SetText(text, TextDataFormat.UnicodeText);
+            _data = data;
+            return ClipboardBoundaryResult.Success();
+        }
+
+        public ClipboardBoundaryResult Clear()
+        {
+            _data = null;
+            return ClipboardBoundaryResult.Success();
+        }
+
+        public ClipboardTextRead ReadUnicodeText()
+        {
+            if (_data?.GetDataPresent(DataFormats.UnicodeText, autoConvert: false) != true)
+            {
+                return ClipboardTextRead.Failure();
+            }
+
+            return _data.GetData(DataFormats.UnicodeText, autoConvert: false) is string text
+                ? ClipboardTextRead.Success(text)
+                : ClipboardTextRead.Failure();
+        }
+
+        public ClipboardBoundaryResult Restore(IClipboardSnapshot snapshot)
+        {
+            if (snapshot is not ReferenceComposerClipboardSnapshot captured)
+            {
+                return ClipboardBoundaryResult.Failure();
+            }
+
+            _data = captured.Data;
+            return ClipboardBoundaryResult.Success();
+        }
+
+        private sealed record ReferenceComposerClipboardSnapshot(IDataObject? Data) : IClipboardSnapshot;
     }
 
     private sealed class ReferenceComposerReplayBoundary : IVerifiedComposerReplay
@@ -550,19 +615,23 @@ internal static class ReferenceComposerAcceptanceSmokeRunner
             var safe = ReferenceComposerAcceptanceRunner.Run(
                 new Sanitizer(new InMemoryHmacMappingVault(hmacSecret)),
                 "A harmless local prompt",
-                ReferenceComposerDecision.Approve);
+                ReferenceComposerDecision.Approve,
+                clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
             var sensitive = ReferenceComposerAcceptanceRunner.Run(
                 new Sanitizer(new InMemoryHmacMappingVault(hmacSecret)),
                 "Connect to 192.168.10.25",
-                ReferenceComposerDecision.Approve);
+                ReferenceComposerDecision.Approve,
+                clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
             var cancelled = ReferenceComposerAcceptanceRunner.Run(
                 new Sanitizer(new InMemoryHmacMappingVault(hmacSecret)),
                 "Connect to 192.168.10.25",
-                ReferenceComposerDecision.Cancel);
+                ReferenceComposerDecision.Cancel,
+                clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
             var repeated = ReferenceComposerAcceptanceRunner.Run(
                 new Sanitizer(new InMemoryHmacMappingVault(hmacSecret)),
                 "A harmless local prompt",
-                ReferenceComposerDecision.Approve);
+                ReferenceComposerDecision.Approve,
+                clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
 
             return new ReferenceComposerAcceptanceSmokeReport(
                 SafePromptPassed: safe.HookStarted

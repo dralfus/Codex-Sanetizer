@@ -34,7 +34,8 @@ internal interface IProtectedSendPipelineHost
         NativeSubmitTargetIdentity? target,
         Func<string, string, bool> traceStage,
         Func<bool> executionGuard,
-        Func<IDisposable?> executionLease);
+        Func<IDisposable?> executionLease,
+        ResidentCanaryAdmission? canaryAdmission);
 }
 
 /// <summary>
@@ -54,7 +55,8 @@ internal sealed class ProtectedSendPipeline
         ProtectionSnapshot eventSnapshot,
         NativeSubmitRuntime runtime,
         NativeSubmitInterceptionResult classification,
-        ResidentProtectedSendOperation operation)
+        ResidentProtectedSendOperation operation,
+        ResidentCanaryAdmission? canaryAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(eventSnapshot);
         ArgumentNullException.ThrowIfNull(runtime);
@@ -147,7 +149,8 @@ internal sealed class ProtectedSendPipeline
                 operation.Target,
                 TraceStage,
                 ExecutionGuard,
-                sideEffectScope.Acquire));
+                sideEffectScope.Acquire,
+                canaryAdmission));
         if (!string.IsNullOrWhiteSpace(continuityStatus))
         {
             result = WithContinuityStatus(result, continuityStatus);

@@ -3694,13 +3694,13 @@ again. A queued gesture that was already classified and suppressed as a canary
 can therefore fall through to the ordinary protected-Send runner after the
 attempt advances or terminates.
 
-- [ ] Carry one immutable typed canary-admission token from callback
+- [x] Carry one immutable typed canary-admission token from callback
       classification into execution context.
-- [ ] Execute exactly the admitted attempt, or terminate that gesture
+- [x] Execute exactly the admitted attempt, or terminate that gesture
       fail-closed when the token is stale; never fall through to normal Send.
-- [ ] Add a deterministic queued/repeated-Send race where the first attempt
+- [x] Add a deterministic queued/repeated-Send race where the first attempt
       advances before the second callback executes.
-- [ ] Prove original input stays suppressed, canary runner count is at most
+- [x] Prove original input stays suppressed, canary runner count is at most
       one, and normal runner count remains zero for every canary-classified
       gesture.
 
@@ -3785,7 +3785,7 @@ injected clipboard/STA boundary.
 **Evidence target:** `locally_verified`, followed by the existing installed
 keyboard canary after 353 and 356 are green.
 
-- [ ] Capture the complete clipboard data object regardless of text formats.
-- [ ] Restore all captured formats with bounded retry and typed failure.
-- [ ] Add the deterministic clipboard-format and locked-clipboard matrix.
-- [ ] Verify failure diagnostics are raw-free and Send remains suppressed.
+- [x] Capture the complete clipboard data object regardless of text formats.
+- [x] Restore all captured formats with bounded retry and typed failure.
+- [x] Add the deterministic clipboard-format and locked-clipboard matrix.
+- [x] Verify failure diagnostics are raw-free and Send remains suppressed.

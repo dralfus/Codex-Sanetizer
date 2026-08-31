@@ -26,7 +26,8 @@ internal sealed record ProtectionSnapshot(
 internal sealed record NativeSubmitExecutionContext(
     ProtectionSnapshot Snapshot,
     NativeSubmitRuntimeSet RuntimeSet,
-    NativeSubmitTargetIdentity? Target);
+    NativeSubmitTargetIdentity? Target,
+    ResidentCanaryAdmission? CanaryAdmission = null);
 
 internal readonly record struct CapturedTargetProfileKey(IntPtr Window, uint ProcessId);
 
@@ -226,12 +227,14 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         NativeSubmitTargetIdentity? target,
         Func<string, string, bool> traceStage,
         Func<bool> executionGuard,
-        Func<IDisposable?> executionLease) => RunNativeSubmitFlow(
+        Func<IDisposable?> executionLease,
+        ResidentCanaryAdmission? canaryAdmission) => RunNativeSubmitFlow(
             runtime,
             target,
             traceStage,
             executionGuard,
-            executionLease);
+            executionLease,
+            canaryAdmission);
 
     // Explicit test seam for controller tests that do not construct the Windows orchestrator.
     internal static TrayProtectionController CreateTest(
@@ -1831,7 +1834,12 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 snapshot,
                 runtimeSet,
                 execution.Target,
-                operation => _protectedSendPipeline.Execute(snapshot, runtime, classification, operation),
+                operation => _protectedSendPipeline.Execute(
+                    snapshot,
+                    runtime,
+                    classification,
+                    operation,
+                    execution.CanaryAdmission),
                 out var protectedResult))
         {
             if (Volatile.Read(ref _activeProtectedSendOperation) is not null)
@@ -2842,10 +2850,10 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             snapshot.Generation,
             discovery.Surface,
             gesture.TargetWindow);
-        var canary = ClassifyArmedResidentCanary(runtime, gesture);
+        var canary = ClassifyArmedResidentCanary(runtime, gesture, target, out var canaryAdmission);
         if (canary is not null)
         {
-            return RememberSnapshot(snapshot, runtimeSet, canary, target);
+            return RememberSnapshot(snapshot, runtimeSet, canary, target, canaryAdmission);
         }
 
         if (!IsLocalProtectionReady(snapshot)
@@ -2883,8 +2891,11 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 
     private NativeSubmitInterceptionResult? ClassifyArmedResidentCanary(
         NativeSubmitRuntime? runtime,
-        NativeKeyGesture gesture)
+        NativeKeyGesture gesture,
+        NativeSubmitTargetIdentity? target,
+        out ResidentCanaryAdmission? admission)
     {
+        admission = null;
         if (runtime is null
             || !_residentCanary.TryGetArmed(out var arm)
             || !string.Equals(arm.ProfileId, runtime.Profile.ProfileId, StringComparison.Ordinal)
@@ -2893,6 +2904,23 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         {
             return null;
         }
+
+        if (!_residentCanary.TryCreateAdmission(target, out var createdAdmission))
+        {
+            return new NativeSubmitInterceptionResult(
+                OsInteractionStatusIds.FailedClosed,
+                SuppressOriginalInput: true,
+                Applied: false,
+                Submitted: false,
+                Diagnostics: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["profile_id"] = runtime.Profile.ProfileId,
+                    ["canary_admission"] = "unavailable",
+                    ["cloud_submission"] = "false"
+                });
+        }
+
+        admission = createdAdmission;
 
         return new NativeSubmitInterceptionResult(
             OsInteractionStatusIds.NativeSubmitGuarded,
@@ -3217,9 +3245,12 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         ProtectionSnapshot snapshot,
         NativeSubmitRuntimeSet runtimeSet,
         NativeSubmitInterceptionResult classification,
-        NativeSubmitTargetIdentity? target = null)
+        NativeSubmitTargetIdentity? target = null,
+        ResidentCanaryAdmission? canaryAdmission = null)
     {
-        _classificationSnapshots.Add(classification, new NativeSubmitExecutionContext(snapshot, runtimeSet, target));
+        _classificationSnapshots.Add(
+            classification,
+            new NativeSubmitExecutionContext(snapshot, runtimeSet, target, canaryAdmission));
         return classification;
     }
 
@@ -3357,27 +3388,27 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         NativeSubmitTargetIdentity? target,
         Func<string, string, bool> traceStage,
         Func<bool> executionGuard,
-        Func<IDisposable?> executionLease)
+        Func<IDisposable?> executionLease,
+        ResidentCanaryAdmission? canaryAdmission = null)
     {
-        if (_residentCanary.TryGetArmed(out var armedCanary))
+        if (canaryAdmission is not null)
         {
-            if (target is not null
-                && _residentCanary.TryObserveSend(
-                    armedCanary.AttemptId,
+            if (_residentCanary.TryObserveAdmittedSend(
+                    canaryAdmission,
                     runtime.Profile.ProfileId,
-                    target.SnapshotGeneration,
+                    target,
                     out var arm))
             {
                 PublishOperationalActionStage(
                     "send_observed",
                     true,
                     "run_canary",
-                    armedCanary.AttemptId);
-                return RunResidentCanary(runtime, target, arm, traceStage, executionGuard, executionLease);
+                    canaryAdmission.Arm.AttemptId);
+                return RunResidentCanary(runtime, target!, arm, traceStage, executionGuard, executionLease);
             }
 
-            if (_residentCanary.TryFail(
-                    armedCanary.AttemptId,
+            if (_residentCanary.TryFailAdmitted(
+                    canaryAdmission,
                     target is null ? "target_unavailable" : "target_mismatch",
                     out var failedCanary))
             {
@@ -3385,7 +3416,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                     "target_verification_failed",
                     false,
                     "retry_canary",
-                    armedCanary.AttemptId);
+                    canaryAdmission.Arm.AttemptId);
                 return CompleteFailedResidentCanary(runtime, failedCanary, target);
             }
 
@@ -3398,7 +3429,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 false,
                 new Dictionary<string, string>
                 {
-                    ["canary_code"] = "canary_state_unavailable",
+                    ["canary_code"] = "stale_canary_admission",
                     ["cloud_submission"] = "false"
                 });
         }
