@@ -3411,11 +3411,11 @@ that duplicate terminal/side-effect ownership is representable.
 **Evidence target:** `locally_verified`; production remains on legacy and cannot
 claim live verification from this ticket.
 
-- [ ] Implement the compact request/result contract and explicit state machine.
-- [ ] Move lease, trace, side-effect, and terminal publication ownership inside
+- [x] Implement the compact request/result contract and explicit state machine.
+- [x] Move lease, trace, side-effect, and terminal publication ownership inside
       the transaction.
-- [ ] Keep the legacy production path active and prohibit dual side effects.
-- [ ] Prove raw prompt data is not retained in terminal evidence.
+- [x] Keep the legacy production path active and prohibit dual side effects.
+- [x] Prove raw prompt data is not retained in terminal evidence.
 
 ## 355. Route reference acceptance through the production composer access path
 
