@@ -33,7 +33,12 @@ function Write-JsonFile {
 
     $temporaryPath = "$Path.$PID.tmp"
     [System.IO.File]::WriteAllText($temporaryPath, ($Value | ConvertTo-Json -Depth 6), $utf8NoBom)
-    Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
+    if ([System.IO.File]::Exists($Path)) {
+        [System.IO.File]::Replace($temporaryPath, $Path, $null)
+    }
+    else {
+        [System.IO.File]::Move($temporaryPath, $Path)
+    }
 }
 
 function Get-SandboxProxy {
