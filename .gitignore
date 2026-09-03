@@ -37,5 +37,8 @@ test.log
 test_*.txt
 all_tests_output*.txt
 
+## Windows Sandbox test-worker runtime state
+.sandbox-jobs/
+
 ## Locally generated secret-scanner fixtures
 codex-redaction-gate-spec/spikes/tool-evaluation/.generated/
