@@ -199,7 +199,12 @@ while ($true) {
             $failure = if ($exitCode -eq 0) { $null } else { 'dotnet_exit_nonzero' }
         }
         catch {
-            $output = "worker_failure=$($_.Exception.Message)"
+            $message = $_.Exception.Message
+            if ([string]::IsNullOrWhiteSpace($message)) {
+                $message = '<no exception message>'
+            }
+            $position = $_.InvocationInfo.PositionMessage
+            $output = "worker_failure_type=$($_.Exception.GetType().FullName)`r`nworker_failure_message=$message`r`nworker_failure_position=$position"
             $failure = 'worker_rejected_or_failed'
         }
 
