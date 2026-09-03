@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>C:\SandboxWorkspaces\CodexRedactionGate-355</HostFolder>
+      <SandboxFolder>C:\SandboxProject</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>C:\Program Files\dotnet</HostFolder>
+      <SandboxFolder>C:\HostDotnet</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>F:\soft\Git</HostFolder>
+      <SandboxFolder>C:\HostGit</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <Networking>Enable</Networking>
+  <ClipboardRedirection>Enable</ClipboardRedirection>
+  <LogonCommand>
+    <Command>C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\SandboxProject\scripts\SandboxWorkerBootstrap.ps1</Command>
+  </LogonCommand>
+</Configuration>

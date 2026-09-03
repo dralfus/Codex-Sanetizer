@@ -23,6 +23,7 @@ $jobsRoot = Join-Path $repositoryRoot '.sandbox-jobs'
 $inboxPath = Join-Path $jobsRoot 'inbox'
 $runningPath = Join-Path $jobsRoot 'running'
 $resultsPath = Join-Path $jobsRoot 'results'
+$interruptedPath = Join-Path $jobsRoot 'interrupted'
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-JsonFile {
@@ -34,7 +35,16 @@ function Write-JsonFile {
     $temporaryPath = "$Path.$PID.tmp"
     [System.IO.File]::WriteAllText($temporaryPath, ($Value | ConvertTo-Json -Depth 6), $utf8NoBom)
     if ([System.IO.File]::Exists($Path)) {
-        [System.IO.File]::Replace($temporaryPath, $Path, $null)
+        try {
+            [System.IO.File]::Replace($temporaryPath, $Path, $null)
+        }
+        catch {
+            # Windows Sandbox mapped folders can reject File.Replace even though
+            # an overwrite move is supported. Do not prevent worker startup or
+            # result publication when the stronger replacement primitive is
+            # unavailable on that mounted filesystem.
+            Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
+        }
     }
     else {
         [System.IO.File]::Move($temporaryPath, $Path)
@@ -77,11 +87,20 @@ function Test-Job {
     }
     if ($Job.Kind -notin @('restore', 'test')) { throw 'job_kind_invalid' }
 
-    if ($Job.Kind -eq 'restore' -and $null -ne $Job.Filter) { throw 'restore_filter_not_allowed' }
-    if ($Job.Kind -eq 'test' -and $null -ne $Job.Filter -and
-        ($Job.Filter -isnot [string] -or $Job.Filter -notmatch '^FullyQualifiedName~[A-Za-z0-9_.]+$')) {
+    $filter = Get-JobFilter -Job $Job
+    if ($Job.Kind -eq 'restore' -and $null -ne $filter) { throw 'restore_filter_not_allowed' }
+    if ($Job.Kind -eq 'test' -and $null -ne $filter -and
+        ($filter -isnot [string] -or $filter -notmatch '^FullyQualifiedName~[A-Za-z0-9_.]+$')) {
         throw 'test_filter_invalid'
     }
+}
+
+function Get-JobFilter {
+    param([Parameter(Mandatory)] $Job)
+
+    $filterProperty = $Job.PSObject.Properties['Filter']
+    if ($null -eq $filterProperty) { return $null }
+    return $filterProperty.Value
 }
 
 function Invoke-Job {
@@ -104,7 +123,8 @@ function Invoke-Job {
         }
         else {
             $testArguments = @('test', $projectPath, '--disable-parallel', '--nologo', '-p:UseAppHost=false')
-            if ($null -ne $Job.Filter) { $testArguments += @('--filter', $Job.Filter) }
+            $filter = Get-JobFilter -Job $Job
+            if ($null -ne $filter) { $testArguments += @('--filter', $filter) }
             $testArguments
         }
 
@@ -118,12 +138,24 @@ function Invoke-Job {
     }
 }
 
-foreach ($directory in @($inboxPath, $runningPath, $resultsPath)) {
+function Archive-InterruptedJobs {
+    # A Windows Sandbox reset terminates this process, but the mapped folder
+    # preserves its lease files. They are not active work after a fresh worker
+    # starts. Keep them for audit instead of letting them permanently block a
+    # retried job with the same id in inbox.
+    foreach ($runningFile in Get-ChildItem -LiteralPath $runningPath -Filter '*.json' -File) {
+        $archiveName = '{0}.{1}.interrupted.json' -f $runningFile.BaseName, ([DateTime]::UtcNow.ToString('yyyyMMddHHmmssfff'))
+        Move-Item -LiteralPath $runningFile.FullName -Destination (Join-Path $interruptedPath $archiveName) -ErrorAction Stop
+    }
+}
+
+foreach ($directory in @($inboxPath, $runningPath, $resultsPath, $interruptedPath)) {
     [System.IO.Directory]::CreateDirectory($directory) | Out-Null
 }
 if (-not (Test-Path -LiteralPath $projectPath -PathType Leaf)) { throw 'fixed_project_missing' }
 if (-not (Test-Path -LiteralPath $dotnetPath -PathType Leaf)) { throw 'sandbox_dotnet_missing' }
 
+Archive-InterruptedJobs
 Set-WorkerState -State 'ready'
 if ($ValidateOnly) { return }
 
@@ -175,7 +207,7 @@ while ($true) {
         Write-JsonFile -Path $resultPath -Value ([ordered]@{
             Id = $jobId
             Kind = if ($null -eq $job) { $null } else { $job.Kind }
-            Filter = if ($null -eq $job) { $null } else { $job.Filter }
+            Filter = if ($null -eq $job) { $null } else { Get-JobFilter -Job $job }
             Project = $projectRelativePath
             Proxy = $proxy
             StartedAtUtc = $startedAtUtc
