@@ -122,7 +122,9 @@ function Invoke-Job {
             @('restore', $projectPath, '--disable-parallel', '--nologo')
         }
         else {
-            $testArguments = @('test', $projectPath, '--disable-parallel', '--nologo', '-p:UseAppHost=false')
+            # The worker itself is single-job. dotnet test on SDK 10 forwards
+            # --disable-parallel to MSBuild, where it is not a valid switch.
+            $testArguments = @('test', $projectPath, '--nologo', '-p:UseAppHost=false')
             $filter = Get-JobFilter -Job $Job
             if ($null -ne $filter) { $testArguments += @('--filter', $filter) }
             $testArguments
