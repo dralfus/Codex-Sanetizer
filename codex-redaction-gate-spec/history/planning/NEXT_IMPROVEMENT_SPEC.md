@@ -79,7 +79,7 @@ The current `ISanitizer` public contract remains the highest behavior seam. New 
 
 ## Further Notes
 
-Architecture verification result: the current architecture is described in `ARCHITECTURE.md` and `SANITIZER_DESIGN.md`, and the post-refactor improvement state is recorded in `POST_REFACTOR_IMPROVEMENT_SPEC.md`. This spec is therefore a next-frontier operating plan, not a corrective architecture rewrite.
+Architecture verification result at the time: the current architecture was described in `../../ARCHITECTURE.md` and `../../SANITIZER_DESIGN.md`, and the post-refactor improvement state was recorded in `POST_REFACTOR_IMPROVEMENT_SPEC.md` in this directory. This spec is historical rather than the current operating plan.
 
 ## Implementation Status 2026-07-18
 

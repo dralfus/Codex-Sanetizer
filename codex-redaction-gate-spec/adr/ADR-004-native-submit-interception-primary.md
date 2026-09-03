@@ -92,7 +92,7 @@ Negative:
 
 ## Open Questions
 
-Resolved in `../SUBMIT_INTERCEPTION_RESEARCH_2026-07-20.md`:
+Resolved in [`../history/research/SUBMIT_INTERCEPTION_RESEARCH_2026-07-20.md`](../history/research/SUBMIT_INTERCEPTION_RESEARCH_2026-07-20.md):
 
 1. No stable local source for the prompt submit shortcut is confirmed. Use `user_verified` binding capture first; config discovery is optional until documented or empirically stable.
 2. Distinguish send from newline only through profile-verified context: foreground app, composer UIA shape, exact submit binding, exact newline binding, and IME/dead-key checks.

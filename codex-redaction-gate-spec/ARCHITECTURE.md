@@ -37,7 +37,7 @@ Possible implementations:
 
 The detailed interception design is described in `PROMPT_INTERCEPTION.md`. The current architecture treats Codex `UserPromptSubmit` as guard mode because documented behavior supports prompt inspection and blocking, while prompt rewriting for this event is not assumed. The MVP replacement flow requires a minimal gateway/composer, desktop adapter, browser extension, or future verified rewrite API that owns the submit action and can implement `Confirm sanitized prompt`.
 
-For the user's current workflow, the next UX frontier is not a browser adapter, a separate composer or a hotkey-first workflow. It is an OS-level desktop adapter for the Windows Codex/ChatGPT app: the user types in the normal app composer, presses the selected AI app's configured Send shortcut, Code Sanitizer intercepts and suppresses that submit input locally, then sends only a safe original prompt or approved `sanitized_text`. The detailed decision is captured in `OS_ADAPTER_UX_DEMO_SPEC.md` and `adr/ADR-004-native-submit-interception-primary.md`.
+For the user's current workflow, the desktop adapter remains an OS-level adapter for the Windows Codex/ChatGPT app: the user types in the normal composer, presses the selected AI app's configured Send shortcut, and Code Sanitizer intercepts and suppresses that submit input locally before the protected path decides the outcome. The accepted decision is [`adr/ADR-004-native-submit-interception-primary.md`](adr/ADR-004-native-submit-interception-primary.md); current work and evidence gates are in [`../DEVELOPMENT_ROADMAP.md`](../DEVELOPMENT_ROADMAP.md).
 
 The OS adapter seam is intentionally platform-neutral above the concrete adapter: enabled AI profile selection, active surface discovery, submit binding discovery, submit input interception, text capture, text replacement, submit action, secondary hotkey trigger and confirmation overlay are separate contracts. Windows uses a Windows-specific adapter and Codex/ChatGPT surface profiles first. Future Linux desktop support should replace the platform adapter only. Future CLI support should be wrapper mode, not terminal keystroke interception.
 
@@ -381,7 +381,7 @@ The current architecture is described sufficiently for the next implementation w
 - the sanitizer is now an orchestration shell over focused pipeline components;
 - package smoke proves the core MVP safety loop plus scanner config validation, confirm handoff and attachment ingestion boundaries.
 
-The completed improvement wave did not redesign the cloud boundary or add broad scanner dependencies. The next changes should build on the strengthened pipeline. The next-frontier operating plan is captured in `NEXT_IMPROVEMENT_SPEC.md`: richer policy operations, better gateway UX, tamper-evident audit logs, scanner packaging hardening and release readiness smoke should be implemented as separate vertical slices.
+Completed improvement waves did not redesign the cloud boundary or add broad scanner dependencies. Their plans are preserved under [`history/planning/`](history/planning/); the current operating sequence is [`../DEVELOPMENT_ROADMAP.md`](../DEVELOPMENT_ROADMAP.md).
 
 ## Data Flow
 

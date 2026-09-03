@@ -10,7 +10,7 @@ The current product slice focuses on the Windows Codex/ChatGPT desktop composer.
 - Secrets such as passwords, tokens, private keys, connection strings, and API keys. Secrets are non-restorable by default and become `SECRET_REDACTED`.
 - Large pasted text and plain-text attachment snippets that pass through the sanitizer pipeline.
 
-The current product does not yet provide end-to-end protection for arbitrary project files read by a coding agent. It can sanitize explicit file snippets or plain-text attachments only when they are routed through Code Sanitizer before cloud submission. Full project-file protection needs a file-context broker; see `codex-redaction-gate-spec/PROJECT_FILE_WORKFLOW_GRILL_REVIEW.md` and `codex-redaction-gate-spec/adr/ADR-005-project-file-context-requires-a-restore-aware-broker.md`.
+The current product does not yet provide end-to-end protection for arbitrary project files read by a coding agent. It can sanitize explicit file snippets or plain-text attachments only when they are routed through Code Sanitizer before cloud submission. Full project-file protection needs a supported ingress boundary; see `codex-redaction-gate-spec/PROJECT_FILE_WORKFLOW_SPEC.md` and `codex-redaction-gate-spec/adr/ADR-005-project-file-context-requires-a-restore-aware-broker.md`.
 
 The product does not claim to remove data that was already sent to a cloud service, and it does not protect users who intentionally bypass the gate.
 
@@ -228,7 +228,7 @@ If the status is `not_configured`, `binding_unknown`, `surface_unverified`, or `
 
 ### ChatGPT Desktop Release Gate
 
-Use the step-by-step [ChatGPT Desktop live acceptance checklist](CHATGPT-DESKTOP-308-ACCEPTANCE-CHECKLIST.md) when validating an installed build.
+Use the current release-evidence gates in [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) and [tickets.md](tickets.md) when validating an installed build. The previous ticket-308 checklist is preserved in the historical release-candidate archive.
 
 For ChatGPT Desktop, a verified binding is not the final release claim. The
 resident app reports `protected` only after the current build and pinned
@@ -374,7 +374,10 @@ Start with:
 - `codex-redaction-gate-spec/SPEC.md`
 - `codex-redaction-gate-spec/ARCHITECTURE.md`
 - `codex-redaction-gate-spec/VERIFIED_DEVELOPMENT_MODEL.md`
-- `codex-redaction-gate-spec/DEVELOPMENT_ROADMAP.md`
+- `DEVELOPMENT_ROADMAP.md`
+- `tickets.md` — active/reopened implementation backlog.
+- `codex-redaction-gate-spec/WINDOWS_SANDBOX_TEST_EXECUTION.md` — agent-run
+  UI-sensitive tests without taking focus from the main desktop.
 - `codex-redaction-gate-spec/SANITIZER_DESIGN.md`
 - `codex-redaction-gate-spec/THREAT_MODEL.md`
 

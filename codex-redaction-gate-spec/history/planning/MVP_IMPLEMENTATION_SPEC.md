@@ -125,4 +125,4 @@ block -> block original prompt and show local reason
 
 The MVP should be small and sharp: prove that a raw prompt or text attachment with a token, internal URL, private IP and customer/project term is blocked before cloud submission, transformed into useful sanitized content, and handed back locally without logging raw sensitive values.
 
-Before coding starts, implementation needs a few concrete choices recorded in `IMPLEMENTATION_READINESS_REVIEW.md`: target language/runtime, Gitleaks packaging mode, local storage format, policy file format, UI handoff mechanism and cleanup plan for spike artifacts.
+Before coding starts, implementation needs a few concrete choices recorded in `IMPLEMENTATION_READINESS_REVIEW.md` in this directory: target language/runtime, Gitleaks packaging mode, local storage format, policy file format, UI handoff mechanism and cleanup plan for spike artifacts.

@@ -1,48 +1,31 @@
-# Codex Redaction Gate Specification
+# Codex Redaction Gate specification
 
-This directory documents Codex Redaction Gate: a local safety layer that intercepts user input before it is sent to Codex/OpenAI, replaces sensitive values with stable pseudonyms, stores the mapping table locally, and can restore sanitized responses on the user's machine.
+## Current working set
 
-## Documents
+- [`../DEVELOPMENT_ROADMAP.md`](../DEVELOPMENT_ROADMAP.md) — user-facing
+  development sequence and current frontier.
+- [`../tickets.md`](../tickets.md) — authoritative active/reopened backlog for
+  agent work.
+- [`SPEC.md`](SPEC.md), [`REQUIREMENTS.md`](REQUIREMENTS.md),
+  [`ARCHITECTURE.md`](ARCHITECTURE.md), [`THREAT_MODEL.md`](THREAT_MODEL.md),
+  and [`GLOSSARY.md`](GLOSSARY.md) — product constraints and vocabulary.
+- [`VERIFIED_DEVELOPMENT_MODEL.md`](VERIFIED_DEVELOPMENT_MODEL.md) — normative
+  evidence-gated protected-Send model.
+- [`SANITIZER_DESIGN.md`](SANITIZER_DESIGN.md), [`POLICY_MODEL.md`](POLICY_MODEL.md),
+  [`PROMPT_INTERCEPTION.md`](PROMPT_INTERCEPTION.md), and
+  [`PROMPT_PROTECTION_USABILITY_SPEC.md`](PROMPT_PROTECTION_USABILITY_SPEC.md)
+  — active sanitizer and prompt-protection design.
+- [`PROJECT_FILE_WORKFLOW_SPEC.md`](PROJECT_FILE_WORKFLOW_SPEC.md) and
+  [`PROGRAMMATIC_UIA_SEND_LIMITATION_SPEC.md`](PROGRAMMATIC_UIA_SEND_LIMITATION_SPEC.md)
+  — explicit unsupported/limited product boundaries.
+- [`WINDOWS_SANDBOX_TEST_EXECUTION.md`](WINDOWS_SANDBOX_TEST_EXECUTION.md) —
+  required agent handoff for UI-sensitive test execution.
+- [`adr/`](adr/) — accepted architectural decisions.
 
-- `SPEC.md` - the main product specification.
-- `MVP_IMPLEMENTATION_SPEC.md` - the first implementable slice produced from the specification.
-- `POST_REFACTOR_IMPROVEMENT_SPEC.md` - the next improvement wave after the sanitizer pipeline split.
-- `NEXT_IMPROVEMENT_SPEC.md` - product-readiness improvements around operations, packaging, audit, and smoke coverage.
-- `PROJECT_FILE_WORKFLOW_SPEC.md` - product spec for protected coding-agent file reads, sanitized virtual files, and restore-aware local writes.
-- `PROGRAMMATIC_UIA_SEND_LIMITATION_SPEC.md` - explicit coverage limit for third-party programmatic UI Automation Send activation.
-- `REQUIREMENTS.md` - functional, non-functional, and security requirements.
-- `ARCHITECTURE.md` - target architecture, components, data flows, and integration options.
-- `VERIFIED_DEVELOPMENT_MODEL.md` - normative protected-Send architecture and
-  evidence-gated development model for convergent fixes.
-- `DEVELOPMENT_ROADMAP.md` - historical dependency map and current ordered
-  implementation frontier.
-- `SANITIZER_DESIGN.md` - concrete sanitizer design: API, pipeline, policy, span replacement, and verification.
-- `PROMPT_INTERCEPTION.md` - prompt interception modes, guard mode, gateway mode, and why hook-only blocking is not transparent replacement.
-- `PROMPT_PROTECTION_USABILITY_SPEC.md` - single active-app onboarding, responsive normal typing, and the user-facing tray surface.
-- `POLICY_MODEL.md` - sensitivity policy, policy layers, dictionaries, allowlists/blocklists, and manual additions.
-- `EXISTING_SOLUTIONS_REVIEW.md` - review of reusable open-source sanitizer and secret-scanner projects.
-- `IMPLEMENTATION_READINESS_REVIEW.md` - pre-implementation questions and non-blocking decisions.
-- `IMPLEMENTATION_CLARIFICATIONS.md` - resolved decisions about runtime, Gitleaks packaging, timeouts, fail-closed behavior, CSV/TOML, vault/DPAPI, UI handoff, audit, attachments, and cleanup.
-- `THREAT_MODEL.md` - protection boundaries, threats, and explicit non-goals.
-- `GRILL_REVIEW.md` - design stress-test notes, risks, and decisions.
-- `PROJECT_FILE_WORKFLOW_GRILL_REVIEW.md` - stress-test notes for coding-agent project file reads, sanitized virtual files, and restore-aware writes.
-- `GLOSSARY.md` - domain model and terminology.
-- `adr/` - architecture decision records.
-- `adr/ADR-007-evidence-gated-protected-send-transaction.md` - accepted decision
-  for one protected-Send transaction owner and build-bound evidence levels.
-- `spikes/tool-evaluation/` - small local spike fixtures and reproducible tool-evaluation notes.
+## History
 
-## Core Idea
+Historical plans, release-candidate records, research, and handoffs are kept
+under [`history/`](history/). They preserve decisions and evidence but do not
+override the current working set.
 
-Users should not have to run separate scripts manually. In the normal workflow, input passes through a local redaction gate before it reaches the cloud:
-
-1. The user writes a prompt as usual.
-2. The gate analyzes the text before submission.
-3. If sensitive data is found, the gate presents a sanitized version and a replacement summary.
-4. Only sanitized text is sent to the cloud.
-5. The response comes back in sanitized form.
-6. The user can restore real values locally from the local mapping table.
-
-## Important Limit
-
-If the Codex integration point can only block a prompt and cannot rewrite it before submission, the product must use a layer in front of the composer: a local composer, desktop overlay, clipboard/keyboard fallback, or an official extension point that can change the submitted text. Protection is not complete if the original prompt has already been sent to the cloud.
+Closed tickets are retained in [`../ARCHIVE_TICKETS.md`](../ARCHIVE_TICKETS.md).

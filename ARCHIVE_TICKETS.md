@@ -1,35 +1,8 @@
----
+# Archived tickets: Codex Redaction Gate
 
-# Tickets: Codex Redaction Gate - SurfaceMetadata and Native Submit Improvements
-
-All tickets 238-250 completed. The convergence frontier starts with ticket 273.
-
-Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
-
-## Required Contract For Every New Ticket
-
-Every ticket added after this section must state these items before implementation begins:
-
-- **State owner:** the one component that publishes the authoritative state for this behavior. UI and persisted records may project it, but cannot independently decide protection.
-- **Fail-closed state:** the exact externally visible state and cloud-submission behavior when evidence, activation, recovery, or storage is uncertain.
-- **Allowed transitions:** the permitted state changes, their triggering commands/events, and the condition for publishing each new state.
-- **Deterministic proof:** the highest available test seam and the assertions that prove the transition without timer polling, foreground focus, or a live cloud submission.
-- **Red-capable reproduction:** for a bug or safety regression, the exact command
-  or resident action that fails before the change and must pass afterward. If no
-  current seam can reproduce it, diagnostics/acceptance work is the first
-  ticket and production logic is not changed yet.
-- **Highest required seam:** deterministic transaction, production-access
-  reference composer, installed resident canary, or another explicitly named
-  product boundary. A lower seam cannot substitute for a required higher seam.
-- **Evidence target:** the required next state from `proposed`,
-  `reproduced_red`, `implemented`, `locally_verified`, `live_verified`, and
-  `released`, including the build identity fields that make the evidence
-  current.
-
-If one of these cannot be stated, the work is an architecture-discovery ticket
-and must be resolved before a feature ticket is implemented. `Implemented` is
-not reported as `fixed`; fixed requires the original reproduction to be green
-at the highest required seam.
+This file preserves every closed ticket and its historical evidence. The
+authoritative active backlog is [tickets.md](tickets.md); the user-facing
+execution sequence is [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md).
 
 ## 273. Publish atomic resident protection snapshots
 
@@ -47,6 +20,7 @@ at the highest required seam.
 - [x] Snapshot composition avoids manually duplicated mutable UI/runtime fields; the resident status exposed to the tray agrees with the published generation.
 - [x] Tests simulate successful reload, activation failure/rollback, concurrent event classification during reload, and concurrent reload requests without timing sleeps or a live cloud submission. The tests assert that every event used one generation and that no raw submission path is released.
 
+
 ## 274. Make selected-client uncertainty and target identity explicit
 
 **What to build:** Implement the resident decision matrix that separates selected AI-client uncertainty from unrelated application input and carries the initiating composer/window identity into deferred sanitize, confirmation, and replay work.
@@ -60,6 +34,7 @@ at the highest required seam.
 - [x] Uncertain input outside selected AI clients continues normally.
 - [x] The deferred flow carries snapshot generation and captured composer/window identity; an invalid or changed target aborts raw-free and cannot submit or redirect to the current foreground window.
 - [x] Tests cover the complete matrix, focus change after suppression, classifier exceptions, and repeated events after cancellation.
+
 
 ## 251. Make selected-profile setup and binding changes fail closed in the resident hook
 
@@ -77,6 +52,7 @@ at the highest required seam.
 - [x] Cancellation, timeout, storage failure, and unexpected setup exception leave the app fail-closed with raw-free diagnostics.
 - [x] Tests cover empty store, two selected profiles, binding change from protected state, resident reload, setup cancel/failure, and no raw submission.
 
+
 ## 252. Wire per-user single-instance enforcement into the installed tray entry point
 
 **What to build:** Use the existing single-instance boundary at the actual tray executable entry point so a second launch cannot register a competing native keyboard hook or create a second tray icon. The second launch must activate the existing resident UI when possible and otherwise exit with a raw-free status.
@@ -90,6 +66,7 @@ at the highest required seam.
 - [x] The mutex lifetime covers the actual tray message loop and is released safely on normal exit, startup failure, and abandoned-instance recovery.
 - [x] Installer upgrade and explicit Exit remain compatible with the single-instance boundary.
 - [x] Tests exercise the production entry-point integration, not only the helper class.
+
 
 ## 253. Connect selected-app Send controls to native interception without blocking other controls
 
@@ -106,6 +83,7 @@ at the highest required seam.
 - [x] Once the foreground window is identified as a selected AI client, an unrecognized or transiently unavailable Send-control identity cannot release the original click.
 - [x] Tests cover composer, skill picker, Send button, mouse activation, selected versus unselected apps, and overlay-originated replay.
 
+
 ## 254. Make crash and failure diagnostics structurally raw-free
 
 **What to build:** Replace all persistence and outward diagnostics of arbitrary exception messages/stack traces with one local raw-free crash-report boundary. It must retain only an allowlisted component, exception type/category, build version, timestamp, and safe status code while preserving fail-closed behavior.
@@ -118,6 +96,7 @@ at the highest required seam.
 - [x] Orchestrator, native-submit, sanitizer, and DPAPI/readiness failures return raw-free diagnostics without exception text.
 - [x] Tray/CLI crash viewing shows only the safe summary.
 - [x] Tests inject exceptions containing synthetic prompt, path, and window-title values and prove none reach reports, status, audit, or CLI output.
+
 
 ## 256. Add production integration tests for single-instance enforcement
 
@@ -133,6 +112,7 @@ at the highest required seam.
 - [x] Test verifies first instance retains hook ownership and tray icon
 - [x] Test verifies behavior on abnormal first-instance termination (mutex cleanup)
 
+
 ## 257. Implement actual window activation in ActivateExistingInstance
 
 **What to build:** Implement real window activation in `ActivateExistingInstance` so that when a second launch occurs, the user's existing tray window is brought to the foreground. This requires storing the tray window handle in a shared location (e.g., Windows message clipboard or named shared memory) when the first instance starts.
@@ -147,6 +127,7 @@ at the highest required seam.
 - [x] Shared handle storage uses proper ACLs to allow only the same user to access it
 - [x] Cleanup removes the stored handle on normal exit
 
+
 ## 258. Add user notification when second tray instance is blocked
 
 **What to build:** Add one user-facing notification when a second launch of the tray is blocked by single-instance enforcement. It must briefly report that Code Sanitizer is already running; it remains visible whether foreground activation succeeds or falls back.
@@ -159,6 +140,7 @@ at the highest required seam.
 - [x] Notification text is localized and contains no sensitive information
 - [x] No second-instance path opens a modal dialog or relies on a hidden activation form as the only user-visible outcome
 - [x] Notification directs the user to the resident tray icon for local diagnostics without exposing data
+
 
 ## 259. Add Global\ mutex option for multi-user system support
 
@@ -174,6 +156,7 @@ at the highest required seam.
 - [x] Code validates elevation before allowing global mutex creation
 - [x] Documentation explains the elevation requirement and use cases
 
+
 ## 260. Fix IsAnotherInstanceRunning to handle mutex reentrancy correctly
 
 **What to build:** Fix the mutex ownership check in `IsAnotherInstanceRunning` so it correctly detects whether another process owns the mutex, not just whether the current process can acquire it. The current implementation using `WaitOne(TimeSpan.Zero)` fails when the mutex is already owned by the current thread (re-entrant case) or when checking from a different context.
@@ -188,6 +171,7 @@ at the highest required seam.
 - [x] Tests cover: normal case, same-thread re-entrancy, process crash recovery
 - [x] No race condition between `IsAnotherInstanceRunning` and `SingleInstanceEnforcement` constructor
 
+
 ## 261. Make user notification configurable (optional/suppressible)
 
 **What to build:** Make the non-modal notification shown when a second tray instance is blocked configurable via a registry setting. Users should be able to suppress notifications entirely or choose its non-modal presentation.
@@ -201,6 +185,7 @@ at the highest required seam.
 - [x] Setting `NotificationType` (REG_SZ) allows: `toast`, `balloon`, `none`; a legacy `messagebox` value is treated as `balloon` and never opens a modal dialog
 - [x] Default value shows a balloon notification
 - [x] Configuration is read once for the short-lived second-launch process and retained for its notification decision
+
 
 ## 262. Add unit tests for SingleInstanceEnforcement crash recovery
 
@@ -217,6 +202,7 @@ at the highest required seam.
 - [x] Test covers multiple rapid crash-restart cycles
 - [x] The abandoned-mutex regression waits through a bounded recovery window instead of assuming immediate kernel handoff after the owner thread exits.
 
+
 ## 263. Improve ActivateExistingInstance documentation and limitations
 
 **What to build:** Document the implemented per-user activation path, its Windows foreground limitations, storage lifecycle, and the safe fallback when activation cannot be completed.
@@ -229,6 +215,7 @@ at the highest required seam.
 - [x] Documentation references the `IsWindow`, `ShowWindow`, and `SetForegroundWindow` Win32 calls and their failure semantics
 - [x] Document thread-safety and stale-handle cleanup requirements for the shared store
 - [x] README states the same-user/session boundary and the visible notification fallback
+
 
 ## 264. Add localization support for user notifications
 
@@ -244,6 +231,7 @@ at the highest required seam.
 - [x] ResourceManager loads appropriate message based on current UI culture
 - [x] No localization required for technical error details (stack traces, etc.)
 
+
 ## 265. Keep first-run fail-closed protection active while onboarding is displayed
 
 **What to build:** Start the resident message loop before opening first-run setup, so the native hook continues to suppress a selected app's Send path while the user verifies profiles.
@@ -254,6 +242,7 @@ at the highest required seam.
 - [x] A selected Send during setup is suppressed with a raw-free `setup_required` result.
 - [x] An unexpected setup-worker failure produces a visible raw-free retry path while protection remains blocked.
 - [x] Regression test covers the real application-context lifecycle without a live cloud submission.
+
 
 ## 266. Route resident interception across every selected verified profile
 
@@ -268,6 +257,7 @@ at the highest required seam.
 - [x] The deferred flow uses the captured composer/window identity, not a later focused-window lookup, and aborts raw-free if that target is no longer valid.
 - [x] Tests cover both profiles in one persisted store.
 
+
 ## 267. Make selected Send-control classification fail closed and bounded
 
 **What to build:** Persist verified UI Automation evidence for each selected Send control, support localized evidence, and prevent a UIA error or hook timeout from releasing a selected Send click.
@@ -281,6 +271,7 @@ at the highest required seam.
 - [x] Candidate classification distinguishes selected-app uncertainty from unrelated input: selected-app uncertainty blocks Send, unrelated input continues normally.
 - [x] Tests cover localized evidence, transient UIA failure, and non-Send controls.
 
+
 ## 268. Remove raw exception messages from all interactive UI failure paths
 
 **What to build:** Replace `Exception.Message` in tray, dictionary, and local-restore dialogs with safe status text and centralized local crash capture.
@@ -290,6 +281,7 @@ at the highest required seam.
 - [x] No interactive failure dialog includes an arbitrary exception message, path, prompt, title, or rule value.
 - [x] DPAPI and other storage exceptions use stable public status codes; raw causes remain only as local inner exceptions.
 - [x] Tests inject synthetic sensitive values and prove UI output remains raw-free.
+
 
 ## 269. Exercise installed resident runtime paths in release smoke
 
@@ -302,6 +294,7 @@ at the highest required seam.
 - [x] Smoke launches the actual application context and proves hook registration, setup gating, runtime reload, selected Send failure handling, and second-instance behavior without a cloud submission.
 - [x] Smoke does not treat a fake hook host, a constant, or application-file presence as proof that a resident hook/lifecycle boundary worked.
 
+
 ## 278. Fail closed when the bounded native callback fallback itself faults
 
 **What to build:** Ensure that an exception in the low-level hook's bounded selected-target fallback cannot turn a previously selected Send candidate into pass-through. The fallback must preserve normal input for a known unrelated target while emitting a raw-free failure result for a selected target.
@@ -312,6 +305,7 @@ at the highest required seam.
 - [x] An unrelated cached target continues normally when the fallback throws or has no identity.
 - [x] The callback records only a stable raw-free status; it does not expose exception text.
 - [x] Tests inject the failure at the hook-host boundary for both keyboard and pointer input.
+
 
 ## 279. Correct the native mouse-hook entry point
 
@@ -325,6 +319,7 @@ at the highest required seam.
 - [x] Tray startup reaches the first-instance native-hook path without `EntryPointNotFoundException`.
 - [x] Regression tests cover tray startup with the production mouse-hook host.
 
+
 ## 270. Make second-instance activation visibly useful
 
 **What to build:** Ensure every second launch gives a visible non-modal outcome even if foreground activation of the resident activation window succeeds.
@@ -333,6 +328,7 @@ at the highest required seam.
 
 - [x] A second launch produces a visible non-modal user outcome without relying on the invisible activation form.
 - [x] Tests cover activation success and fallback with exactly one notification decision.
+
 
 ## 271. Centralize crash bootstrap and local crash-directory resolution
 
@@ -345,6 +341,7 @@ at the highest required seam.
 - [x] Crash-view CLI resolves its reports directory through the same shared default path API.
 - [x] Focused tests cover the shared bootstrap path.
 
+
 ## 272. Replace setup-form control discovery with typed profile-card state
 
 **What to build:** Make binding selection and verification status independent of label text and nested WinForms control traversal, so localization and layout changes cannot update the wrong profile.
@@ -354,6 +351,7 @@ at the highest required seam.
 - [x] Each visible profile has a typed state/control reference rather than label-text lookup.
 - [x] Binding selection and verification status update the intended profile without label-text matching.
 - [x] Tests cover both desktop profiles and a localized display label.
+
 
 ## 275. Establish a pre-action enforcement boundary for programmatic UI Automation Send
 
@@ -367,6 +365,7 @@ at the highest required seam.
 - [x] Protected status and diagnostics distinguish manual pre-action enforcement from programmatic UIA non-prevention using raw-free statuses.
 - [x] Tests prove a protected keyboard/mouse profile cannot report programmatic UIA activation as successfully protected when no pre-action boundary is active.
 - [x] Documentation records the Windows UIA limitation and the selected unsupported-path design.
+
 
 ## 277. Bind native Send decisions to the captured target before callback timeout
 
@@ -382,6 +381,7 @@ at the highest required seam.
 - [x] First-run focused Send activation returns `setup_required` rather than `binding_unknown`.
 - [x] Tests cover focus switching during classification, resolver failure, selected/unselected profiles, and focused Enter/Space during onboarding.
 
+
 ## 276. Test the live tray message-loop onboarding lifecycle
 
 **What to build:** Exercise the actual Windows tray application context on an STA message loop and prove that native interception is registered before first-run setup work begins, with no cloud submission.
@@ -392,6 +392,7 @@ at the highest required seam.
 - [x] The test proves native hook startup occurs before setup work and setup is dispatched only after the loop accepts posted work.
 - [x] A cancelled setup leaves the native hook registered and completes without a live cloud submission or blocking dialog; failed setup continues to use the visible raw-free retry path from ticket 265.
 - [x] The test has a bounded timeout and cleans up its notification icon, activation window, and temporary storage.
+
 
 ## 255. Make release smoke exercise the real protected-send invariants and remove committed test run artifacts
 
@@ -407,6 +408,7 @@ at the highest required seam.
 - [x] Build has zero new nullable warnings in production and test code.
 - [x] Full tests, installer smoke, and the final release smoke pass with raw-free artifacts.
 
+
 ## 280. Isolate self-test from user-local DPAPI protection state
 
 **What to build:** Make `--self-test` validate the deterministic sanitizer and restore workflows without reading, creating, rotating, or deleting the current user's production DPAPI secret or mapping vault. A failed production DPAPI readiness check belongs to `--doctor`; it must not make the isolated self-test unavailable.
@@ -419,6 +421,7 @@ at the highest required seam.
 - [x] The self-test path does not call the production sanitizer factory or touch the default storage layout.
 - [x] Production `--doctor` continues to report a raw-free DPAPI readiness failure instead of being hidden by self-test isolation.
 - [x] Tests prove both the isolated self-test success and raw-free production DPAPI failure reporting.
+
 
 ## 281. Recover unreadable local DPAPI protection safely and prevent partial secret writes
 
@@ -433,6 +436,7 @@ at the highest required seam.
 - [x] A confirmed recovery creates a fresh user-scoped DPAPI secret and vault; a follow-up doctor check reports the new local state accurately without leaking paths or values.
 - [x] Secret provisioning uses an atomic write/replace path and tests cover interrupted/contended creation, cancellation, and the unreadable-secret recovery path.
 
+
 ## 282. Separate broker evidence from live project-file protection status
 
 **What to build:** Make readiness, tray diagnostics, CLI output, and product smoke distinguish a tested local file-context broker from actual live Codex project-file enforcement. A successful in-memory broker exercise must never make the released product report that the live Codex file channel is protected.
@@ -445,20 +449,6 @@ at the highest required seam.
 - [x] `--doctor`, tray status, and README use one consistent capability vocabulary that distinguishes composer protection, broker-demo capability, and live project-file protection.
 - [x] Regression tests prove no aggregate readiness or release-success field can imply live project-file protection when the broker is only exercised in a temporary test workspace.
 
-## 283. Prove a supported live ingress boundary for protected project files
-
-**What to build:** Establish a real, pre-cloud integration boundary through which a selected coding workspace's supported file reads, attachments, and file-derived tool output must pass before model visibility. If the selected Codex/Desktop surface has no such supported boundary, keep the capability explicitly unsupported rather than implying protection from UI observation or a local broker demo.
-
-**Blocked by:** 282. Separate broker evidence from live project-file protection status; a verified supported Codex/Desktop integration surface or an approved local gateway design.
-
-**Do not:** Claim protection from post-action UI Automation events, scrape raw project content from the client after it has been sent, or turn every file in a task into a sequence of blocking confirmation dialogs.
-
-- [ ] A disposable protected workspace demonstrates one real pre-cloud file-context operation entering the local broker and produces raw-free evidence that the model-visible payload is sanitized.
-- [x] When the boundary is unavailable, protected-workspace mode fails closed for its local attachment and unmanaged-connector channels and reports `unsupported` rather than silently allowing those channels through Code Sanitizer.
-- [ ] The user experience presents one operation-level batch summary with a navigable per-file list; it does not require accepting a separate popup for every file.
-- [x] Live `project_files_protected` remains false unless a real ingress proof and its automated regression test exist.
-
-**Current blocker:** The Windows Codex/ChatGPT Desktop surface exposes no verified pre-cloud integration point for repository reads, attachments, or file-derived tool output. Code Sanitizer therefore reports `project_file_ingress_unsupported`; it does not claim to block direct desktop-client file reads. The remaining two criteria require a supported client extension point or an approved local gateway that owns those operations before the client reaches the cloud.
 
 ## 284. Enforce source-whitespace hygiene in the release check
 
@@ -468,6 +458,7 @@ at the highest required seam.
 
 - [x] Tracked source and test files have no current `git diff --check` whitespace errors.
 - [x] The documented release verification includes a non-interactive whitespace check that fails before packaging when new defects are introduced.
+
 
 ## 285. Show local protection capabilities and active state in the tray UI
 
@@ -482,19 +473,6 @@ at the highest required seam.
 - [x] The view explains the immediate consequence of every non-green state and offers only safe relevant actions, such as profile verification, opening recovery, or opening protected-file management.
 - [x] Tray status updates after profile verification, protection enable/disable, DPAPI recovery, and file-policy changes without requiring a restart; tests prove the displayed states remain raw-free and truthful.
 
-## 286. Exclude selected files, including .env, from cloud file context
-
-**What to build:** Let the user select one or more exact local files - including `.env` - for an `exclude from cloud` policy. Once live project-file interception is available, Codex/Desktop must not receive the contents, filename, path, attachment representation, or file-derived tool output of an excluded file. The user must see locally that the file was excluded and why.
-
-**Blocked by:** 283. Prove a supported live ingress boundary for protected project files; 285. Show local protection capabilities and active state in the tray UI.
-
-**Do not:** Treat a filename suffix match as proof that a file was excluded; sanitize and forward an explicitly excluded file; expose selected raw paths in cloud-bound logs or diagnostics; silently fall back to direct reads/uploads when interception is unavailable; or mark a file protected based only on a local preference without a verified pre-cloud enforcement path.
-
-- [ ] The local UI can add, review, and remove one or more exact files from the exclusion policy, including `.env`; local display is allowed, while persisted/cloud-bound diagnostics use protected or raw-free identities.
-- [ ] For a protected workspace with a live ingress boundary, every supported path that could expose an excluded file - file read, direct attachment, file-derived tool output, diff, or patch context - is blocked before model visibility with a raw-free `file_excluded_from_cloud` status.
-- [ ] The operation-level status view shows that an excluded file was withheld, identifies the policy outcome locally, and keeps the rest of the task/file batch usable without a per-file confirmation-dialog storm.
-- [ ] If the live ingress boundary is missing, unhealthy, or cannot classify the selected file, the affected channel fails closed and the UI reports `unsupported` or `degraded`; it never claims the exclusion is enforced.
-- [ ] Automated tests use synthetic `.env` and arbitrary-file fixtures to prove no raw contents, paths, or filenames reach model-visible payload records, audit output, or cloud-bound diagnostics.
 
 ## 287. Make DPAPI recovery rollback non-destructive when quarantine fails
 
@@ -509,6 +487,7 @@ at the highest required seam.
 - [x] A recovery cleanup or restore failure is handled fail-closed, leaves all remaining artifacts discoverable locally, and never escapes as an unhandled exception.
 - [x] Automated tests cover the move-failure and rollback paths plus a successful recovery followed by an accurate raw-free doctor status.
 
+
 ## 288. Keep DPAPI recovery fail-closed across incomplete and concurrent attempts
 
 **What to build:** Make local-protection recovery a single durable transaction. If rollback or cleanup cannot complete, or a second CLI/tray recovery runs while the first is incomplete, inspection and protected Send must remain in recovery-required mode until one explicit confirmed recovery has completed successfully. Existing artifacts must remain discoverable locally.
@@ -521,6 +500,7 @@ at the highest required seam.
 - [x] `--doctor`, tray startup, and the protected Send gate report one raw-free recovery-required status when an incomplete transaction or recovery backup accompanies an incomplete normal state; they do not create fresh local protection implicitly. A backup retained after a verified successful recovery remains locally discoverable without disabling the fresh ready state.
 - [x] Cleanup and restore failures, including unexpected local file-operation failures, are contained and return one raw-free recovery-failed result rather than escaping an exception.
 - [x] Automated tests prove byte-for-byte preservation of both secret and vault, failed-rollback follow-up inspection/Send blocking, and a competing recovery invocation that cannot initialize state without the completed confirmed transaction.
+
 
 ## 289. Atomically replace the resident protection runtime after confirmed DPAPI recovery
 
@@ -535,6 +515,7 @@ at the highest required seam.
 - [x] A failed reload leaves the previous fail-closed runtime active and reports one stable raw-free degraded or recovery-required state.
 - [x] Tests prove apply-only and native-submit paths both use the same new vault after recovery, no in-flight send bypasses replacement, and UI status updates remain raw-free.
 
+
 ## 290. Make tray profile remediation an explicit verification or retry workflow
 
 **What to build:** Make the local-status action truthful for both `setup required` and `degraded` prompt protection. When setup is required it must run the focused verification flow; when setup is already complete but the live hook is degraded it must clearly retry activation rather than claim that the profile was re-verified.
@@ -548,6 +529,7 @@ at the highest required seam.
 - [x] The relevant status is refreshed after completion and always reflects actual hook activation, not only the persisted profile record.
 - [x] Tests cover setup required, verified-but-degraded, retry failure, cancellation, and raw-free public failure text.
 
+
 ## 291. Add end-to-end tray local-status lifecycle coverage
 
 **What to build:** Add deterministic WinForms/tray integration coverage for the local protection status view so status rendering and refresh behavior are verified through the tray context rather than only through an injected row mapper.
@@ -560,6 +542,7 @@ at the highest required seam.
 - [x] Tests prove enabling/disabling protection and a persisted project-file policy change refresh the rendered rows without recreating the tray process.
 - [x] Tests exercise disposal/close behavior so repeated status refreshes do not retain controls or timers.
 - [x] Raw-free tests prove no rendered UI string contains synthetic paths, prompts, sensitive terms, mappings, or exception text.
+
 
 ## 292. Centralize single-flight execution for tray remediation actions
 
@@ -577,6 +560,7 @@ at the highest required seam.
 
 - [x] Profile verification and prompt-protection retry use one tested single-flight action executor while preserving their distinct remediation behavior and public status text.
 - [x] The shared executor releases its guard and refreshes truthful raw-free status after cancellation, runtime-creation failure, activation failure, and UI-dispatch shutdown.
+
 
 ## 293. Prove local status refresh after actual DPAPI recovery
 
@@ -596,6 +580,7 @@ at the highest required seam.
 - [x] Recovery, runtime reload, runtime activation, and unexpected recovery-operation failures remain fail-closed: selected-app Send is suppressed while local protection is not ready, while ordinary input remains pass-through, and public text excludes injected raw failure values.
 - [x] Local recovery transitions advance the resident snapshot generation. Runtime replacement and native-flow state use compare-and-publish semantics so an older in-flight event cannot overwrite `reloading`, recovery-required, runtime-degraded, or ready state.
 
+
 ## 294. Complete tray status redraw disposal and raw-free coverage
 
 **What to build:** Strengthen deterministic tray-context tests so repeated local-status redraws release old controls and no synthetic path, prompt, sensitive term, mapping, or exception text can reach rendered rows.
@@ -614,6 +599,7 @@ at the highest required seam.
 - [x] Tray-context tests inject every raw-value class into state/diagnostics and prove rendered rows remain raw-free.
 - [x] Remove the direct `ProjectFileProtectionStatusInspector.Inspect` call from the tray view factory. Publish project-file protection into the resident snapshot first, then render only that snapshot so the status form complies with the sole-state-owner rule.
 
+
 ## 295. Make second-instance activation proof match Windows foreground rules
 
 **What to build:** Replace the environment-sensitive expectation that Windows must foreground an existing tray window with a deterministic activation seam. The product must still attempt activation and always show a raw-free local outcome when foregrounding is refused.
@@ -629,6 +615,7 @@ at the highest required seam.
 **Deterministic proof:** Injected activation-window operations return accepted/refused outcomes without relying on `SetForegroundWindow`, interactive desktop focus, or timing.
 
 - [x] Refactor the single-instance activation dependency behind an injectable seam and cover both accepted and foreground-refused outcomes deterministically.
+
 
 ## 296. Keep protected Send usable and explain its safety state
 
@@ -671,6 +658,7 @@ ready, setup-required, verification-unavailable, and local-repair states.
 - [x] When setup is missing, a binding is not saved, verification is
   unavailable, or local DPAPI protection needs repair, the menu names the
   condition in plain language and directs the user to setup or repair.
+
 
 ## 297. Make all deferred and pointer Send decisions atomic and fail-closed
 
@@ -724,6 +712,7 @@ submission, while a different application's click passes through. The test
 does not broaden the claim to an unknown first-click target; that remains
 explicitly blocked by ticket 314.
 
+
 ## 298. Publish a raw-free protected-Send attempt status
 
 **What to build:** Make each configured keyboard Send attempt visible in the
@@ -762,6 +751,7 @@ is raw-free.
   suppressed key alone.
 - [x] Tests cover every terminal transition and synthetic raw values without
   timing, live focus, or cloud access.
+
 
 ## 299. Make prompt-protection setup observable from focus to active protection
 
@@ -805,6 +795,7 @@ the setup window, tray, and local-status view.
 - [x] All rendered setup progress and results remain raw-free and are covered
   without live focus, timing, or cloud submission.
 
+
 ## 300. Replace generic protected-Send blocking text with a specific outcome
 
 **What to build:** When a protected Send is blocked, show its specific
@@ -840,6 +831,7 @@ matching next action.
   are projections of the same resident snapshot.
 - [x] Synthetic prompt text, dictionary terms, mappings, paths, and exception
   messages cannot appear in any explanation.
+
 
 ## 301. Atomically replace a protected Send binding and its resident runtime
 
@@ -883,6 +875,7 @@ timers, a live desktop app, or cloud submission.
   marker, or roll back a newer active candidate; rollback-save failure itself
   becomes an explicit fail-closed resident state.
 
+
 ## 302. Record a correlated, raw-free protected-Send trace
 
 **What to build:** Give each guarded keyboard Send one opaque attempt identifier
@@ -922,6 +915,7 @@ are traceable or rendered.
   does not retain an independent success flag.
 - [x] Tests reject duplicate, skipped, stale, and out-of-order transitions and
   prove raw values cannot appear in trace or public status output.
+
 
 ## 303. Route one keyboard protected Send through a resident operation
 
@@ -971,6 +965,7 @@ uses a resident selected-target/binding verdict and schedules the operation
 without waiting for sanitization or UI work. Production has no untargeted
 runner; only the explicit test seam may use one.
 
+
 ## 304. Dispatch replacement overlays from one resident UI owner
 
 **What to build:** Make sensitive keyboard Send display its replacement window
@@ -1008,6 +1003,7 @@ attempts without real desktop focus, timing assumptions, or cloud access.
 - [x] Tests prove the hook callback is never blocked by dialog lifetime and a
   second sensitive attempt cannot receive or complete the first attempt's
   approval.
+
 
 ## 305. Revalidate the captured target before write and replay
 
@@ -1056,6 +1052,7 @@ before trace publication and replay. A same-profile, different-window result is
 reported as raw-free `stale_composer`; no text is written to that second window
 and no Send is injected. The existing resident operation guard continues to
 bind both checks to the original snapshot generation.
+
 
 ## 316. Add a reference-only hook input source for local acceptance
 
@@ -1119,6 +1116,7 @@ capability is live and sends both keyboard and left-pointer gestures through
 the same hook-owned captured-gesture handlers as native callbacks. Profile
 load/save/onboarding reject the reserved profile, and scope expiry or disposal
 revokes the host capability before dispatch.
+
 
 ## 306. Prove the complete path with a local reference composer
 
@@ -1188,6 +1186,7 @@ fixture would create a false `sent_safely` proof. The closure must instead:
 - validate the resident terminal trace for every scenario and prove cleanup by
   running the fixture twice in one release-smoke process.
 
+
 ## 317. Prove foreground refusal blocks the reference-composer Send
 
 **Related parent:** 306. Prove the complete path with a local reference composer.
@@ -1217,6 +1216,7 @@ text, raw-free terminal trace, and cleanup.
 - [x] Foreground refusal produces a raw-free terminal blocked trace and no Send.
 - [x] The fixture releases its hook, overlay dispatcher, reference capability,
   and windows after the refusal.
+
 
 ## 318. Prove target change blocks a reference-composer attempt
 
@@ -1249,6 +1249,7 @@ stale-target terminal trace, and deterministic cleanup.
 - [x] A target change before replay preserves the original target and produces
   no Send in either local window.
 
+
 ## 319. Prove UI Automation write failure blocks the reference-composer Send
 
 **Related parent:** 306. Prove the complete path with a local reference composer.
@@ -1278,6 +1279,7 @@ terminal trace without timers or cloud access.
 - [x] A write failure after approval sends neither raw nor sanitized text.
 - [x] The trace does not contain `text_written`, `send_injected`, or
   `sent_safely` after the failed write.
+
 
 ## 320. Prove replay failure and partial injection fail closed
 
@@ -1309,6 +1311,7 @@ released modifiers, raw-free terminal trace, and cleanup.
 - [x] Keyboard and pointer replay failures produce no Send and no success trace.
 - [x] Partial injection reports `replay_indeterminate` and releases all
   modifiers before the fixture returns.
+
 
 ## 321. Run the interactive reference-composer release acceptance
 
@@ -1346,6 +1349,7 @@ failure twice without cloud access, sleeps, or raw prompt artifacts.
 - [x] The acceptance run proves cleanup by executing the full matrix twice in
   one process.
 
+
 ## 322. Make the reference-composer acceptance runner deterministic without weakening production foreground checks
 
 **Related parents:** 306. Prove the complete path with a local reference composer; 317-321. Reference-composer failure and release scenarios.
@@ -1367,6 +1371,7 @@ failure twice without cloud access, sleeps, or raw prompt artifacts.
 - [x] A normal local scenario is repeatable without depending on the current desktop foreground owner.
 - [x] Production uses the Win32 foreground adapter; only the local reference-composer receives a fixed acceptance adapter.
 - [x] Cleanup leaves no live hook, overlay dispatcher, reference capability, or hidden local window.
+
 
 ## 307. Pin a verified ChatGPT Desktop compatibility fingerprint
 
@@ -1405,6 +1410,7 @@ timers, or cloud access.
   runtime is active; failed updates preserve the prior protected runtime.
 - [x] Tests prove no prompt text, sensitive values, paths, UI names, or exception
   details are stored or shown with compatibility evidence.
+
 
 ## 308. Gate the ChatGPT Desktop release claim on both acceptance proofs
 
@@ -1499,6 +1505,7 @@ missing keyboard capture, trace failure, or unsupported surface. It must never
 display an exception message, type name, prompt text, or arbitrary diagnostic
 value. Deterministic tests inject each known code and an arbitrary value.
 
+
 ## 309. Trace protected pointer Send through the resident operation
 
 **What to build:** Apply the same correlated, raw-free resident attempt trace to
@@ -1534,6 +1541,7 @@ resident attempt/trace owner and terminal-trace rule as keyboard attempts;
 keyboard trace success is never reused as pointer evidence. Missing pointer
 identity creates a fresh `send_detected -> terminal_blocked` trace, and child
 window handles are normalized to their root before target comparison.
+
 
 ## 310. Remove the untraced runtime compatibility path
 
@@ -1572,6 +1580,7 @@ at startup with `trace_unavailable`. The resulting status is projected into
 resident state, and the lifecycle lease has a deterministic cancellation
 blocking test at the side-effect boundary.
 
+
 ## 311. Type and centralize protected-Send trace transitions
 
 **What to build:** Replace repeated string pairs used for trace stages and
@@ -1596,6 +1605,7 @@ from inventing unvalidated transition tokens.
 - [x] Trace stage/result pairs use a typed domain contract.
 - [x] Repeated fail-closed publication logic is centralized.
 - [x] Tests prove the public trace remains raw-free.
+
 
 ## 312. Preserve an interrupted Send outcome without mutating a newer runtime
 
@@ -1629,6 +1639,7 @@ boundary.
   claiming the new runtime completed the old Send.
 - [x] Tests cover replacement during detection, checking, overlay, write, and
   replay stages.
+
 
 ## 313. Prove runtime replacement at every protected-Send stage
 
@@ -1665,46 +1676,6 @@ each stage.
 - [x] Text-write replacement is covered.
 - [x] Replay replacement is covered.
 
-## 314. Prove the first pointer Send before UI Automation classification
-
-**What to build:** Close the remaining mouse-hook gap where the first click
-arrives before the resident target verdict or send-control evidence has been
-cached. The pointer path must decide from resident, precomputed evidence and
-must not wait for UI Automation in the low-level callback.
-
-**Blocked by:** 297. Make all deferred and pointer Send decisions atomic and
-fail-closed; 309. Trace protected pointer Send through the resident operation.
-
-**State owner:** A resident pointer-target evidence owner publishes the
-selected/unrelated verdict and the verified Send-control identity. The low-level
-mouse callback only performs bounded lookup by normalized root window and
-process identity.
-
-**Fail-closed state:** A selected-client pointer Send with missing or stale
-evidence is suppressed and ends as `trace_unavailable`; an unrelated click is
-passed through. No live window text, process, or UI Automation lookup is
-allowed in the callback.
-
-**Deterministic proof:** A controlled target-evidence fixture covers the first
-click after focus change, a child-to-root window transition, slow UI
-Automation, an unrelated click, and Stop/runtime replacement without timers,
-live cloud access, or raw prompt data.
-
-- [ ] First pointer Send is decided from resident evidence before the mouse
-  callback returns.
-- [ ] Slow or unavailable UI Automation cannot pass a selected-client Send or
-  consume an unrelated click.
-- [ ] Tests prove the evidence generation and normalized target identity are
-  carried into the resident pointer operation.
-
-**Regression follow-up (2026-08-10):** The shipped global low-level mouse hook
-classified every left click in a selected ChatGPT window. A slow UI Automation
-lookup then suppressed navigation and other non-Send controls. Native pointer
-registration is disabled in the production profile until this ticket provides
-resident pre-action Send-control evidence; the resident status must state that
-only keyboard Send is protected. Completion requires a deterministic proof that
-the actual Send button is suppressed without blocking `Ctrl+C`, chat/project
-navigation, skill controls, or any other click outside its verified boundary.
 
 ## 315. Make protected-Send trace publication transactional
 
@@ -1758,6 +1729,7 @@ replacement, generation; a test-only successful-CAS observer also proves that
 no cancelled intermediate transition was published before the terminal
 outcome. A pre-handoff terminal publication is permitted and retained.
 
+
 ## 323. Make ChatGPT compatibility fingerprints explicitly opaque
 
 **What to build:** Replace the ambiguous raw-looking fields of
@@ -1794,6 +1766,7 @@ compatibility boundary, and comparison/raw-free diagnostics return the stored
 value without rehashing. Missing or incomplete evidence is fail-closed through
 `unsupported_surface`. Diagnostic rendering of incomplete evidence does not
 manufacture a replacement fingerprint. Full suite: `1726/1726`.
+
 
 ## 324. Centralize the verified ChatGPT discovery fixture schema
 
@@ -1838,6 +1811,7 @@ current source tree. Manual acceptance remains admitted only through the
 resident-proof gate and still cannot claim release readiness without the
 separate release/CI evidence.
 
+
 ## 325. Own operational readiness state and write a raw-free journal
 
 **What to build:** Give every desktop action needed for Code Sanitizer to become
@@ -1878,6 +1852,7 @@ resident owner; `OperationalActionJournal` persists bounded safe-token JSONL.
 Targeted lifecycle tests and the full `1669/1669` suite cover terminal outcomes,
 cancellation, retry correlation, stale attempts, and raw-free records.
 
+
 ## 326. Start required setup and readiness actions automatically
 
 **What to build:** On installation and resident startup, automatically start
@@ -1917,6 +1892,7 @@ already-ready profile without timers, live cloud, or a real desktop.
 then local readiness without a tray click; attempt guards prevent stale worker
 completion from activating protection. Tray retries remain fail-closed.
 
+
 ## 327. Show detailed, usable operational-action progress
 
 **What to build:** Make tray and status UI render the resident action lifecycle
@@ -1955,6 +1931,7 @@ mode, elapsed time, cancellation, terminal outcome, and next action. The
 status and tray-context tests cover running, failure, cancellation, retry, and
 unrelated input without timers or live cloud access.
 
+
 ## 328. Separate short installed readiness from release/CI acceptance
 
 **What to build:** Keep the complete reference-composer scenario matrix in the
@@ -1992,6 +1969,7 @@ manual desktop.
 reference matrix remains in `ReferenceComposerReleaseAcceptanceRunner` and is
 not invoked by `WindowsTrayApplicationContext`. Separation is covered by the
 source contract, status, product smoke, and full-suite tests.
+
 
 ## 329. Prove the active tray path and reopen manual acceptance
 
@@ -2037,6 +2015,7 @@ unrelated-key pass-through and hook cleanup, and records a raw-free proof. The
 proof and its matching terminal journal record exist; CLI gate tests cover both
 blocked and admitted paths.
 
+
 ## 330. Make resident readiness the protected-Send admission decision
 
 **What to build:** A selected app's Send stays blocked until the current
@@ -2068,6 +2047,7 @@ admission provider. The active lifecycle result and matching resident proof are
 required before a selected Send can leave the hook path; same-process tests
 cover blocked-before-readiness and admitted-after-readiness behavior.
 
+
 ## 331. Reject workers when their lifecycle action did not start
 
 **What to build:** Startup and retry paths must not queue setup/readiness work
@@ -2094,6 +2074,7 @@ readiness worker is queued and no wildcard completion is accepted.
 **Implementation evidence:** startup returns without queuing its worker after a
 rejected lifecycle start; lifecycle terminal transitions require one positive,
 matching attempt ID.
+
 
 ## 332. Bind readiness proof to the active resident hook path
 
@@ -2123,6 +2104,7 @@ the active tray controller, which requires a ready hook and matching terminal
 attempt. Same-process tests cover success, cancellation, stale worker
 completion, unrelated input, and hook cleanup.
 
+
 ## 333. Preserve exact composer identity for write and replay
 
 **What to build:** Replacement and replay target the exact composer captured
@@ -2150,6 +2132,7 @@ captured runtime-id hash. A different focused control, including one in the
 same window, is rejected; only the isolated reference-only fixture retains its
 own local test behavior.
 
+
 ## 334. Render terminal readiness and lifecycle results
 
 **What to build:** Local status displays successful, failed, and cancelled
@@ -2175,6 +2158,7 @@ and retry without a desktop.
 **Implementation evidence:** status projection renders completed, failed, and
 cancelled local-readiness rows, plus terminal lifecycle rows instead of hiding
 success.
+
 
 ## 335. Strengthen operational journal token validation
 
@@ -2202,6 +2186,7 @@ free-form values while accepting valid lifecycle records.
 ID, current build identity, and snake-case lifecycle tokens. Targeted tests
 reject domain-like and IP-like fields.
 
+
 ## 336. Unify release-acceptance admission ownership
 
 **What to build:** One release-acceptance workflow owns the reference proof and
@@ -2228,6 +2213,7 @@ gate and preserve raw-free failure output.
 removed. The only user-facing live-contract arming command evaluates the
 resident manual gate; the reference matrix remains a separate CI/release
 evidence command and cannot arm a live contract.
+
 
 ## 337. Type operational lifecycle vocabulary
 
@@ -2257,6 +2243,7 @@ transitions without timers or a desktop.
 **Implementation evidence:** lifecycle persistence now validates correlation,
 build, and lifecycle token fields independently; full suite coverage preserves
 the existing serialized status contract.
+
 
 ## 338. Unify automatic OpenAI Desktop onboarding
 
@@ -2297,6 +2284,7 @@ because a previously protected ChatGPT profile satisfied the global condition,
 while later manual attempts followed a different lifecycle. The prior manual
 selector approach was therefore rejected and removed.
 
+
 ## 339. Make automatic setup require the active OpenAI Desktop target
 
 **What to build:** Startup distinguishes an active verified target from an
@@ -2331,6 +2319,7 @@ produces setup-required. Candidate activation publishes the target temporarily
 and restores the preceding target whenever runtime activation or profile commit
 fails. Focused tests cover a protected unrelated profile, a persisted target,
 startup setup launch, and rollback.
+
 
 ## 340. Make verified onboarding enable protected Send on the current build
 
@@ -2392,6 +2381,7 @@ the stored reference proof belonged to `0.1.20260810.t2128` and no live contract
 was recorded. The protected-claim gate therefore suppressed `Ctrl+Enter` before
 the replacement overlay could appear.
 
+
 ## 341. Deepen the resident protection runtime behind one published interface
 
 **What to build:** Make the resident protection runtime the single deep module
@@ -2439,6 +2429,7 @@ four-operation UI port plus the immutable snapshot. `ResidentProtectionRuntimeUi
 in-flight stale callback, and tray-context tests provide the deterministic
 evidence. Ticket 341 is complete; workflow acceptance remains tracked by 345.
 
+
 ## 342. Make the Windows tray a thin projection of resident protection state
 
 **What to build:** Keep the Windows tray usable while reducing it to a UI
@@ -2481,6 +2472,7 @@ submission.
 retry, recovery, cancellation, and their terminal publications. Status-window
 tests cover refresh and lifetime, while `WindowsTrayContext_StoresOnlyTheResidentUiPort`
 prevents a future direct controller field. Ticket 342 is complete.
+
 
 ## 343. Separate profile verification from low-level native input handling
 
@@ -2535,6 +2527,7 @@ profiles resolve to `profiles_unavailable`. Targeted tests cover profile
 status/arm/missing-profile snapshots (16), pointer dispatch (15), and the
 reference-composer/replay matrix (10). Ticket 343 is complete.
 
+
 ## 344. Make the full automated suite independent from an installed tray instance
 
 **What to build:** Isolate `SingleInstanceEnforcementTests` from a real,
@@ -2571,6 +2564,7 @@ its own ID, and `WindowsTrayApp_RunWithTestInstanceIdDoesNotObserveAnUnrelatedRu
 holds an independent running mutex while the test runtime starts and exits.
 The fixture passes 30/30 without acquiring, stopping, or activating the
 production tray identity. Ticket 344 is complete.
+
 
 ## 346. Publish immutable resident admission evidence before native callbacks
 
@@ -2623,6 +2617,7 @@ evidence, same-process readiness transition, repeated callbacks after a single
 profile-adapter load (with a throwing post-snapshot adapter), stale reload
 safety, and unrelated input. Full suite: `1723/1723`; `--self-test` and
 `--product-smoke` passed. Ticket 346 is complete.
+
 
 ## 345. Move resident setup, retry, and recovery workflows into one coordinator
 
@@ -2708,6 +2703,7 @@ desktop focus is used. Ticket 345 is complete.
    - Prove setup success, activation failure/rollback, retry failure, recovery
      failure, cancellation, and stale completion. Confirm the tray cannot
      independently mark protection ready or release Send.
+
 
 ## 347. Углубить resident workflow interface и разгрузить TrayProtection
 
@@ -2796,112 +2792,6 @@ rollback-runtime failure and terminal ordering. The full `1759/1759` suite,
 `--self-test`, `--product-smoke` and the twice-run reference-composer scenario
 matrix passed.
 
-## 348. Выделить ядро protected Send из NativeSubmitInterception
-
-**What to build:** The correlated protected Send operation becomes one deep
-module that owns the attempt lifecycle, target revalidation, sanitization,
-confirmation, local write, replay and raw-free terminal trace. Windows hook,
-profile/compatibility evidence, persistence and product smoke remain adapters
-around that seam. The user-visible behaviour and fail-closed guarantees stay
-unchanged.
-
-**Blocked by:** 347. Deepen the resident workflow interface and разгрузить
-TrayProtection; 323. Make ChatGPT compatibility fingerprints explicitly
-opaque; 324. Centralize the verified ChatGPT discovery fixture schema; 346.
-Publish immutable resident admission evidence before native callbacks.
-
-**State owner:** The protected Send operation owns the correlated attempt,
-target identity, operation stage and terminal outcome. The Windows input
-adapter owns only fast captured-input classification and suppression. Profile
-and compatibility adapters own evidence construction and persistence. The
-resident snapshot remains the only admission source supplied to the callback.
-
-**Fail-closed state:** Any missing stage, target change, foreground refusal,
-write failure, replay uncertainty, stale snapshot or incomplete evidence
-suppresses the original Send and publishes a raw-free blocked outcome. No
-adapter may replay or submit independently of the operation.
-
-**Allowed transitions:**
-`send_detected -> target_matched -> composer_read -> sanitized ->
-overlay_decision -> text_written -> replayed -> sent_safely | blocked(reason)`.
-Safe prompts use an explicit no-overlay terminal branch. Cancel, stale target,
-write failure and replay uncertainty terminate the current attempt and leave the
-next Send eligible for a new attempt.
-
-**Deterministic proof:** Run the same protected Send interface through the
-reference composer and injected Windows adapters. Cover safe and sensitive
-prompts, cancel, foreground refusal, target change before write/replay, write
-failure, replay unavailable/partial, repeated Send and unrelated input. Tests
-must assert raw-free traces, zero callback-time storage reads and no cloud
-access.
-
-- [x] Move protected Send stage ordering and terminal trace ownership behind one
-      deep operation interface.
-- [x] Keep hook, UIA, profile storage, compatibility evidence and smoke code as
-      adapters with no independent submit/replay decisions.
-- [x] Preserve reference-composer and live compatibility evidence semantics,
-      including opaque fingerprint comparison and resident admission.
-- [x] Pass the full automated suite, `--self-test`, `--product-smoke` and the
-      deterministic reference-composer matrix before any file-ingress work.
-
-**Completed (2026-08-15):** Extracted `ProtectedSendPipeline` and guarded
-execution from `NativeSubmitInterception`. The pipeline owns correlated stage
-and terminal trace publication, while the hook only classifies/suppresses and
-the Windows/UIA path receives the operation's target, trace and execution
-guards. Replay trace publication now occurs before the actual submit side
-effect; trace failure therefore blocks without sending. Canonical safe and
-sensitive traces, repeated sends, unrelated input, raw-free exceptions and
-reference-composer failure scenarios are covered. Verification: `1733/1733`
-tests, `--self-test`, `--product-smoke` and the twice-run reference-composer
-matrix passed.
-
-**Reopened (2026-08-16):** Final review found that the execution lease is
-released immediately after the OS submit side effect, while the canonical
-`sent_safely` terminal trace is published later by the pipeline. Reload or
-cancellation in that gap can reject terminal publication after sanitized text
-was already sent, producing a false fail-closed result and making a duplicate
-retry possible.
-
-- [x] Hold one correlated side-effect boundary from the first irreversible
-      local write/replay decision through canonical terminal publication.
-- [x] Once sanitized submit succeeds, publish exactly one `sent_safely`
-      terminal outcome before reload/cancellation can invalidate the attempt;
-      never report `Submitted=false` after the side effect already occurred.
-- [x] Add a deterministic test that races reload/cancellation after submit
-      succeeds but before terminal publication and proves one submit, one
-      terminal result and no duplicate-send ambiguity.
-- [x] Centralize adapter-stage normalization in the protected Send operation so
-      Windows adapters cannot independently reinterpret replay/terminal state.
-- [ ] Close this ticket again only after focused tests, the full suite,
-      `--self-test`, `--product-smoke` and the reference-composer matrix pass.
-
-**Remediation implemented (2026-08-16):** One side-effect scope now spans
-write/replay through terminal publication. Cancellation requested before the
-linearization point blocks the side effect; cancellation after it waits for a
-locally committed, serialized `sent_safely` snapshot. The deterministic reload
-race proves one submit and exactly one terminal outcome. Verification:
-`1739/1739`, `--self-test` and `--product-smoke` passed; the explicit reference
-matrix reported all scenarios and cleanup passed but did not record a release
-proof for the current installed-build mismatch. Reclosure remains gated by 347
-and ticket 349.
-
-**Acceptance pending (2026-08-22):** Ticket 349 completed the remaining
-resident transaction proof. A matching installer was built from source commit
-`3622ef22` as `0.1.20260822.t1325`; the source-build reference-composer matrix
-passes every scenario twice with raw-free traces and cleanup. Keep this ticket
-open until the installed candidate records `reference_proof_recorded: true`.
-
-**Architecturally reopened (2026-08-26):** The extracted
-`ProtectedSendPipeline` is still a shallow orchestration interface. Its caller
-continues to understand stage order through a broad host contract, while
-`OsInteractionOrchestrator` owns a second read/sanitize/overlay/write/replay
-state machine. In addition, the current reference acceptance can write directly
-to its fixture TextBox instead of exercising production
-`NativeVerifiedComposerTextAccess`; that proof cannot detect production UIA,
-STA, focus, write-verification, or replay failures. Preserve the previous
-implementation and evidence above as history, but do not close 348 until the
-evidence-gated transaction migration in 351-358 is complete and the matching
-installed resident proof is green.
 
 ## 349. Доказать setup/recovery workflow transaction на полной race-матрице
 
@@ -2950,6 +2840,7 @@ operational journal. Verification: `1759/1759`, `--self-test`,
 `--product-smoke`, and all two-pass reference-composer scenarios passed with
 raw-free traces and cleanup. `reference_proof_recorded` remains false only
 because the installed build does not match the source build.
+
 
 ## 350. Unify OpenAI Desktop compatibility identity and separate runtime target evidence
 
@@ -3046,6 +2937,7 @@ Release build with zero warnings/errors.
 operational profile selectors. The single `openai-desktop` identity is the
 stable compatibility contract shared by those selectors; it does not make an
 active surface from one selected profile silently replace the other profile.
+
 
 ## 351. Enforce an evidence-state contract for product fixes
 
@@ -3151,6 +3043,7 @@ to inspect a temporary publish path that had already been removed. After the
 script fix, the current-record gate passed against the published EXE and the
 record/proof hashes. The final source commit and candidate must still be
 rebound by the release sequence after this documentation change.
+
 
 ## 352. Add a resident-owned installed keyboard protected-Send canary
 
@@ -3285,6 +3178,7 @@ an evidence-write failure. The profile ID is never used as a compatibility
 fallback. Focused canary/workflow tests pass (`31/31`); full suite passes
 (`1915/1915`).
 
+
 ## 353. Deepen composer access behind ProtectedComposerSession
 
 **What to build:** Introduce a target-scoped `ProtectedComposerSession`
@@ -3372,211 +3266,6 @@ user-authorized `Terra/high` full-suite evidence recovery after the first
 verifier process lost its terminal output. Installed/live OpenAI Desktop is
 `NOT_RUN`: this ticket makes no production-keyboard or cloud-delivery claim.
 
-## 354. Introduce ProtectedSendTransaction beside legacy orchestration
-
-**What to build:** Add the deep external interface
-`Execute(AdmittedProtectedSend) -> ProtectedSendTerminalResult`. It owns attempt
-identity, admitted generation, raw prompt lifetime, sanitization,
-confirmation/edit/cancel, target revalidation, write verification, replay,
-side-effect linearization, raw-free trace ordering, and exactly one terminal
-publication. Initially route only deterministic/reference execution through it;
-production remains on the legacy owner until ticket 356.
-
-**Blocked by:** 353.
-
-**State owner:** `ProtectedSendTransaction` is the sole owner of an admitted
-attempt and terminal outcome. Resident runtime owns admission; session and UI
-adapters return effects only.
-
-**Fail-closed state:** Missing or duplicate stages, stale generation, target
-change, cancellation, write mismatch, replay uncertainty, trace failure, or
-exception ends in one blocked result with no independent adapter replay.
-
-**Allowed transitions:** `admitted -> read -> sanitized -> safe_path |
-confirmation -> write -> verify -> replay -> sent_safely`, or one terminal
-`blocked(reason)`/`cancelled`. Only the transaction may cross the irreversible
-side-effect boundary and publish terminal state.
-
-**Deterministic proof:** Matrix covers safe/sensitive prompts, edit, cancel,
-confirm, target changes, stale generation, write mismatch, replay failures,
-cancellation races, repeated sends, and exactly one terminal result without
-timers, UIA, or cloud access.
-
-**Red-capable reproduction:** Characterization tests first expose that legacy
-callers can observe or own stage ordering outside the proposed transaction and
-that duplicate terminal/side-effect ownership is representable.
-
-**Highest required seam:** Deterministic `ProtectedSendTransaction` matrix.
-
-**Evidence target:** `locally_verified`; production remains on legacy and cannot
-claim live verification from this ticket.
-
-- [x] Implement the compact request/result contract and explicit state machine.
-- [x] Move lease, trace, side-effect, and terminal publication ownership inside
-      the transaction.
-- [x] Keep the legacy production path active and prohibit dual side effects.
-- [x] Prove raw prompt data is not retained in terminal evidence.
-
-## 355. Route reference acceptance through the production composer access path
-
-**What to build:** Migrate reference-composer acceptance to
-`ProtectedSendTransaction` and `ProtectedComposerSession`, using production
-`NativeVerifiedComposerTextAccess` for Windows access behavior. Direct
-assignment to the fixture TextBox is removed from release evidence. The
-reference-only input source remains physically unable to target Codex/ChatGPT.
-
-**Blocked by:** 354.
-
-**State owner:** The transaction owns each acceptance attempt; the reference
-fixture owns only its window and deterministic input stimuli.
-
-**Fail-closed state:** A reference adapter or production-access mismatch fails
-the scenario and records one raw-free terminal outcome; it cannot substitute a
-fixture write or mark release evidence passed.
-
-**Allowed transitions:** The same transaction transitions as ticket 354, with
-two explicit adapter modes: deterministic session contract and production
-Windows access to the reference composer.
-
-**Deterministic proof:** Run all reference scenarios twice and prove stable
-cleanup, exact multiline formatting, confirm writes sanitized text, cancel
-preserves interception, target changes block, and replay failures are terminal.
-
-**Red-capable reproduction:** Disable or fail production composer access while
-leaving the fixture TextBox writable; the old proof can pass, while the new
-production-access proof must fail.
-
-**Highest required seam:** Reference composer through production
-`NativeVerifiedComposerTextAccess` and the session contract.
-
-**Evidence target:** `locally_verified` at the production-access reference
-level, bound to the executable build.
-
-- [ ] Remove direct fixture TextBox writes from acceptance evidence.
-- [ ] Use the production access adapter through the session contract.
-- [ ] Preserve physical exclusion from OpenAI Desktop targets.
-- [ ] Publish the evidence level honestly as reference production-access proof,
-      not installed ChatGPT proof.
-
-## 356. Migrate production keyboard Send to ProtectedSendTransaction
-
-**What to build:** Route the supported OpenAI Desktop keyboard Send path from
-resident admission into `ProtectedSendTransaction`. The hook only captures,
-classifies, and suppresses; tray only projects state; adapters cannot write,
-replay, or publish terminal success outside the transaction.
-
-**Blocked by:** 355.
-
-**State owner:** Resident runtime owns immutable admission; the transaction
-owns every admitted attempt; the session owns target-scoped mechanics.
-
-**Fail-closed state:** Any unavailable transaction/session, stale generation,
-uncertain selected target, write mismatch, or replay failure keeps the original
-Send suppressed and reports one actionable raw-free outcome.
-
-**Allowed transitions:** `captured selected Send -> suppressed -> admitted ->
-transaction terminal`; unrelated input passes through and cannot create a
-transaction.
-
-**Deterministic proof:** Existing callback, reload, repeated-send, cancel/edit,
-target-change, formatting, and terminal-publication matrices pass through the
-new interface. The resident canary from 352 must turn green on the installed
-candidate without changing its assertion.
-
-**Red-capable reproduction:** Reuse the unchanged failed canary artifact and
-assertion from 352; do not create a more convenient replacement scenario.
-
-**Highest required seam:** Installed active resident on the supported OpenAI
-Desktop keyboard path.
-
-**Evidence target:** `live_verified` for the exact commit, executable, installer,
-profile fingerprint, generation, and Send binding.
-
-- [ ] Replace production keyboard orchestration with the transaction call.
-- [ ] Remove independent write/replay/terminal decisions from migrated callers.
-- [ ] Prove one side effect and one terminal result across cancellation/reload.
-- [ ] Turn the original installed resident canary from red to green.
-
-## 357. Evidence-gate installer and release claims
-
-**What to build:** Make installer packaging, release smoke, status UI, and
-release documentation consume the evidence contract. A candidate may claim
-keyboard protected Send only when required deterministic, reference production-
-access, and installed resident evidence is current for that exact build.
-
-**Blocked by:** 356.
-
-**State owner:** The immutable release evidence manifest owns candidate proof;
-installer and UI are projections.
-
-**Fail-closed state:** Missing/mismatched commit, version, executable hash,
-installer identity, compatibility fingerprint, or binding leaves the claim
-`not_verified` and never silently reuses older proof.
-
-**Allowed transitions:** `locally_verified -> live_verified -> released` only
-after all required artifacts match. Rebuild or profile/app drift invalidates the
-affected higher-level evidence.
-
-**Deterministic proof:** Manifest validator rejects stale and cross-build proof;
-installer smoke verifies embedded version/hash and required evidence fields;
-UI tests project each state without inventing readiness.
-
-**Red-capable reproduction:** Fixtures with a passing older installer proof or
-missing build identity must be rejected before release gating is implemented.
-
-**Highest required seam:** Installer smoke plus matching installed resident
-canary evidence.
-
-**Evidence target:** `released` only when deterministic, reference, and live
-artifacts all match the packaged candidate.
-
-- [ ] Bind all protected-Send evidence artifacts to exact build identity.
-- [ ] Gate release claims and installer smoke on applicable evidence levels.
-- [ ] Show evidence state and next action without exposing prompt data.
-- [ ] Update release documentation to prohibit unsupported fixed/released
-      claims.
-
-## 358. Contract legacy protected-Send orchestration and reclose ticket 348
-
-**What to build:** After the new production path and all evidence levels are
-green, remove the legacy protected-Send stage owner, the broad
-`IProtectedSendPipelineHost`, duplicate protected-Send sequencing in
-`OsInteractionOrchestrator`, and direct acceptance writes. Preserve unrelated
-apply-only behavior behind an explicitly named interface if it is still used.
-
-**Blocked by:** 351-357. Ticket 348 cannot close before this contraction.
-
-**State owner:** `ProtectedSendTransaction` remains the only admitted-attempt
-owner. Resident, session, sanitizer, overlay, and tray boundaries retain only
-their documented responsibilities.
-
-**Fail-closed state:** If any caller still owns replay or terminal publication,
-or if any required evidence is missing, contraction and reclosure stop.
-
-**Allowed transitions:** `dual implementation with one active owner -> all
-callers migrated -> legacy unreachable -> legacy deleted -> 348 reclosed`.
-There is never a state with two active side-effect owners.
-
-**Deterministic proof:** Static dependency checks and tests prove the broad host
-and duplicate state machine are gone. Full suite, self-test, product smoke,
-reference production-access matrix, and installer-matched resident canary pass
-for the same build.
-
-**Red-capable reproduction:** Static dependency checks must initially fail while
-the broad host, direct fixture write, or duplicate protected-Send stage owner is
-still reachable.
-
-**Highest required seam:** Static architecture gate plus the installed resident
-canary for the contracted candidate.
-
-**Evidence target:** `released`, followed by reclosure of 348 with linked proof
-for all required levels.
-
-- [ ] Delete legacy transaction ownership and broad host callbacks.
-- [ ] Keep any apply-only operation separate from cloud-bound Send semantics.
-- [ ] Run all evidence levels on one candidate and record the artifacts.
-- [ ] Reclose 348 with links to deterministic, reference, live, and release
-      evidence; preserve its earlier history.
 
 ## 359. Resolve the .NET 10 SDK deterministically for repository tooling
 
@@ -3614,6 +3303,7 @@ entry points.
 - [x] Share the resolver between release build and restore commands.
 - [x] Document the runtime-only host failure mode and the repair command.
 
+
 ## 360. Diagnose NuGet restore transport failures without weakening validation
 
 **What to build:** A repository restore command reports a raw-free, actionable
@@ -3649,6 +3339,7 @@ dependent on the machine's network/proxy state.
 - [x] Add a restore wrapper using the shared .NET resolver.
 - [x] Classify NuGet source/TLS failures without printing prompt content.
 - [x] Document that signature validation remains enabled.
+
 
 ## 361. Preserve resident-canary admission through the protected callback path
 
@@ -3704,48 +3395,6 @@ attempt advances or terminates.
       one, and normal runner count remains zero for every canary-classified
       gesture.
 
-## 362. Preserve structural path suffixes during sensitive-term matching
-
-**What to build:** When a sensitive term identifies a host component inside a
-structured workspace or container path, replace only that host component and
-preserve the path syntax and suffix unchanged. For example, a configured
-hostname in `host:/mnt/host/` may be pseudonymized while `/mnt/host/` remains
-usable and readable. A plain sensitive hostname must remain configurable as a
-separate dictionary term.
-
-**Blocked by:** 352; the protected keyboard acceptance gate must have a
-raw-free installed failure artifact before matching behavior is extended.
-
-**State owner:** The sanitizer policy owns term classification and replacement
-boundaries; the protected-send transaction owns only the resulting sanitized
-text. The path parser/matcher owns structural token boundaries and must not
-publish raw values in diagnostics.
-
-**Fail-closed state:** An ambiguous or malformed structured path is not
-partially rewritten. It returns the existing safe failure result and leaves the
-original text out of diagnostics and cloud submission.
-
-**Allowed transitions:** `input -> structured_match -> host_only_replaced ->
-sanitized_output`, or `input -> ambiguous -> failed_closed`.
-
-**Deterministic proof:** Tests cover case-insensitive hostname matching,
-structured host/path separation, repeated separators, malformed paths, and
-plain hostname terms. Assertions must verify both the replaced host and the
-unchanged suffix without using live cloud submission.
-
-**Highest required seam:** Sanitizer output consumed by the protected-send
-transaction, followed by the existing installed keyboard acceptance path.
-
-**Evidence target:** `locally_verified` sanitizer matrix, then `live_verified`
-only when the unchanged installed canary and protected-send evidence remain
-green.
-
-- [ ] Add a structural matcher that distinguishes host tokens from path
-      suffixes.
-- [ ] Preserve the suffix exactly after host replacement.
-- [ ] Add regression tests for `host:/mnt/host/` and malformed input.
-- [ ] Document that a plain hostname can still be added as its own sensitive
-      term.
 
 ## 363. Preserve the complete Windows clipboard during composer access
 

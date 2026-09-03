@@ -8,8 +8,8 @@
   (`Fix resident workflow and protected send races`)
 - This handoff is committed immediately after that baseline; use
   `git rev-parse HEAD` for the handoff commit itself.
-- Authoritative backlog: [`tickets.md`](../tickets.md)
-- Dependency map: [`DEVELOPMENT_ROADMAP.md`](DEVELOPMENT_ROADMAP.md)
+- Historical backlog snapshot: [`../../../ARCHIVE_TICKETS.md`](../../../ARCHIVE_TICKETS.md)
+- Historical dependency map: [`../../../DEVELOPMENT_ROADMAP.md`](../../../DEVELOPMENT_ROADMAP.md)
 - Product and architecture requirements: the other documents in this
   specification directory; do not reconstruct requirements from chat history.
 

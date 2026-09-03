@@ -108,7 +108,7 @@ Decision: defer LlamaFirewall as a later adjacent guardrail layer after the priv
 
 The architecture direction is clear, but implementation still needs concrete choices for runtime, Gitleaks distribution, scanner timeouts, policy file format, mapping vault storage, local handoff UI and audit fields.
 
-Decision: record these in `IMPLEMENTATION_READINESS_REVIEW.md` and treat them as pre-ticket clarifications.
+Decision: record these in `IMPLEMENTATION_READINESS_REVIEW.md` in this directory and treat them as pre-ticket clarifications.
 
 ## 19. Is a sanitizer hotkey enough protection?
 
