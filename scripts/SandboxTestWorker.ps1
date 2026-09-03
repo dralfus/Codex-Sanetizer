@@ -23,6 +23,7 @@ $jobsRoot = Join-Path $repositoryRoot '.sandbox-jobs'
 $inboxPath = Join-Path $jobsRoot 'inbox'
 $runningPath = Join-Path $jobsRoot 'running'
 $resultsPath = Join-Path $jobsRoot 'results'
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-JsonFile {
     param(
@@ -31,7 +32,7 @@ function Write-JsonFile {
     )
 
     $temporaryPath = "$Path.$PID.tmp"
-    $Value | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $temporaryPath -Encoding utf8NoBOM
+    [System.IO.File]::WriteAllText($temporaryPath, ($Value | ConvertTo-Json -Depth 6), $utf8NoBom)
     Move-Item -LiteralPath $temporaryPath -Destination $Path -Force
 }
 
@@ -165,7 +166,7 @@ while ($true) {
             $failure = 'worker_rejected_or_failed'
         }
 
-        Set-Content -LiteralPath $logPath -Value $output -Encoding utf8NoBOM
+        [System.IO.File]::WriteAllText($logPath, $output, $utf8NoBom)
         Write-JsonFile -Path $resultPath -Value ([ordered]@{
             Id = $jobId
             Kind = if ($null -eq $job) { $null } else { $job.Kind }
