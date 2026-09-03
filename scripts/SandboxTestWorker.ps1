@@ -128,8 +128,20 @@ function Invoke-Job {
             $testArguments
         }
 
-        $output = & $dotnetPath @arguments 2>&1 | Out-String
-        return [ordered]@{ ExitCode = $LASTEXITCODE; Output = $output; Proxy = $proxy }
+        # Native tools legitimately write build and test diagnostics to stderr.
+        # Keep strict error handling for the worker, but do not turn that output
+        # into a PowerShell exception before dotnet's own exit code is captured.
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $output = & $dotnetPath @arguments 2>&1 | Out-String
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        return [ordered]@{ ExitCode = $exitCode; Output = $output; Proxy = $proxy }
     }
     finally {
         foreach ($name in $previousEnvironment.Keys) {
