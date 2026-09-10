@@ -6754,6 +6754,191 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
     }
 
     [Test]
+    public void ReferenceComposerAcceptance_PublishesReferenceProductionAccessEvidenceLevel()
+    {
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
+            "A harmless local prompt",
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
+
+        Assert.That(report.EvidenceLevel, Is.EqualTo(ReferenceComposerEvidenceLevel.ReferenceProductionAccess));
+        Assert.That(ReferenceComposerEvidenceLevelTokens.TryValidate(report.EvidenceLevel), Is.True);
+    }
+
+    [Test]
+    public void ReferenceComposerAcceptance_UnavailableProductionAccessFailsClosedWithoutFixtureBypass()
+    {
+        const string rawPrompt = "Connect to 192.168.10.25";
+
+        // The fixture TextBox stays writable and the decision is Approve, so the
+        // legacy direct-fixture path would report a successful send. The
+        // production composer access is unavailable, so the new production-access
+        // path must fail closed with exactly one raw-free blocked terminal.
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-test-secret"))),
+            rawPrompt,
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary,
+            composerAccessMode: ReferenceComposerAccessMode.Unavailable);
+
+        Assert.That(report.EvidenceLevel, Is.EqualTo(ReferenceComposerEvidenceLevel.Unavailable));
+        Assert.That(report.ReplayDiagnostics["composer_access"], Is.EqualTo("unavailable"));
+        Assert.That(report.HookStarted, Is.True);
+        Assert.That(report.OriginalInputSuppressed, Is.True);
+        Assert.That(report.Submitted, Is.False);
+        Assert.That(report.SentTexts, Is.Empty);
+        Assert.That(report.Trace.Count(entry => entry.Stage == "sent_safely"), Is.EqualTo(0));
+        Assert.That(report.Trace.Count(entry => entry.Stage == "replayed"), Is.EqualTo(0));
+        Assert.That(report.Trace.Count(entry => entry.Stage == "send_injected"), Is.EqualTo(0));
+        Assert.That(report.Trace.Count(entry => entry.Stage == "text_written"), Is.EqualTo(0));
+        Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
+        Assert.That(report.Trace[^1].ResultCode, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+        Assert.That(report.TerminalStatus, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+        Assert.That(report.CleanupPassed, Is.True);
+        Assert.That(report.Trace.Count(entry => entry.Stage == "terminal_blocked"), Is.EqualTo(1));
+        Assert.That(report.Trace.Count(entry => entry.Stage == "sent_safely"), Is.EqualTo(0));
+        Assert.That(report.Trace.Select(entry => entry.ResultCode), Does.Not.Contain(rawPrompt));
+        Assert.That(string.Join("|", report.Trace.Select(entry => entry.ResultCode)), Does.Not.Contain(rawPrompt));
+        Assert.That(string.Join("|", report.ReplayDiagnostics.Select(entry => $"{entry.Key}={entry.Value}")), Does.Not.Contain(rawPrompt));
+    }
+
+    [Test]
+    public void ReferenceComposerReleaseAcceptance_UnavailableProductionAccessCannotPublishReleaseScenario()
+    {
+        var scenario = ReferenceComposerReleaseAcceptanceRunner.RunUnavailableProductionAccessProbe(
+            System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret"));
+
+        Assert.That(scenario.Passed, Is.False);
+        Assert.That(scenario.Status, Is.EqualTo("expected_blocked"));
+        Assert.That(scenario.EvidenceLevel, Is.EqualTo(ReferenceComposerEvidenceLevelTokens.UnavailableToken));
+        Assert.That(scenario.ComposerAccess, Is.EqualTo("unavailable"));
+        Assert.That(scenario.RawFree, Is.True);
+        Assert.That(scenario.TerminalStatus, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
+    }
+
+    [Test]
+    public void ReferenceComposerAcceptance_ReleaseAndDirectPathsRetainProductionAccessInSameProcess()
+    {
+        var hmacSecret = System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret");
+        var releaseReport = ReferenceComposerReleaseAcceptanceRunner.Run(
+            hmacSecret,
+            interactiveDesktopProbe: () => true);
+        var matrixScenario = releaseReport.Scenarios.Single(
+            scenario => scenario.ScenarioId == "run1.safe_prompt");
+
+        var directReport = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(hmacSecret)),
+            "A harmless local prompt",
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
+
+        static string SafeMachineToken(string? value)
+        {
+            return !string.IsNullOrEmpty(value)
+                && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.')
+                    ? value
+                    : "unavailable";
+        }
+
+        var matrixComposerAccess = SafeMachineToken(matrixScenario.ComposerAccess);
+        var matrixEvidenceLevel = SafeMachineToken(matrixScenario.EvidenceLevel);
+        var directComposerAccess = directReport.ReplayDiagnostics.TryGetValue("composer_access", out var reportedComposerAccess)
+            ? SafeMachineToken(reportedComposerAccess)
+            : "unavailable";
+        var directEvidenceLevel = SafeMachineToken(ReferenceComposerEvidenceLevelTokens.ToToken(
+            ReferenceComposerEvidenceLevelTokens.SelectForPublication(directReport.EvidenceLevel)));
+        var composerAccessMatch = matrixComposerAccess == directComposerAccess;
+        var evidenceLevelMatch = matrixEvidenceLevel == directEvidenceLevel;
+        var traceComplete = ProtectedSendTrace.IsCompleteSafeSendTrace(directReport.Trace);
+        var directTrace = directReport.Trace.Count == 0
+            ? "unavailable"
+            : string.Join(",", directReport.Trace.Select(entry => SafeMachineToken(entry.Stage)));
+        var acceptancePassed = string.Equals(
+                matrixScenario.ComposerAccess,
+                "native_verified_composer_text_access",
+                StringComparison.Ordinal)
+            && string.Equals(
+                matrixScenario.EvidenceLevel,
+                ReferenceComposerEvidenceLevelTokens.ReferenceProductionAccessToken,
+                StringComparison.Ordinal)
+            && matrixScenario.Passed
+            && releaseReport.Passed
+            && directReport.HookStarted
+            && directReport.OriginalInputSuppressed
+            && directReport.Submitted
+            && directReport.CleanupPassed
+            && traceComplete
+            && directReport.SentTexts.Count == 1;
+        var projection = string.Join(Environment.NewLine, new[]
+        {
+            $"matrix_status: {SafeMachineToken(matrixScenario.Status)}",
+            $"matrix_terminal_status: {SafeMachineToken(matrixScenario.TerminalStatus)}",
+            $"matrix_composer_access: {matrixComposerAccess}",
+            $"matrix_evidence_level: {matrixEvidenceLevel}",
+            $"direct_hook_started: {directReport.HookStarted.ToString().ToLowerInvariant()}",
+            $"direct_original_input_suppressed: {directReport.OriginalInputSuppressed.ToString().ToLowerInvariant()}",
+            $"direct_submitted: {directReport.Submitted.ToString().ToLowerInvariant()}",
+            $"direct_cleanup: {directReport.CleanupPassed.ToString().ToLowerInvariant()}",
+            $"direct_trace_complete: {traceComplete.ToString().ToLowerInvariant()}",
+            $"direct_sent_count: {directReport.SentTexts.Count}",
+            $"direct_trace: {directTrace}"
+        });
+
+        Assert.That(composerAccessMatch, Is.True, projection);
+        Assert.That(evidenceLevelMatch, Is.True, projection);
+        Assert.That(acceptancePassed, Is.True, projection);
+    }
+
+    [Test]
+    public void ReferenceComposerAcceptance_Run1SafePromptProjectsRawFreePredicateDetails()
+    {
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret"))),
+            "A harmless local prompt",
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
+
+        static string SafeMachineToken(string? value)
+        {
+            return !string.IsNullOrEmpty(value)
+                && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.')
+                    ? value
+                    : "unavailable";
+        }
+
+        var traceComplete = ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace);
+        var sentCountOne = report.SentTexts.Count == 1;
+        var evidenceLevel = SafeMachineToken(ReferenceComposerEvidenceLevelTokens.ToToken(report.EvidenceLevel));
+        var composerAccess = report.ReplayDiagnostics.TryGetValue("composer_access", out var reportedComposerAccess)
+            ? SafeMachineToken(reportedComposerAccess)
+            : "unavailable";
+        var trace = string.Join(",", report.Trace.Select(entry =>
+            $"{SafeMachineToken(entry.Stage)}={SafeMachineToken(entry.ResultCode)}"));
+        var projection = string.Join(Environment.NewLine, new[]
+        {
+            $"hook_started: {report.HookStarted.ToString().ToLowerInvariant()}",
+            $"original_input_suppressed: {report.OriginalInputSuppressed.ToString().ToLowerInvariant()}",
+            $"submitted: {report.Submitted.ToString().ToLowerInvariant()}",
+            $"cleanup: {report.CleanupPassed.ToString().ToLowerInvariant()}",
+            $"trace_complete: {traceComplete.ToString().ToLowerInvariant()}",
+            $"sent_count_one: {sentCountOne.ToString().ToLowerInvariant()}",
+            $"sent_count: {report.SentTexts.Count}",
+            $"evidence_level: {evidenceLevel}",
+            $"composer_access: {composerAccess}",
+            $"trace: {trace}"
+        });
+
+        Assert.That(report.HookStarted, Is.True, projection);
+        Assert.That(report.OriginalInputSuppressed, Is.True, projection);
+        Assert.That(report.Submitted, Is.True, projection);
+        Assert.That(report.CleanupPassed, Is.True, projection);
+        Assert.That(traceComplete, Is.True, projection);
+        Assert.That(sentCountOne, Is.True, projection);
+        Assert.That(report.EvidenceLevel, Is.EqualTo(ReferenceComposerEvidenceLevel.ReferenceProductionAccess), projection);
+    }
+
+    [Test]
     public void ReferenceComposerAcceptance_SafePromptReplaysThroughResidentHookPath()
     {
         var report = ReferenceComposerAcceptanceRunner.Run(
@@ -6945,19 +7130,49 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
             System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret"),
             interactiveDesktopProbe: () => true);
 
-        Assert.That(report.Passed, Is.True);
+        Assert.That(
+            report.Passed,
+            Is.True,
+            string.Join(Environment.NewLine, ReferenceComposerReleaseAcceptanceRunner.RenderRawFree(report)));
         Assert.That(report.Status, Is.EqualTo("passed"));
         Assert.That(report.InteractiveDesktopAvailable, Is.True);
         Assert.That(report.CleanupPassed, Is.True);
-        Assert.That(report.Scenarios, Has.Count.EqualTo(18));
-        Assert.That(report.Scenarios.All(scenario => scenario.Passed && scenario.RawFree && scenario.CleanupPassed), Is.True);
-        Assert.That(report.Scenarios.Select(scenario => scenario.ScenarioId).Count(id => id.StartsWith("run1.", StringComparison.Ordinal)), Is.EqualTo(9));
-        Assert.That(report.Scenarios.Select(scenario => scenario.ScenarioId).Count(id => id.StartsWith("run2.", StringComparison.Ordinal)), Is.EqualTo(9));
+        Assert.That(report.BuildIdentifier, Is.Not.Empty);
+        Assert.That(report.Scenarios, Has.Count.EqualTo(22));
+        Assert.That(report.Scenarios.Where(scenario => !scenario.ScenarioId.EndsWith(".production_access_unavailable", StringComparison.Ordinal))
+            .All(scenario => scenario.Passed && scenario.RawFree && scenario.CleanupPassed), Is.True);
+        Assert.That(report.Scenarios.Select(scenario => scenario.ScenarioId).Count(id => id.StartsWith("run1.", StringComparison.Ordinal)), Is.EqualTo(11));
+        Assert.That(report.Scenarios.Select(scenario => scenario.ScenarioId).Count(id => id.StartsWith("run2.", StringComparison.Ordinal)), Is.EqualTo(11));
+        Assert.That(report.Scenarios.Single(scenario => scenario.ScenarioId == "run1.multiline_sensitive_prompt").Passed, Is.True);
+        Assert.That(report.Scenarios.Single(scenario => scenario.ScenarioId == "run2.multiline_sensitive_prompt").Passed, Is.True);
         Assert.That(report.Scenarios.Single(scenario => scenario.ScenarioId == "run1.replay_unavailable").TerminalStatus,
             Is.EqualTo(OsInteractionStatusIds.ReplayUnavailable));
         Assert.That(report.Scenarios.Single(scenario => scenario.ScenarioId == "run1.replay_partial").TerminalStatus,
             Is.EqualTo(OsInteractionStatusIds.ReplayIndeterminate));
-        Assert.That(report.Scenarios.All(scenario => scenario.ComposerAccess == "native_verified_composer_text_access"), Is.True);
+        Assert.That(report.Scenarios.Where(scenario => !scenario.ScenarioId.EndsWith(".production_access_unavailable", StringComparison.Ordinal))
+            .All(scenario => scenario.ComposerAccess == "native_verified_composer_text_access"), Is.True);
+        Assert.That(ReferenceComposerReleaseAcceptanceRunner.RenderRawFree(report),
+            Does.Contain($"build_id: {report.BuildIdentifier}"));
+    }
+
+    [Test]
+    public void ReferenceComposerReleaseAcceptance_MatrixRequiresExpectedBlockedUnavailableProductionAccessInBothRuns()
+    {
+        var report = ReferenceComposerReleaseAcceptanceRunner.Run(
+            System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret"),
+            interactiveDesktopProbe: () => true);
+
+        var negativeControls = report.Scenarios
+            .Where(scenario => scenario.ScenarioId.EndsWith(".production_access_unavailable", StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.That(negativeControls, Has.Length.EqualTo(2));
+        Assert.That(negativeControls.All(scenario => scenario.Status == "expected_blocked"), Is.True);
+        Assert.That(negativeControls.All(scenario => !scenario.Passed), Is.True);
+        Assert.That(negativeControls.All(scenario => scenario.RawFree && scenario.CleanupPassed), Is.True);
+        Assert.That(negativeControls.All(scenario => scenario.TerminalStatus == OsInteractionStatusIds.FailedClosed), Is.True);
+        Assert.That(negativeControls.All(scenario => scenario.ComposerAccess == "unavailable"), Is.True);
+        Assert.That(negativeControls.All(scenario => scenario.EvidenceLevel == ReferenceComposerEvidenceLevelTokens.UnavailableToken), Is.True);
     }
 
     [Test]
