@@ -4334,6 +4334,7 @@ public partial class SanitizerTests
         Assert.That(uninstallScript, Does.Contain("--local-data-cleanup --i-understand-delete-local-sensitive-data"));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     [NonParallelizable]
     public void ProductSmokeRunner_CoversApplyOnlyProductPathWithRawFreeReport()
@@ -6380,6 +6381,7 @@ public class CliTests
         }
     }
 
+    [Category("interactive-fixture")]
     [Test]
     [NonParallelizable]
     public void Main_ProductSmokePrintsRawFreeEndToEndStatus()

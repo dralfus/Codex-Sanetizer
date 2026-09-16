@@ -160,16 +160,18 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
         }
     }
 
-    public bool TryCommitSubmittedTerminalTrace(
+    public bool TryCommitSubmittedTerminalTraceTransaction(
         string resultCode,
         int durationMilliseconds,
+        Func<IReadOnlyList<ProtectedSendTraceEntry>, bool> tryPublish,
         out IReadOnlyList<ProtectedSendTraceEntry> trace)
     {
+        ArgumentNullException.ThrowIfNull(tryPublish);
+
         lock (_lifecycleGate)
         {
             if (_disposed
                 || Volatile.Read(ref _completed) != 0
-                || Volatile.Read(ref _cancelled) != 0
                 || !ProtectedSendTrace.TryAppend(
                     _trace,
                     AttemptId,
@@ -179,6 +181,20 @@ internal sealed class ResidentProtectedSendOperation : IDisposable
                     resultCode,
                     durationMilliseconds,
                     out var updated))
+            {
+                trace = _trace;
+                return false;
+            }
+
+            try
+            {
+                if (!tryPublish(updated))
+                {
+                    trace = _trace;
+                    return false;
+                }
+            }
+            catch
             {
                 trace = _trace;
                 return false;

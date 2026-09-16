@@ -371,6 +371,23 @@ public sealed class ProtectedComposerSessionTests
     }
 
     [Test]
+    public void NativeAccess_EmptyResolvedReadRemainsFailClosed()
+    {
+        var access = new NativeVerifiedComposerTextAccess(
+            () => TextSurfaceDiscoveryResult.Success(CreateWindowsSurface()),
+            staExecution: new ExecutingStaBoundary(),
+            targetOperations: new EmptyResolvedReadTargetOperations());
+
+        var result = access.CaptureText(CreateWindowsSurface());
+
+        Assert.That(result.Succeeded, Is.False);
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.CaptureFailed));
+        Assert.That(result.Text, Is.Null);
+        Assert.That(result.Diagnostics["native_capture_failure_kind"], Is.EqualTo("empty_text"));
+        Assert.That(result.Diagnostics["native_capture_strategy"], Is.EqualTo("unavailable"));
+    }
+
+    [Test]
     public void NativeAccess_StaExecutionFailure_FailsWriteBeforeTargetAccess()
     {
         var discoveryCalls = 0;
@@ -1020,6 +1037,37 @@ public sealed class ProtectedComposerSessionTests
                 DecisionCount++;
                 return surface.Metadata.TryGetValue("keyboard_write_fallback") == "true";
             }
+        }
+    }
+
+    private sealed class EmptyResolvedReadTargetOperations : INativeVerifiedComposerTargetOperations
+    {
+        private static readonly INativeVerifiedComposerTarget Target = new EmptyResolvedReadTarget();
+
+        public INativeVerifiedComposerTarget? Reacquire(TextSurfaceDescriptor surface) => Target;
+
+        public NativeComposerTextReadAttempt ReadText(
+            INativeVerifiedComposerTarget target,
+            TextSurfaceDescriptor surface) =>
+            new(
+                true,
+                string.Empty,
+                "unavailable",
+                new Dictionary<string, string>());
+
+        public NativeComposerTextWriteAttempt WriteText(
+            INativeVerifiedComposerTarget target,
+            TextSurfaceDescriptor surface,
+            string text) =>
+            throw new InvalidOperationException("Write must not run during capture regression.");
+
+        public VerifiedComposerReplayResult Replay(
+            INativeVerifiedComposerTarget target,
+            string sendKeysText) =>
+            throw new InvalidOperationException("Replay must not run during capture regression.");
+
+        private sealed class EmptyResolvedReadTarget : INativeVerifiedComposerTarget
+        {
         }
     }
 

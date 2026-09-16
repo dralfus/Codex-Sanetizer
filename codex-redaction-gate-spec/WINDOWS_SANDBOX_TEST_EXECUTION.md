@@ -29,7 +29,16 @@ the full UI-sensitive suite on the main desktop.
 
 The configuration has a `LogonCommand` that starts:
 
-`C:\SandboxProject\scripts\SandboxTestWorker.ps1`
+`C:\SandboxProject\scripts\SandboxWorkerBootstrap.ps1`
+
+The bootstrap creates one visible small WinForms supervisor on the Sandbox user
+desktop, requests activation, and records whether its opaque HWND is the real
+foreground window. Its UI thread owns a durable `Application.Run` message loop;
+the constrained worker runs concurrently in a separate runspace of that same
+PowerShell OS process. Therefore the worker's `dotnet` child has the supervisor
+process as its foreground GUI parent while the supervisor remains responsive.
+This is an execution-channel precondition only: fixture foreground and
+UIAutomation predicates remain the acceptance authority.
 
 Before opening it, copy the versioned configuration template to the active
 Desktop location. The Sandbox is disposable; closing it stops the worker.
@@ -57,9 +66,32 @@ It accepts only these shapes:
 }
 ```
 
-The worker fixes the project to
-`src/CodexRedactionGate/CodexRedactionGate.csproj`; it does not accept a
-job-supplied command, executable, working directory, PowerShell, or Git action.
+A full-project test is receipt-bound, has no filter, and supplies a bounded
+foreground deadline in whole seconds (`1..120`):
+
+```json
+{
+  "Id": "test-unique-id",
+  "Kind": "test",
+  "ReceiptId": "receipt-unique-id",
+  "foreground_wait_seconds": 30
+}
+```
+
+Before that job is placed in `inbox`, the controller writes exactly one permit
+at `.sandbox-jobs\\permits\\<Id>.permit.json`. It binds the job and receipt id
+to `SandboxDllPath`, SHA-256, MVID, `WorkerScriptSha256`, and the complete
+`SourceFileSha256` map from `.sandbox-jobs\\identity\\<ReceiptId>.json`.
+The receipt's DLL path is fixed to the canonical Sandbox artifact
+`C:\\SandboxProject\\src\\CodexRedactionGate\\bin\\Debug\\net10.0-windows\\CodexRedactionGate.dll`.
+
+For legacy filtered tests the worker fixes the project to
+`src/CodexRedactionGate/CodexRedactionGate.csproj`. A receipt-bound full suite
+accepts no project target: after validating permit, receipt, DLL SHA-256, MVID,
+and worker-script SHA, it invokes `dotnet test` on the fixed receipt DLL. Any
+identity failure is `identity_receipt_mismatch`, occurs before the lease claim,
+and launches neither build nor test. The job never supplies a command,
+executable, working directory, PowerShell, or Git action.
 Use a new safe `Id` for every request. Results are written to:
 
 `C:\SandboxWorkspaces\CodexRedactionGate-355\.sandbox-jobs\results\<Id>.json`
@@ -69,6 +101,54 @@ is the success condition. The worker archives leases left by a terminated
 Sandbox session into `.sandbox-jobs\interrupted`; this preserves audit data
 without blocking a later retry. The `.sandbox-jobs/` directory is ignored by
 Git.
+
+`worker.json` and every result additionally record the raw-free fields
+`InteractiveHostPresent`, `InteractiveHostForegroundReady`, and
+`InteractiveHostAttemptedAtUtc`, plus the monotonic `InteractiveHostAttempt`.
+Before every `test` job, the worker requests activation of its existing
+supervisor HWND and verifies `GetForegroundWindow == supervisor HWND` within a
+bounded interval. Receipt-bound jobs require `foreground_wait_seconds` as an
+integer in the closed range `1..120`. Their exact DLL SHA-256/MVID identity
+check and atomic interactive lease claim happen only after foreground is
+verified, immediately before `dotnet test <receipt DLL>`. A deadline without
+foreground returns `Status: blocked`, `Failure: interactive_foreground_timeout`,
+and the raw-free projection `executed=0 claim=0`; it performs no identity check,
+lease claim, build, restore, or test. The earlier one-shot legacy result
+`interactive_foreground_unavailable` remains documented for filtered jobs and
+also performs no execution or claim. `restore` jobs remain outside this
+foreground gate. The worker does not use input-queue attachment, foreground
+permission overrides, keyboard/mouse injection, or synthetic acceptance
+evidence.
+
+Start `scripts\CodexTests.wsb` manually from a foreground PowerShell session.
+Bootstrap creates or reuses one exact-GUID session id in Sandbox-local
+non-mapped storage. Each fresh Sandbox filesystem therefore grants exactly one
+UI-sensitive `test` lease, while a repeated Bootstrap in the same live Sandbox
+uses the same id. For receipt-bound jobs, all permit and artifact checks finish
+before the worker atomically creates the claim immediately before `dotnet`.
+The claim is therefore not created on a receipt mismatch. For all admitted jobs,
+the worker atomically creates
+the mapped `.sandbox-jobs\interactive-leases\<session-id>.json` claim. An
+existing claim blocks a test before `dotnet` with
+`fresh_interactive_session_required`; pass, failure, and a worker reinitialization
+do not restore the lease. `restore` remains ungated and never creates a claim.
+`worker.json` and results record only the raw-free session token, lease state,
+consumption timestamp, and schema-valid job id.
+
+## Local non-interactive development suite
+
+Use the following local command for ordinary development feedback:
+
+```powershell
+.\scripts\Invoke-NonInteractiveSuite.ps1
+```
+
+It excludes only NUnit tests marked `interactive-fixture`: those methods
+instantiate the reference-composer WinForms fixture, persistent fixture host,
+or interactive release runner. The script writes a timestamped TRX result under
+`artifacts\non-interactive`, fails when the TRX is absent, and fails when its
+reported total is zero. It is not Sandbox acceptance, release-matrix evidence,
+or Ticket 355 completion evidence.
 
 ## Network and NuGet
 

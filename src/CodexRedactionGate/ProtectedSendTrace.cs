@@ -361,6 +361,7 @@ internal static class ProtectedSendTrace
             ProtectedSendTraceStage.ComposerRead => next is ProtectedSendTraceStage.Sanitized or ProtectedSendTraceStage.TerminalBlocked,
             ProtectedSendTraceStage.Sanitized => next is ProtectedSendTraceStage.OverlayDecision
                 or ProtectedSendTraceStage.OverlayCreated
+                or ProtectedSendTraceStage.TextWritten
                 or ProtectedSendTraceStage.Replayed
                 or ProtectedSendTraceStage.SendInjected
                 or ProtectedSendTraceStage.TerminalBlocked,
@@ -456,7 +457,17 @@ internal static class ProtectedSendTrace
                     "target_matched",
                     "composer_read",
                     "sanitized",
-                    "send_injected",
+                    "replayed",
+                    "sent_safely"
+                })
+            || stages.SequenceEqual(new[]
+                {
+                    "send_detected",
+                    "target_matched",
+                    "composer_read",
+                    "sanitized",
+                    "text_written",
+                    "replayed",
                     "sent_safely"
                 })
             || stages.SequenceEqual(new[]
@@ -469,7 +480,7 @@ internal static class ProtectedSendTrace
                     "overlay_foreground_confirmed",
                     "approved",
                     "text_written",
-                    "send_injected",
+                    "replayed",
                     "sent_safely"
                 })
             || stages.SequenceEqual(new[]

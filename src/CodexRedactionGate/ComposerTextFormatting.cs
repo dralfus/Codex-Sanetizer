@@ -54,6 +54,17 @@ internal static class ComposerTextFormatting
             StringComparison.Ordinal);
     }
 
+    public static bool HasSameContentWithNormalizedLineEndings(string first, string second)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+
+        return string.Equals(
+            NormalizeLineEndings(first),
+            NormalizeLineEndings(second),
+            StringComparison.Ordinal);
+    }
+
     public static IReadOnlyDictionary<string, string> Diagnostics(
         string rawText,
         string normalizedText,

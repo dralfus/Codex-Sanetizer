@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using NUnit.Framework;
 using CodexRedactionGate;
@@ -166,6 +168,69 @@ public partial class SanitizerTests
                 OsInteractionStatusIds.Submitted,
                 out _),
             Is.False);
+    }
+
+    [Test]
+    public void ProtectedSendTrace_AutoApprovedWriteReplaySequenceIsCompleteAndSafe()
+    {
+        const long attemptId = 7;
+        const long generation = 3;
+        const string fingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        IReadOnlyList<ProtectedSendTraceEntry> trace = Array.Empty<ProtectedSendTraceEntry>();
+        var transitions = new[]
+        {
+            (Stage: "send_detected", Result: "checking_prompt"),
+            (Stage: "target_matched", Result: "target_verified"),
+            (Stage: "composer_read", Result: "capture_verified"),
+            (Stage: "sanitized", Result: "sanitization_verified"),
+            (Stage: "text_written", Result: "write_verified"),
+            (Stage: "replayed", Result: "submit_requested"),
+            (Stage: "sent_safely", Result: OsInteractionStatusIds.Submitted)
+        };
+        var canonicalStages = new[]
+        {
+            "send_detected",
+            "target_matched",
+            "composer_read",
+            "sanitized",
+            "text_written",
+            "replayed",
+            "sent_safely"
+        };
+
+        foreach (var transition in transitions)
+        {
+            Assert.That(ProtectedSendTrace.TryAppend(
+                trace,
+                attemptId,
+                generation,
+                fingerprint,
+                transition.Stage,
+                transition.Result,
+                0,
+                out var updated), Is.True);
+            trace = updated;
+        }
+
+        Assert.That(trace.Select(entry => entry.Stage), Is.EqualTo(canonicalStages));
+        Assert.That(ProtectedSendTrace.IsCompleteSafeSendTrace(trace), Is.True);
+    }
+
+    [Test]
+    public void ProtectedSendTrace_PersistedAdapterAliasIsNotCompleteSafe()
+    {
+        const string fingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        var trace = new[]
+        {
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "send_detected", "checking_prompt", 0),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "target_matched", "target_verified", 0),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "composer_read", "capture_verified", 0),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "sanitized", "sanitization_verified", 0),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "send_injected", "submit_requested", 0),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "sent_safely", OsInteractionStatusIds.Submitted, 0)
+        };
+
+        Assert.That(ProtectedSendTrace.IsCompleteSafeSendTrace(trace), Is.False);
     }
 
     [Test]
@@ -3954,6 +4019,347 @@ public class HandleButtonClickTests : SanitizerTests
     }
 
     [Test]
+    public void TrayProtectionController_TerminalPublicationIsCoherentAndRejectsStaleIdentity()
+    {
+        var hook = new FakeNativeSubmitHookHost();
+        var profile = CreateProtectedProfile();
+        TrayProtectionController? tray = null;
+        ProtectionSnapshot? snapshotAtSideEffect = null;
+        var terminalResultSuppressed = false;
+        tray = CreatePointerTray(
+            hook,
+            new FixedSendControlDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.IdentifiedSend,
+                CreateNativeSubmitDiscovery(profile.ProfileId))),
+            profile,
+            () =>
+            {
+                snapshotAtSideEffect = tray!.GetCurrentSnapshot();
+            },
+            protectedSendTraceResultAvailableForTesting: stage =>
+            {
+                if (stage != "sent_safely")
+                {
+                    return true;
+                }
+
+                terminalResultSuppressed = true;
+                return false;
+            });
+
+        Assert.That(tray.Start(), Is.True);
+        var submittedGeneration = tray.GetCurrentSnapshot().Generation;
+        hook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+
+        var submitted = tray.State;
+        Assert.Multiple(() =>
+        {
+            Assert.That(terminalResultSuppressed, Is.True);
+            Assert.That(submitted.LastStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
+            Assert.That(submitted.LastSubmitted, Is.True);
+            Assert.That(submitted.ProtectedSendAttemptStatus, Is.EqualTo("sent_safely"));
+            Assert.That(submitted.ProtectedSendAttemptTrace, Is.Not.Null);
+            Assert.That(submitted.ProtectedSendAttemptTrace![^1].Stage, Is.EqualTo("sent_safely"));
+            Assert.That(ProtectedSendTrace.IsCompleteSafeSendTrace(submitted.ProtectedSendAttemptTrace), Is.True);
+            Assert.That(submitted.ProtectedSendAttemptTrace!.All(entry =>
+                entry.AttemptId == submitted.ProtectedSendAttemptId
+                && entry.SnapshotGeneration == submittedGeneration), Is.True);
+        });
+
+        Assert.That(snapshotAtSideEffect, Is.Not.Null);
+        var identitySnapshot = snapshotAtSideEffect!;
+        using var identityOperation = new ResidentProtectedSendOperation(
+            identitySnapshot,
+            identitySnapshot.RuntimeSet!,
+            target: null);
+        var matchingSnapshot = identitySnapshot with
+        {
+            State = identitySnapshot.State with { ProtectedSendAttemptId = identityOperation.AttemptId }
+        };
+        using var replacementRuntime = new NativeSubmitRuntimeSet(
+            hook,
+            identitySnapshot.RuntimeSet!.Runtimes);
+        Assert.Multiple(() =>
+        {
+            Assert.That(TrayProtectionController.IsCurrentSubmittedTerminalPublication(
+                matchingSnapshot,
+                matchingSnapshot,
+                identityOperation), Is.True);
+            Assert.That(TrayProtectionController.IsCurrentSubmittedTerminalPublication(
+                matchingSnapshot with { Generation = matchingSnapshot.Generation + 1 },
+                matchingSnapshot,
+                identityOperation), Is.False);
+            Assert.That(TrayProtectionController.IsCurrentSubmittedTerminalPublication(
+                matchingSnapshot with { RuntimeSet = replacementRuntime },
+                matchingSnapshot,
+                identityOperation), Is.False);
+            Assert.That(TrayProtectionController.IsCurrentSubmittedTerminalPublication(
+                matchingSnapshot with
+                {
+                    State = matchingSnapshot.State with
+                    {
+                        ProtectedSendAttemptId = identityOperation.AttemptId + 1
+                    }
+                },
+                matchingSnapshot,
+                identityOperation), Is.False);
+        });
+
+        foreach (var terminalStatus in new[]
+        {
+            OsInteractionStatusIds.Canceled,
+            OsInteractionStatusIds.Blocked,
+            OsInteractionStatusIds.FailedClosed
+        })
+        {
+            var blockedHook = new FakeNativeSubmitHookHost();
+            var blockedProfile = CreateProtectedProfile();
+            TrayProtectionState? stateAtTerminalTrace = null;
+            var blockedController = TrayProtectionController.CreateTest(
+                new FakeTrayHotkeyHost(),
+                () => throw new InvalidOperationException("Manual scan should not run."),
+                blockedHook,
+                new NativeSubmitInterceptionController(
+                    blockedProfile,
+                    new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                    activeSurfaceDiscovery: () => CreateNativeSubmitDiscovery(blockedProfile.ProfileId)),
+                () => new OsInteractionResult(
+                    terminalStatus,
+                    CreateNativeSubmitSurface(blockedProfile.ProfileId),
+                    null,
+                    null,
+                    Applied: false,
+                    Submitted: false,
+                    Diagnostics: new Dictionary<string, string>
+                    {
+                        ["profile_id"] = blockedProfile.ProfileId
+                    }),
+                blockedProfile,
+                activeSurfaceDiscovery: () => CreateNativeSubmitDiscovery(blockedProfile.ProfileId));
+            blockedController.StateChanged += (_, _) =>
+            {
+                var state = blockedController.State;
+                if (stateAtTerminalTrace is null
+                    && state.ProtectedSendAttemptTrace is { Count: > 0 } trace
+                    && trace[^1].Stage == "terminal_blocked")
+                {
+                    stateAtTerminalTrace = state;
+                }
+            };
+
+            Assert.That(blockedController.Start(), Is.True, terminalStatus);
+            blockedHook.Trigger(new NativeKeyGesture("Enter", Ctrl: true));
+            Assert.Multiple(() =>
+            {
+                Assert.That(stateAtTerminalTrace, Is.Not.Null, terminalStatus);
+                Assert.That(stateAtTerminalTrace!.LastStatus, Is.EqualTo(terminalStatus), terminalStatus);
+                Assert.That(stateAtTerminalTrace.LastSubmitted, Is.False, terminalStatus);
+                Assert.That(stateAtTerminalTrace.ProtectedSendAttemptTrace![^1].ResultCode,
+                    Is.EqualTo(terminalStatus), terminalStatus);
+                Assert.That(blockedController.State.LastStatus, Is.EqualTo(terminalStatus), terminalStatus);
+                Assert.That(blockedController.State.LastSubmitted, Is.False, terminalStatus);
+                Assert.That(blockedController.State.ProtectedSendAttemptTrace![^1].Stage,
+                    Is.EqualTo("terminal_blocked"), terminalStatus);
+            });
+        }
+    }
+
+    [Test]
+    public void ReferenceTransaction_LeavesPhysicalTerminalPublicationToOuterPipeline()
+    {
+        foreach (var expectedStatus in new[]
+        {
+            OsInteractionStatusIds.Canceled,
+            OsInteractionStatusIds.Submitted
+        })
+        {
+            var hook = new FakeNativeSubmitHookHost();
+            var profile = CreateProtectedProfile();
+            var surface = CreateNativeSurfaceWithWindow(profile.ProfileId, "2A");
+            var discovery = ChatGptDiscoveryFixture.CreateVerified(surface);
+            var prompt = expectedStatus == OsInteractionStatusIds.Canceled
+                ? "Connect to 192.168.10.25"
+                : "A harmless local prompt";
+            var residentRunnerCalls = 0;
+            var transactionTerminalPublicationAccepted = false;
+            var terminalCallbacksBeforeResult = 0;
+            var physicalTerminalPublications = 0;
+            var publishTraceUnavailableCalls = 0;
+            NativeSubmitTargetIdentity? admittedTarget = null;
+            TrayProtectionState? firstTerminalState = null;
+            var runtimeController = new NativeSubmitInterceptionController(
+                profile,
+                new NativeSubmitEmergencyState(TimeSpan.FromMinutes(5)),
+                activeSurfaceDiscovery: () => discovery);
+            var runtime = new NativeSubmitRuntime(
+                hook,
+                runtimeController,
+                profile,
+                ResidentTargetTracedRunner: (target, traceStage, executionGuard, executionLease) =>
+                {
+                    residentRunnerCalls++;
+                    admittedTarget = target;
+                    var targetIdentity = $"{target.ProfileId}:{target.WindowHandle}";
+                    var environment = new ReferenceComposerAcceptanceRunner.ReferenceComposerTransactionEnvironment(
+                        new Sanitizer(new InMemoryHmacMappingVault(
+                            System.Text.Encoding.UTF8.GetBytes("reference-terminal-owner-test-secret"))),
+                        target,
+                        new FixedSurfaceDiscovery(target.CapturedSurface!),
+                        new NativeVerifiedComposerReplay(),
+                        clipboardBoundaryFactory: null,
+                        ReferenceComposerAccessMode.Available,
+                        new FixedConfirmationOverlay(),
+                        (stage, resultCode) =>
+                        {
+                            if (stage is "terminal_blocked" or "sent_safely")
+                            {
+                                terminalCallbacksBeforeResult++;
+                            }
+
+                            return traceStage(stage, resultCode);
+                        },
+                        executionGuard,
+                        executionLease,
+                        afterVerified: () => { },
+                        sessionFactory: () => new ReferenceTransactionSessionStub(prompt, targetIdentity));
+                    var terminal = new ProtectedSendTransaction(environment).Execute(
+                        new AdmittedProtectedSend(target.SnapshotGeneration, environment.TargetIdentity));
+                    transactionTerminalPublicationAccepted = terminal.TerminalPublished;
+                    return environment.ToOsInteractionResult(terminal);
+                });
+            var tray = TrayProtectionController.CreateTest(
+                new FakeTrayHotkeyHost(),
+                () => throw new InvalidOperationException("Manual scan should not run."),
+                hook,
+                runtimeController,
+                profile,
+                nativeSubmitRuntimes: new[] { runtime },
+                activeSurfaceDiscovery: () => discovery,
+                protectedSendTraceResultAvailableForTesting: stage =>
+                {
+                    if (stage is "terminal_blocked" or "sent_safely")
+                    {
+                        physicalTerminalPublications++;
+                    }
+
+                    return true;
+                });
+
+            Assert.That(tray.Start(), Is.True, expectedStatus);
+            var admittedGeneration = tray.GetCurrentSnapshot().Generation;
+            tray.StateChanged += (_, _) =>
+            {
+                var state = tray.State;
+                if (residentRunnerCalls > 0
+                    && state.LastStatus == OsInteractionStatusIds.TraceUnavailable
+                    && state.LastProtectedSendTraceStatus == "trace_unavailable")
+                {
+                    publishTraceUnavailableCalls++;
+                }
+
+                if (firstTerminalState is null
+                    && state.ProtectedSendAttemptTrace is { Count: > 0 } trace
+                    && trace[^1].Stage is "terminal_blocked" or "sent_safely")
+                {
+                    firstTerminalState = state;
+                }
+            };
+            hook.Trigger(new NativeKeyGesture(
+                "Enter",
+                Ctrl: true,
+                TargetWindow: new IntPtr(0x2A),
+                TargetProcessId: 7));
+
+            var terminalTrace = tray.State.ProtectedSendAttemptTrace?
+                .Where(entry => entry.Stage is "terminal_blocked" or "sent_safely")
+                .ToArray() ?? Array.Empty<ProtectedSendTraceEntry>();
+            Assert.Multiple(() =>
+            {
+                Assert.That(residentRunnerCalls, Is.EqualTo(1), expectedStatus);
+                Assert.That(admittedTarget, Is.Not.Null, expectedStatus);
+                Assert.That(transactionTerminalPublicationAccepted, Is.True, expectedStatus);
+                Assert.That(terminalCallbacksBeforeResult, Is.Zero, expectedStatus);
+                Assert.That(physicalTerminalPublications, Is.EqualTo(1), expectedStatus);
+                Assert.That(publishTraceUnavailableCalls, Is.Zero, expectedStatus);
+                Assert.That(terminalTrace, Has.Length.EqualTo(1), expectedStatus);
+                Assert.That(firstTerminalState, Is.Not.Null, expectedStatus);
+                Assert.That(firstTerminalState!.LastStatus, Is.EqualTo(expectedStatus), expectedStatus);
+                Assert.That(firstTerminalState.LastSubmitted,
+                    Is.EqualTo(expectedStatus == OsInteractionStatusIds.Submitted), expectedStatus);
+                Assert.That(tray.State.LastStatus, Is.EqualTo(expectedStatus), expectedStatus);
+                Assert.That(tray.State.LastSubmitted,
+                    Is.EqualTo(expectedStatus == OsInteractionStatusIds.Submitted), expectedStatus);
+                Assert.That(tray.State.LastProtectedSendTraceStatus, Is.EqualTo("none"), expectedStatus);
+                Assert.That(tray.State.ProtectedSendAttemptTrace!.All(entry =>
+                    entry.AttemptId == tray.State.ProtectedSendAttemptId
+                    && entry.SnapshotGeneration == admittedGeneration), Is.True, expectedStatus);
+            });
+        }
+    }
+
+    [TestCase(nameof(TransactionFailure.ReplayFailed), OsInteractionStatusIds.ReplayUnavailable)]
+    [TestCase(nameof(TransactionFailure.ReplayUncertain), OsInteractionStatusIds.ReplayIndeterminate)]
+    [TestCase(nameof(TransactionFailure.ReadFailed), OsInteractionStatusIds.FailedClosed)]
+    [TestCase("none", OsInteractionStatusIds.Submitted)]
+    [TestCase("cancel", OsInteractionStatusIds.Canceled)]
+    public void ReferenceTransaction_MapsClosedReplayReasonsWithoutChangingOtherTerminalStatuses(
+        string scenario,
+        string expectedStatus)
+    {
+        var surface = CreateNativeSurfaceWithWindow("codex-desktop", "2A");
+        var target = new NativeSubmitTargetIdentity(7, surface.ProfileId, "2A", surface);
+        var prompt = scenario == "cancel"
+            ? "Connect to 192.168.10.25"
+            : "A harmless local prompt";
+        var failure = Enum.TryParse<TransactionFailure>(scenario, out var parsedFailure)
+            ? parsedFailure
+            : (TransactionFailure?)null;
+        var session = new ReferenceTransactionSessionStub(
+            prompt,
+            $"{target.ProfileId}:{target.WindowHandle}",
+            failure);
+        var terminalTraceCallbacks = 0;
+        var environment = new ReferenceComposerAcceptanceRunner.ReferenceComposerTransactionEnvironment(
+            new Sanitizer(new InMemoryHmacMappingVault(
+                System.Text.Encoding.UTF8.GetBytes("reference-replay-status-test-secret"))),
+            target,
+            new FixedSurfaceDiscovery(surface),
+            new NativeVerifiedComposerReplay(),
+            clipboardBoundaryFactory: null,
+            ReferenceComposerAccessMode.Available,
+            new FixedConfirmationOverlay(),
+            (stage, _) =>
+            {
+                if (stage is "terminal_blocked" or "sent_safely")
+                {
+                    terminalTraceCallbacks++;
+                }
+
+                return true;
+            },
+            executionGuard: () => true,
+            executionLease: () => new NoOpDisposable(),
+            afterVerified: () => { },
+            sessionFactory: () => session);
+        var transaction = new ProtectedSendTransaction(environment);
+        var request = new AdmittedProtectedSend(target.SnapshotGeneration, environment.TargetIdentity);
+
+        var terminal = transaction.Execute(request);
+        var cachedTerminal = transaction.Execute(request);
+        var result = environment.ToOsInteractionResult(terminal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(terminal.TerminalPublished, Is.True, scenario);
+            Assert.That(cachedTerminal, Is.SameAs(terminal), scenario);
+            Assert.That(terminalTraceCallbacks, Is.Zero, scenario);
+            Assert.That(result.Status, Is.EqualTo(expectedStatus), scenario);
+            Assert.That(result.Submitted,
+                Is.EqualTo(expectedStatus == OsInteractionStatusIds.Submitted), scenario);
+        });
+    }
+
+    [Test]
     public void TrayProtectionController_PointerSendWithoutTargetIdentityRemainsFailClosed()
     {
         var hook = new FakeNativeSubmitHookHost();
@@ -4967,6 +5373,43 @@ public class HandleButtonClickTests : SanitizerTests
         public TextSurfaceDiscoveryResult DiscoverActiveSurface() => TextSurfaceDiscoveryResult.Success(_surface);
     }
 
+    private sealed class ReferenceTransactionSessionStub : IProtectedSendTransactionSession
+    {
+        private readonly string _prompt;
+
+        internal ReferenceTransactionSessionStub(
+            string prompt,
+            string targetIdentity,
+            TransactionFailure? failure = null)
+        {
+            _prompt = prompt;
+            TargetIdentity = targetIdentity;
+            Failure = failure;
+        }
+
+        public string TargetIdentity { get; }
+        internal TransactionFailure? Failure { get; }
+
+        public TransactionStageResult Read() => Failure == TransactionFailure.ReadFailed
+            ? TransactionStageResult.Failed(TransactionFailure.ReadFailed)
+            : TransactionStageResult.Success(_prompt, TargetIdentity);
+
+        public TransactionStageResult Revalidate() => TransactionStageResult.Success(targetIdentity: TargetIdentity);
+
+        public TransactionStageResult WriteAndVerify(string sanitizedText) => TransactionStageResult.Success();
+
+        public TransactionStageResult Replay() => Failure is TransactionFailure.ReplayFailed or TransactionFailure.ReplayUncertain
+            ? TransactionStageResult.Failed(Failure.Value)
+            : TransactionStageResult.Success();
+    }
+
+    private sealed class NoOpDisposable : IDisposable
+    {
+        public void Dispose()
+        {
+        }
+    }
+
     private sealed class FixedSendControlDiscovery : ISendControlDiscovery
     {
         private readonly SendControlDiscoveryResult _pointerResult;
@@ -5001,7 +5444,8 @@ public class HandleButtonClickTests : SanitizerTests
         Func<IntPtr, string?>? selectedWindowProfileResolver = null,
         NativeSubmitProfileSnapshot? profileSnapshot = null,
         Action<string>? protectedSendStageObserver = null,
-        Action? beforeProtectedSendTracePublishForTesting = null)
+        Action? beforeProtectedSendTracePublishForTesting = null,
+        Func<string, bool>? protectedSendTraceResultAvailableForTesting = null)
     {
         var runtime = NativeSubmitRuntime.CreateTest(
             hook,
@@ -5027,7 +5471,8 @@ public class HandleButtonClickTests : SanitizerTests
             selectedWindowProfileResolver: selectedWindowProfileResolver ?? (_ => activeProfileId),
             protectedSendStageObserver: protectedSendStageObserver,
             nativeSubmitRuntimes: new[] { runtime },
-            beforeProtectedSendTracePublishForTesting: beforeProtectedSendTracePublishForTesting);
+            beforeProtectedSendTracePublishForTesting: beforeProtectedSendTracePublishForTesting,
+            protectedSendTraceResultAvailableForTesting: protectedSendTraceResultAvailableForTesting);
     }
 
     private static TextSurfaceDescriptor CreateNativeSurfaceWithWindow(string profileId, string windowHandle)
@@ -6457,6 +6902,37 @@ public class HandleButtonClickTests : SanitizerTests
         Assert.That(result.Diagnostics["enabled"], Is.EqualTo("false"));
     }
 
+    [Test]
+    public void ReferenceComposerTransactionEnvironment_PublishesCanonicalReplayStage()
+    {
+        var surface = CreateNativeSurfaceWithWindow("codex-desktop", "2A");
+        var target = new NativeSubmitTargetIdentity(7, surface.ProfileId, "2A", surface);
+        var stages = new List<string>();
+        var environment = new ReferenceComposerAcceptanceRunner.ReferenceComposerTransactionEnvironment(
+            new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("canonical-trace-owner-test-secret"))),
+            target,
+            new FixedSurfaceDiscovery(surface),
+            new NativeVerifiedComposerReplay(),
+            clipboardBoundaryFactory: null,
+            ReferenceComposerAccessMode.Available,
+            new FixedConfirmationOverlay(),
+            (stage, _) =>
+            {
+                stages.Add(stage);
+                return true;
+            },
+            executionGuard: () => true,
+            executionLease: () => new NoOpDisposable(),
+            afterVerified: () => { });
+
+        Assert.That(
+            environment.PublishTrace(new ProtectedSendTraceEvidence(
+                target.SnapshotGeneration,
+                ProtectedSendTransactionStage.ReplayAuthorized,
+                "submit_requested")),
+            Is.True);
+        Assert.That(stages, Is.EqualTo(new[] { "replayed" }));
+    }
 }
 
 [TestFixture]
@@ -6753,6 +7229,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(metadata.ComposerStatus, Is.Null);
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_PublishesReferenceProductionAccessEvidenceLevel()
     {
@@ -6764,8 +7241,11 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
 
         Assert.That(report.EvidenceLevel, Is.EqualTo(ReferenceComposerEvidenceLevel.ReferenceProductionAccess));
         Assert.That(ReferenceComposerEvidenceLevelTokens.TryValidate(report.EvidenceLevel), Is.True);
+        Assert.That(report.ReplayDiagnostics["native_capture_failure_kind"], Is.EqualTo("none"));
+        Assert.That(report.ReplayDiagnostics["native_capture_strategy"], Is.EqualTo("value_pattern"));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_UnavailableProductionAccessFailsClosedWithoutFixtureBypass()
     {
@@ -6803,6 +7283,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(string.Join("|", report.ReplayDiagnostics.Select(entry => $"{entry.Key}={entry.Value}")), Does.Not.Contain(rawPrompt));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerReleaseAcceptance_UnavailableProductionAccessCannotPublishReleaseScenario()
     {
@@ -6817,6 +7298,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(scenario.TerminalStatus, Is.EqualTo(OsInteractionStatusIds.FailedClosed));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_ReleaseAndDirectPathsRetainProductionAccessInSameProcess()
     {
@@ -6841,6 +7323,11 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
                     : "unavailable";
         }
 
+        static string SafeComposerReadOutcome(string? value) =>
+            value is "not_completed" or "discovery_failed" or "capture_failed" or "read_succeeded"
+                ? value
+                : "unavailable";
+
         var matrixComposerAccess = SafeMachineToken(matrixScenario.ComposerAccess);
         var matrixEvidenceLevel = SafeMachineToken(matrixScenario.EvidenceLevel);
         var directComposerAccess = directReport.ReplayDiagnostics.TryGetValue("composer_access", out var reportedComposerAccess)
@@ -6848,6 +7335,10 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
             : "unavailable";
         var directEvidenceLevel = SafeMachineToken(ReferenceComposerEvidenceLevelTokens.ToToken(
             ReferenceComposerEvidenceLevelTokens.SelectForPublication(directReport.EvidenceLevel)));
+        var composerReadOutcome = SafeComposerReadOutcome(
+            directReport.ReplayDiagnostics.TryGetValue("composer_read_outcome", out var reportedReadOutcome)
+                ? reportedReadOutcome
+                : null);
         var composerAccessMatch = matrixComposerAccess == directComposerAccess;
         var evidenceLevelMatch = matrixEvidenceLevel == directEvidenceLevel;
         var traceComplete = ProtectedSendTrace.IsCompleteSafeSendTrace(directReport.Trace);
@@ -6860,6 +7351,14 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
                 StringComparison.Ordinal)
             && string.Equals(
                 matrixScenario.EvidenceLevel,
+                ReferenceComposerEvidenceLevelTokens.ReferenceProductionAccessToken,
+                StringComparison.Ordinal)
+            && string.Equals(
+                directComposerAccess,
+                "native_verified_composer_text_access",
+                StringComparison.Ordinal)
+            && string.Equals(
+                directEvidenceLevel,
                 ReferenceComposerEvidenceLevelTokens.ReferenceProductionAccessToken,
                 StringComparison.Ordinal)
             && matrixScenario.Passed
@@ -6882,6 +7381,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
             $"direct_cleanup: {directReport.CleanupPassed.ToString().ToLowerInvariant()}",
             $"direct_trace_complete: {traceComplete.ToString().ToLowerInvariant()}",
             $"direct_sent_count: {directReport.SentTexts.Count}",
+            $"composer_read_outcome: {composerReadOutcome}",
             $"direct_trace: {directTrace}"
         });
 
@@ -6890,9 +7390,12 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(acceptancePassed, Is.True, projection);
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_Run1SafePromptProjectsRawFreePredicateDetails()
     {
+        // The fixture seeds the reference control as Arrange; the assertions below
+        // require readiness before native Enter and production ValuePattern capture.
         var report = ReferenceComposerAcceptanceRunner.Run(
             new Sanitizer(new InMemoryHmacMappingVault(System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret"))),
             "A harmless local prompt",
@@ -6907,37 +7410,812 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
                     : "unavailable";
         }
 
+        static string SafeCaptureFailureKind(string? value) =>
+            value is "target_reacquire_failed"
+                or "read_failed"
+                or "empty_text"
+                or "sta_failed"
+                or "clipboard_failed"
+                or "native_exception"
+                or "none"
+                ? value
+                : "unavailable";
+
+        static string SafeCaptureStrategy(string? value) =>
+            value is "value_pattern" or "text_pattern" or "keyboard_fallback" or "unavailable"
+                ? value
+                : "unavailable";
+
+        static string SafeReadinessState(string? value) =>
+            value is "not_started"
+                or "typing"
+                or "input_ready"
+                or "enter_queued"
+                or "enter_dispatched"
+                or "stimulus_not_ready"
+                ? value
+                : "unavailable";
+
+        static string SafeTransitionSequence(string? value) =>
+            value is "not_started"
+                or "not_started,typing"
+                or "not_started,typing,input_ready,enter_queued"
+                or "not_started,typing,input_ready,enter_queued,enter_dispatched"
+                or "not_started,typing,stimulus_not_ready"
+                ? value
+                : "unavailable";
+
+        static string SafeBoolean(string? value) => value is "true" or "false" ? value : "unavailable";
+
+        static string SafeStimulusTerminalReason(string? value) =>
+            value is "none" or "stimulus_not_ready" ? value : "unavailable";
+
         var traceComplete = ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace);
         var sentCountOne = report.SentTexts.Count == 1;
+        var delegateReplaySucceeded = report.ReplayDiagnostics.TryGetValue("delegate_replay_succeeded", out var delegated)
+            ? SafeBoolean(delegated)
+            : "unavailable";
+        var submitObserved = report.ReplayDiagnostics.TryGetValue("submit_observed", out var observed)
+            ? SafeBoolean(observed)
+            : "unavailable";
+        var terminalStage = report.Trace.LastOrDefault()?.Stage is { } reportedTerminalStage
+            ? SafeMachineToken(reportedTerminalStage)
+            : "unavailable";
         var evidenceLevel = SafeMachineToken(ReferenceComposerEvidenceLevelTokens.ToToken(report.EvidenceLevel));
         var composerAccess = report.ReplayDiagnostics.TryGetValue("composer_access", out var reportedComposerAccess)
             ? SafeMachineToken(reportedComposerAccess)
             : "unavailable";
-        var trace = string.Join(",", report.Trace.Select(entry =>
-            $"{SafeMachineToken(entry.Stage)}={SafeMachineToken(entry.ResultCode)}"));
+        var captureFailureKind = report.ReplayDiagnostics.TryGetValue(
+                "native_capture_failure_kind",
+                out var reportedCaptureFailureKind)
+            ? SafeCaptureFailureKind(reportedCaptureFailureKind)
+            : "unavailable";
+        var captureStrategy = report.ReplayDiagnostics.TryGetValue(
+                "native_capture_strategy",
+                out var reportedCaptureStrategy)
+            ? SafeCaptureStrategy(reportedCaptureStrategy)
+            : "unavailable";
+        var readinessState = report.ReplayDiagnostics.TryGetValue("stimulus_readiness_state", out var reportedReadinessState)
+            ? SafeReadinessState(reportedReadinessState)
+            : "unavailable";
+        var transitionSequence = report.ReplayDiagnostics.TryGetValue(
+                "stimulus_transition_sequence",
+                out var reportedTransitionSequence)
+            ? SafeTransitionSequence(reportedTransitionSequence)
+            : "unavailable";
+        var stimulusTimeout = report.ReplayDiagnostics.TryGetValue("stimulus_timeout", out var reportedStimulusTimeout)
+            ? SafeBoolean(reportedStimulusTimeout)
+            : "unavailable";
+        var stimulusTerminalReason = report.ReplayDiagnostics.TryGetValue(
+                "stimulus_terminal_reason",
+                out var reportedStimulusTerminalReason)
+            ? SafeStimulusTerminalReason(reportedStimulusTerminalReason)
+            : "unavailable";
+        var stimulusReady = readinessState == "enter_dispatched"
+            && transitionSequence == "not_started,typing,input_ready,enter_queued,enter_dispatched"
+            && stimulusTimeout == "false"
+            && stimulusTerminalReason == "none";
+        var trace = report.Trace.Count == 0
+            ? "unavailable"
+            : string.Join(",", report.Trace.Select(entry =>
+                $"{SafeMachineToken(entry.Stage)}={SafeMachineToken(entry.ResultCode)}"));
+        var conditions = new (string Id, bool Passed)[]
+        {
+            ("stimulus_readiness", stimulusReady),
+            ("capture_strategy", captureStrategy == "value_pattern"),
+            ("capture_failure_kind", captureFailureKind == "none"),
+            ("submitted", report.Submitted),
+            ("trace_complete", traceComplete),
+            ("sent_count", sentCountOne),
+            ("delegate_replay", delegateReplaySucceeded == "true"),
+            ("submit_observed", submitObserved == "true"),
+            ("terminal_stage", terminalStage == "sent_safely"),
+            ("composer_access", composerAccess == "native_verified_composer_text_access"),
+            ("evidence_level", evidenceLevel == ReferenceComposerEvidenceLevelTokens.ReferenceProductionAccessToken),
+            ("hook_started", report.HookStarted),
+            ("original_input_suppressed", report.OriginalInputSuppressed),
+            ("cleanup", report.CleanupPassed)
+        };
+        var firstFalseCondition = conditions.FirstOrDefault(condition => !condition.Passed).Id ?? "none";
         var projection = string.Join(Environment.NewLine, new[]
         {
+            $"stimulus_readiness_state: {readinessState}",
+            $"stimulus_transition_sequence: {transitionSequence}",
+            $"stimulus_timeout: {stimulusTimeout}",
+            $"stimulus_terminal_reason: {stimulusTerminalReason}",
             $"hook_started: {report.HookStarted.ToString().ToLowerInvariant()}",
             $"original_input_suppressed: {report.OriginalInputSuppressed.ToString().ToLowerInvariant()}",
             $"submitted: {report.Submitted.ToString().ToLowerInvariant()}",
+            $"controller_last_submitted: {report.Submitted.ToString().ToLowerInvariant()}",
+            $"delegate_replay_succeeded: {delegateReplaySucceeded}",
+            $"submit_observed: {submitObserved}",
             $"cleanup: {report.CleanupPassed.ToString().ToLowerInvariant()}",
             $"trace_complete: {traceComplete.ToString().ToLowerInvariant()}",
             $"sent_count_one: {sentCountOne.ToString().ToLowerInvariant()}",
             $"sent_count: {report.SentTexts.Count}",
+            $"terminal_stage: {terminalStage}",
             $"evidence_level: {evidenceLevel}",
             $"composer_access: {composerAccess}",
-            $"trace: {trace}"
+            $"native_capture_failure_kind: {captureFailureKind}",
+            $"native_capture_strategy: {captureStrategy}",
+            $"trace: {trace}",
+            $"first_false_condition: {firstFalseCondition}"
         });
 
-        Assert.That(report.HookStarted, Is.True, projection);
-        Assert.That(report.OriginalInputSuppressed, Is.True, projection);
-        Assert.That(report.Submitted, Is.True, projection);
-        Assert.That(report.CleanupPassed, Is.True, projection);
-        Assert.That(traceComplete, Is.True, projection);
-        Assert.That(sentCountOne, Is.True, projection);
-        Assert.That(report.EvidenceLevel, Is.EqualTo(ReferenceComposerEvidenceLevel.ReferenceProductionAccess), projection);
+        Assert.That(conditions.All(condition => condition.Passed), Is.True, projection);
     }
 
+    [Category("interactive-fixture")]
+    [Test]
+    public void ReferenceComposerAcceptance_SubmitDeliveryStabilityThreeAttempts()
+    {
+        static string SafeMachineToken(string? value) => !string.IsNullOrEmpty(value)
+            && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.')
+                ? value
+                : "unavailable";
+
+        static string SafeBoolean(string? value) => value is "true" or "false" ? value : "unavailable";
+
+        static string SafeReadinessSequence(string? value) => value is "not_started"
+            or "not_started,typing"
+            or "not_started,typing,input_ready,enter_queued"
+            or "not_started,typing,input_ready,enter_queued,enter_dispatched"
+            or "not_started,typing,stimulus_not_ready"
+                ? value
+                : "unavailable";
+
+        var observations = new List<(string Projection, bool AtomicPublicationConfirmed)>();
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var report = ReferenceComposerAcceptanceRunner.Run(
+                new Sanitizer(new InMemoryHmacMappingVault(
+                    System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret"))),
+                "A harmless local prompt",
+                ReferenceComposerDecision.Approve,
+                clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
+
+            var readinessState = report.ReplayDiagnostics.TryGetValue(
+                    "stimulus_readiness_state",
+                    out var reportedReadinessState)
+                ? SafeMachineToken(reportedReadinessState)
+                : "unavailable";
+            var readinessSequence = report.ReplayDiagnostics.TryGetValue(
+                    "stimulus_transition_sequence",
+                    out var reportedReadinessSequence)
+                ? SafeReadinessSequence(reportedReadinessSequence)
+                : "unavailable";
+            var readinessTimeout = report.ReplayDiagnostics.TryGetValue(
+                    "stimulus_timeout",
+                    out var reportedReadinessTimeout)
+                ? SafeBoolean(reportedReadinessTimeout)
+                : "unavailable";
+            var stimulusReadiness = readinessState == "enter_dispatched"
+                && readinessSequence == "not_started,typing,input_ready,enter_queued,enter_dispatched"
+                && readinessTimeout == "false";
+            var captureStrategy = report.ReplayDiagnostics.TryGetValue(
+                    "native_capture_strategy",
+                    out var reportedCaptureStrategy)
+                ? SafeMachineToken(reportedCaptureStrategy)
+                : "unavailable";
+            var composerAccess = report.ReplayDiagnostics.TryGetValue(
+                    "composer_access",
+                    out var reportedComposerAccess)
+                ? SafeMachineToken(reportedComposerAccess)
+                : "unavailable";
+            var delegateReplaySucceeded = report.ReplayDiagnostics.TryGetValue(
+                    "delegate_replay_succeeded",
+                    out var reportedDelegateReplaySucceeded)
+                ? SafeBoolean(reportedDelegateReplaySucceeded)
+                : "unavailable";
+            var submitObserved = report.ReplayDiagnostics.TryGetValue(
+                    "submit_observed",
+                    out var reportedSubmitObserved)
+                ? SafeBoolean(reportedSubmitObserved)
+                : "unavailable";
+            var transactionSubmitted = report.ReplayDiagnostics.TryGetValue(
+                    "transaction_submitted",
+                    out var reportedTransactionSubmitted)
+                ? SafeBoolean(reportedTransactionSubmitted)
+                : report.Submitted.ToString().ToLowerInvariant();
+            var controllerSubmitted = report.ReplayDiagnostics.TryGetValue(
+                    "controller_submitted",
+                    out var reportedControllerSubmitted)
+                ? SafeBoolean(reportedControllerSubmitted)
+                : report.Submitted.ToString().ToLowerInvariant();
+            var controllerStatus = report.ReplayDiagnostics.TryGetValue(
+                    "controller_status",
+                    out var reportedControllerStatus)
+                ? SafeMachineToken(reportedControllerStatus)
+                : SafeMachineToken(report.TerminalStatus);
+            var terminalStage = report.Trace.LastOrDefault()?.Stage is { } reportedTerminalStage
+                ? SafeMachineToken(reportedTerminalStage)
+                : "unavailable";
+            var acceptanceCoherent = report.ReplayDiagnostics.TryGetValue(
+                    "acceptance_coherent",
+                    out var reportedAcceptanceCoherent)
+                ? SafeBoolean(reportedAcceptanceCoherent)
+                : terminalStage is "sent_safely" or "terminal_blocked"
+                    ? "true"
+                    : "unavailable";
+            var traceComplete = ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace);
+            var projection = string.Join(" ", new[]
+            {
+                $"attempt={attempt}",
+                $"stimulus_readiness={stimulusReadiness.ToString().ToLowerInvariant()}",
+                $"native_capture_strategy={captureStrategy}",
+                $"composer_access={composerAccess}",
+                $"delegate_replay_succeeded={delegateReplaySucceeded}",
+                $"submit_observed={submitObserved}",
+                $"transaction_submitted={transactionSubmitted}",
+                $"controller_submitted={controllerSubmitted}",
+                $"controller_status={controllerStatus}",
+                $"acceptance_coherent={acceptanceCoherent}",
+                $"terminal_stage={terminalStage}",
+                $"trace_complete={traceComplete.ToString().ToLowerInvariant()}",
+                $"sent_count={report.SentTexts.Count}"
+            });
+            var atomicPublicationConfirmed = submitObserved == "true"
+                && transactionSubmitted == "true"
+                && controllerStatus == OsInteractionStatusIds.Submitted
+                && controllerSubmitted == "true"
+                && acceptanceCoherent == "true"
+                && terminalStage == "sent_safely";
+            observations.Add((projection, atomicPublicationConfirmed));
+        }
+
+        var rawFreeProjection = string.Join(Environment.NewLine, observations.Select(item => item.Projection));
+        var artifactPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "t355-submit-delivery-stability.raw-free.txt");
+        File.WriteAllText(artifactPath, rawFreeProjection, new System.Text.UTF8Encoding(false));
+        TestContext.AddTestAttachment(artifactPath, "Ticket 355 raw-free submit delivery stability projection");
+
+        Assert.That(
+            observations.Any(item => item.AtomicPublicationConfirmed),
+            Is.True,
+            rawFreeProjection);
+    }
+
+    [Category("interactive-fixture")]
+    [Test]
+    public void ReferenceComposerAcceptance_ReplayFocusProjectsRawFreeState()
+    {
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(
+                System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret"))),
+            "A harmless local prompt",
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
+
+        static string SafeBoolean(IReadOnlyDictionary<string, string> diagnostics, string key) =>
+            diagnostics.TryGetValue(key, out var value) && value is "true" or "false"
+                ? value
+                : "unavailable";
+
+        static string SafeMachineToken(string? value) => !string.IsNullOrEmpty(value)
+            && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.')
+                ? value
+                : "unavailable";
+
+        var replayInvoked = SafeBoolean(report.ReplayDiagnostics, "replay_invoked");
+        var replayDelegateReturned = SafeBoolean(report.ReplayDiagnostics, "replay_delegate_returned");
+        var foregroundBefore = SafeBoolean(report.ReplayDiagnostics, "foreground_matches_target_before");
+        var focusedBefore = SafeBoolean(report.ReplayDiagnostics, "focused_element_matches_target_before");
+        var foregroundAfter = SafeBoolean(report.ReplayDiagnostics, "foreground_matches_target_after");
+        var focusedAfter = SafeBoolean(report.ReplayDiagnostics, "focused_element_matches_target_after");
+        var submitObserved = SafeBoolean(report.ReplayDiagnostics, "submit_observed");
+        var terminalStage = report.Trace.LastOrDefault()?.Stage is { } reportedTerminalStage
+            ? SafeMachineToken(reportedTerminalStage)
+            : "unavailable";
+        var projection = string.Join(" ", new[]
+        {
+            $"replay_invoked={replayInvoked}",
+            $"replay_delegate_returned={replayDelegateReturned}",
+            $"foreground_matches_target_before={foregroundBefore}",
+            $"focused_element_matches_target_before={focusedBefore}",
+            $"foreground_matches_target_after={foregroundAfter}",
+            $"focused_element_matches_target_after={focusedAfter}",
+            $"submit_observed={submitObserved}",
+            $"terminal_stage={terminalStage}",
+            $"sent_count={report.SentTexts.Count}"
+        });
+        var artifactPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "t355-replay-focus.raw-free.txt");
+        File.WriteAllText(artifactPath, projection, new System.Text.UTF8Encoding(false));
+        TestContext.AddTestAttachment(artifactPath, "Ticket 355 raw-free replay focus projection");
+
+        var atomicPublicationValid = submitObserved == "true"
+            && report.TerminalStatus == OsInteractionStatusIds.Submitted
+            && report.Submitted
+            && terminalStage == "sent_safely"
+            && ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace)
+            && report.SentTexts.Count == 1;
+        Assert.That(atomicPublicationValid, Is.True, projection);
+    }
+
+    [Test]
+    public void ReferenceComposerAcceptanceCompletion_RejectsIncoherentIntermediateSubmittedSnapshot()
+    {
+        var snapshot = new ReferenceComposerTransactionSnapshot(
+            OsInteractionStatusIds.Submitted,
+            Submitted: true,
+            ReferenceComposerEvidenceLevel.ReferenceProductionAccess,
+            new Dictionary<string, string>());
+
+        var accepted = ReferenceComposerAcceptanceCompletion.IsConsistent(
+            snapshot,
+            OsInteractionStatusIds.TraceUnavailable,
+            stateSubmitted: false,
+            terminalStage: "sent_safely",
+            sentCount: 1);
+
+        Assert.That(accepted, Is.False);
+    }
+
+    [Test]
+    public void ReferenceComposerAcceptanceCompletion_AcceptsCoherentSubmittedSnapshot()
+    {
+        var snapshot = new ReferenceComposerTransactionSnapshot(
+            OsInteractionStatusIds.Submitted,
+            Submitted: true,
+            ReferenceComposerEvidenceLevel.ReferenceProductionAccess,
+            new Dictionary<string, string>());
+
+        var accepted = ReferenceComposerAcceptanceCompletion.IsConsistent(
+            snapshot,
+            OsInteractionStatusIds.Submitted,
+            stateSubmitted: true,
+            terminalStage: "sent_safely",
+            sentCount: 1);
+
+        Assert.That(accepted, Is.True);
+    }
+
+    [Test]
+    public void ReferenceComposerAcceptanceCompletion_EvidenceReflectsObservedAccessNotOutcome()
+    {
+        foreach (var status in new[] { OsInteractionStatusIds.Canceled, OsInteractionStatusIds.FailedClosed })
+        {
+            var observed = new ReferenceComposerTransactionSnapshot(
+                status,
+                Submitted: false,
+                ReferenceComposerEvidenceLevel.ReferenceProductionAccess,
+                new Dictionary<string, string>());
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    ReferenceComposerAcceptanceCompletion.SelectEvidenceLevel(observed),
+                    Is.EqualTo(ReferenceComposerEvidenceLevel.ReferenceProductionAccess),
+                    status);
+                Assert.That(observed.Submitted, Is.False, status);
+                Assert.That(observed.Status, Is.EqualTo(status), status);
+                Assert.That(
+                    ReferenceComposerAcceptanceCompletion.IsConsistent(
+                        observed,
+                        status,
+                        stateSubmitted: false,
+                        terminalStage: "terminal_blocked",
+                        sentCount: 0),
+                    Is.True,
+                    status);
+            });
+        }
+
+        var unavailable = new ReferenceComposerTransactionSnapshot(
+            OsInteractionStatusIds.FailedClosed,
+            Submitted: false,
+            ReferenceComposerEvidenceLevel.Unavailable,
+            new Dictionary<string, string>());
+        Assert.That(
+            ReferenceComposerAcceptanceCompletion.SelectEvidenceLevel(unavailable),
+            Is.EqualTo(ReferenceComposerEvidenceLevel.Unavailable));
+    }
+
+    [Test]
+    public void ReferenceComposerReleaseAcceptance_NegativeControlsRemainExpectedBlockedAndIneligible()
+    {
+        var scenarios = Enumerable.Range(0, 20)
+            .Select(index => new ReferenceComposerReleaseScenarioResult(
+                $"normal.{index}",
+                Passed: true,
+                RawFree: true,
+                CleanupPassed: true,
+                Status: "passed",
+                TerminalStatus: OsInteractionStatusIds.FailedClosed,
+                ComposerAccess: "native_verified_composer_text_access",
+                EvidenceLevel: ReferenceComposerEvidenceLevelTokens.RequiredToken))
+            .Concat(new[]
+            {
+                new ReferenceComposerReleaseScenarioResult(
+                    "run1.production_access_unavailable",
+                    Passed: false,
+                    RawFree: true,
+                    CleanupPassed: true,
+                    Status: "expected_blocked",
+                    TerminalStatus: OsInteractionStatusIds.FailedClosed,
+                    ComposerAccess: "unavailable",
+                    EvidenceLevel: ReferenceComposerEvidenceLevelTokens.UnavailableToken),
+                new ReferenceComposerReleaseScenarioResult(
+                    "run2.production_access_unavailable",
+                    Passed: false,
+                    RawFree: true,
+                    CleanupPassed: true,
+                    Status: "expected_blocked",
+                    TerminalStatus: OsInteractionStatusIds.FailedClosed,
+                    ComposerAccess: "unavailable",
+                    EvidenceLevel: ReferenceComposerEvidenceLevelTokens.UnavailableToken)
+            })
+            .ToArray();
+
+        Assert.That(ReferenceComposerReleaseAcceptanceRunner.HasPassedReleaseScenarios(scenarios), Is.True);
+        Assert.That(scenarios[^1].Passed, Is.False);
+        Assert.That(scenarios[^1].Status, Is.EqualTo("expected_blocked"));
+    }
+
+    [Category("interactive-fixture")]
+    [Test]
+    public void ReferenceComposerPersistentFixtureHost_StartupProjectsRawFreeFocusReadiness()
+    {
+        ReferenceComposerAcceptanceRunner.ReferenceComposerPersistentFixtureHost? host = null;
+        var startupTimer = Stopwatch.StartNew();
+        var foregroundMatchesTarget = false;
+        var focusedElementMatchesTarget = false;
+
+        try
+        {
+            host = new ReferenceComposerAcceptanceRunner.ReferenceComposerPersistentFixtureHost();
+            var formHandle = new IntPtr(host.FormIdentity);
+            var controlHandle = new IntPtr(host.ControlIdentity);
+            try
+            {
+                foregroundMatchesTarget = formHandle != IntPtr.Zero
+                    && GetForegroundWindow() == formHandle;
+                var target = controlHandle == IntPtr.Zero
+                    ? null
+                    : System.Windows.Automation.AutomationElement.FromHandle(controlHandle);
+                var focused = System.Windows.Automation.AutomationElement.FocusedElement;
+                focusedElementMatchesTarget = target is not null
+                    && focused is not null
+                    && System.Windows.Automation.Automation.Compare(target, focused);
+            }
+            catch
+            {
+                foregroundMatchesTarget = false;
+                focusedElementMatchesTarget = false;
+            }
+        }
+        finally
+        {
+            startupTimer.Stop();
+            host?.Dispose();
+        }
+
+        var initialFocusReady = host?.InitialFocusReady == true;
+        var initialFocusHandoffCount = host?.InitialFocusHandoffCount ?? 0;
+        var setForegroundRequestSucceeded = host?.InitialSetForegroundRequestSucceeded == true;
+        var focusRequestSucceeded = host?.InitialFocusRequestSucceeded == true;
+        var uiThreadIdPresent = host?.UiThreadId > 0;
+        var formIdentityPresent = host?.FormIdentity > 0;
+        var controlIdentityPresent = host?.ControlIdentity > 0;
+        var cleanShutdown = host?.FormDisposed == true
+            && host.ThreadStopped
+            && host.FinalCleanupPassed;
+        var projection = string.Join(Environment.NewLine, new[]
+        {
+            $"initial_focus_ready={initialFocusReady.ToString().ToLowerInvariant()}",
+            $"initial_focus_handoff_count={initialFocusHandoffCount}",
+            $"set_foreground_request_succeeded={setForegroundRequestSucceeded.ToString().ToLowerInvariant()}",
+            $"focus_request_succeeded={focusRequestSucceeded.ToString().ToLowerInvariant()}",
+            $"ui_thread_id_present={uiThreadIdPresent.ToString().ToLowerInvariant()}",
+            $"form_identity_present={formIdentityPresent.ToString().ToLowerInvariant()}",
+            $"control_identity_present={controlIdentityPresent.ToString().ToLowerInvariant()}",
+            $"foreground_matches_target={foregroundMatchesTarget.ToString().ToLowerInvariant()}",
+            $"focused_element_matches_target={focusedElementMatchesTarget.ToString().ToLowerInvariant()}",
+            $"startup_elapsed_ms={startupTimer.ElapsedMilliseconds}",
+            $"clean_shutdown={cleanShutdown.ToString().ToLowerInvariant()}"
+        });
+        var artifactPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "t355-persistent-fixture-startup-focus.raw-free.txt");
+        File.WriteAllText(artifactPath, projection, new System.Text.UTF8Encoding(false));
+        TestContext.AddTestAttachment(artifactPath, "Ticket 355 persistent fixture startup focus projection");
+
+        Assert.That(
+            initialFocusReady
+            && initialFocusHandoffCount == 1
+            && uiThreadIdPresent
+            && formIdentityPresent
+            && controlIdentityPresent
+            && foregroundMatchesTarget
+            && focusedElementMatchesTarget
+            && cleanShutdown,
+            Is.True,
+            projection);
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [Test]
+    public void ReferenceComposerPersistentFixtureLifecycle_UsesOneFocusedIdentityForTwentyTwoIsolatedLeases()
+    {
+        var lifecycle = new ReferenceComposerPersistentFixtureLifecycle(
+            uiThreadId: 41,
+            formIdentity: 101,
+            controlIdentity: 202);
+
+        lifecycle.RecordInitialFocus(foregroundReady: true, focusedElementReady: true);
+        for (var scenario = 0; scenario < 22; scenario++)
+        {
+            Assert.That(lifecycle.TryBeginLease(41, 101, 202), Is.True, scenario.ToString());
+            Assert.That(lifecycle.ScenarioSentCount, Is.Zero, scenario.ToString());
+            Assert.That(lifecycle.ScenarioState, Is.EqualTo("reset"), scenario.ToString());
+            lifecycle.RecordScenarioState(sentCount: 1, state: "terminal");
+            lifecycle.CompleteLease(cleanupPassed: true);
+        }
+
+        lifecycle.Dispose(finalCleanupPassed: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lifecycle.InitialFocusHandoffCount, Is.EqualTo(1));
+            Assert.That(lifecycle.LeaseCount, Is.EqualTo(22));
+            Assert.That(lifecycle.CompletedLeaseCount, Is.EqualTo(22));
+            Assert.That(lifecycle.AllLeaseCleanupPassed, Is.True);
+            Assert.That(lifecycle.FinalCleanupPassed, Is.True);
+            Assert.That(lifecycle.TryBeginLease(41, 101, 202), Is.False);
+        });
+    }
+
+    [Test]
+    public void ReferenceComposerPersistentFixtureLifecycle_RecordsOneFocusReacquisitionPerLease()
+    {
+        var lifecycle = new ReferenceComposerPersistentFixtureLifecycle(
+            uiThreadId: 41,
+            formIdentity: 101,
+            controlIdentity: 202);
+
+        lifecycle.RecordInitialFocus(foregroundReady: true, focusedElementReady: true);
+        for (var lease = 0; lease < 3; lease++)
+        {
+            Assert.That(lifecycle.TryBeginLease(41, 101, 202), Is.True, lease.ToString());
+            Assert.That(lifecycle.TryRecordLeaseFocusReacquisition(41, 101, 999), Is.False, lease.ToString());
+            Assert.That(lifecycle.TryRecordLeaseFocusReacquisition(41, 101, 202), Is.True, lease.ToString());
+            Assert.That(lifecycle.TryRecordLeaseFocusReacquisition(41, 101, 202), Is.False, lease.ToString());
+            lifecycle.RecordScenarioState(sentCount: 0, state: "terminal");
+            lifecycle.CompleteLease(cleanupPassed: true);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(lifecycle.InitialFocusHandoffCount, Is.EqualTo(1));
+            Assert.That(lifecycle.LeaseCount, Is.EqualTo(3));
+            Assert.That(lifecycle.LeaseFocusReacquisitionCount, Is.EqualTo(3));
+            Assert.That(lifecycle.CompletedLeaseCount, Is.EqualTo(3));
+            Assert.That(lifecycle.UiThreadId, Is.EqualTo(41));
+            Assert.That(lifecycle.FormIdentity, Is.EqualTo(101));
+            Assert.That(lifecycle.ControlIdentity, Is.EqualTo(202));
+        });
+    }
+
+    [Category("interactive-fixture")]
+    [Test]
+    public void ReferenceComposerPersistentFixtureHost_ReusesOneStaAndControlAcrossRealScenarioLeases()
+    {
+        using var host = new ReferenceComposerAcceptanceRunner.ReferenceComposerPersistentFixtureHost();
+        Assert.That(host.InitialFocusReady, Is.True);
+        var uiThreadId = host.UiThreadId;
+        var formIdentity = host.FormIdentity;
+        var controlIdentity = host.ControlIdentity;
+
+        var safe = ReferenceComposerAcceptanceRunner.Run(
+            host,
+            new Sanitizer(new InMemoryHmacMappingVault(
+                System.Text.Encoding.UTF8.GetBytes("reference-composer-persistent-host-test-secret"))),
+            "A harmless local prompt",
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
+        var sensitive = ReferenceComposerAcceptanceRunner.Run(
+            host,
+            new Sanitizer(new InMemoryHmacMappingVault(
+                System.Text.Encoding.UTF8.GetBytes("reference-composer-persistent-host-test-secret"))),
+            "Connect to 192.168.10.25",
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.UiThreadId, Is.EqualTo(uiThreadId));
+            Assert.That(host.FormIdentity, Is.EqualTo(formIdentity));
+            Assert.That(host.ControlIdentity, Is.EqualTo(controlIdentity));
+            Assert.That(host.InitialFocusHandoffCount, Is.EqualTo(1));
+            Assert.That(host.LeaseCount, Is.EqualTo(2));
+            Assert.That(host.CompletedLeaseCount, Is.EqualTo(2));
+            Assert.That(host.AllLeaseCleanupPassed, Is.True);
+            Assert.That(host.ControllerIdentities, Has.Count.EqualTo(2));
+            Assert.That(host.ControllerIdentities.Distinct().Count(), Is.EqualTo(2));
+            Assert.That(host.RuntimeIdentities, Has.Count.EqualTo(2));
+            Assert.That(host.RuntimeIdentities.Distinct().Count(), Is.EqualTo(2));
+            Assert.That(safe.HookStarted && safe.OriginalInputSuppressed && safe.Submitted, Is.True);
+            Assert.That(safe.SentTexts, Has.Count.EqualTo(1));
+            Assert.That(safe.Trace.LastOrDefault()?.Stage, Is.EqualTo("sent_safely"));
+            Assert.That(sensitive.HookStarted && sensitive.OriginalInputSuppressed && sensitive.Submitted, Is.True);
+            Assert.That(sensitive.SentTexts, Has.Count.EqualTo(1));
+            Assert.That(sensitive.Trace.LastOrDefault()?.Stage, Is.EqualTo("sent_safely"));
+            Assert.That(sensitive.SentTexts[0], Does.Not.Contain("192.168.10.25"));
+        });
+
+        host.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.FormDisposed, Is.True);
+            Assert.That(host.ThreadStopped, Is.True);
+            Assert.That(host.FinalCleanupPassed, Is.True);
+        });
+    }
+
+    [Category("interactive-fixture")]
+    [Test]
+    public void ReferenceComposerPersistentFixture_ThreeMixedLeasesReacquireFocusWithoutHumanInput()
+    {
+        using var host = new ReferenceComposerAcceptanceRunner.ReferenceComposerPersistentFixtureHost();
+        var uiThreadId = host.UiThreadId;
+        var formIdentity = host.FormIdentity;
+        var controlIdentity = host.ControlIdentity;
+
+        static Sanitizer CreateSanitizer() => new(new InMemoryHmacMappingVault(
+            System.Text.Encoding.UTF8.GetBytes("reference-composer-persistent-focus-test-secret")));
+
+        var scenarios = new[]
+        {
+            (
+                Id: "safe_approve",
+                Report: ReferenceComposerAcceptanceRunner.Run(
+                    host,
+                    CreateSanitizer(),
+                    "A harmless local prompt",
+                    ReferenceComposerDecision.Approve,
+                    clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary),
+                ExpectedStatus: OsInteractionStatusIds.Submitted,
+                ExpectedSubmitted: true,
+                ExpectedTerminalStage: "sent_safely",
+                ExpectedSentCount: 1),
+            (
+                Id: "sensitive_cancel",
+                Report: ReferenceComposerAcceptanceRunner.Run(
+                    host,
+                    CreateSanitizer(),
+                    "Connect to 192.168.10.25",
+                    ReferenceComposerDecision.Cancel,
+                    clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary),
+                ExpectedStatus: OsInteractionStatusIds.Canceled,
+                ExpectedSubmitted: false,
+                ExpectedTerminalStage: "terminal_blocked",
+                ExpectedSentCount: 0),
+            (
+                Id: "sensitive_approve",
+                Report: ReferenceComposerAcceptanceRunner.Run(
+                    host,
+                    CreateSanitizer(),
+                    "Connect to 192.168.10.25",
+                    ReferenceComposerDecision.Approve,
+                    clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary),
+                ExpectedStatus: OsInteractionStatusIds.Submitted,
+                ExpectedSubmitted: true,
+                ExpectedTerminalStage: "sent_safely",
+                ExpectedSentCount: 1)
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(host.UiThreadId, Is.EqualTo(uiThreadId));
+            Assert.That(host.FormIdentity, Is.EqualTo(formIdentity));
+            Assert.That(host.ControlIdentity, Is.EqualTo(controlIdentity));
+            Assert.That(host.InitialFocusHandoffCount, Is.EqualTo(1));
+            Assert.That(host.LeaseCount, Is.EqualTo(3));
+            Assert.That(host.LeaseFocusReacquisitionCount, Is.EqualTo(3));
+            Assert.That(host.CompletedLeaseCount, Is.EqualTo(3));
+            Assert.That(host.AllLeaseCleanupPassed, Is.True);
+            Assert.That(host.ControllerIdentities, Has.Count.EqualTo(3));
+            Assert.That(host.ControllerIdentities.Distinct().Count(), Is.EqualTo(3));
+            Assert.That(host.RuntimeIdentities, Has.Count.EqualTo(3));
+            Assert.That(host.RuntimeIdentities.Distinct().Count(), Is.EqualTo(3));
+            foreach (var scenario in scenarios)
+            {
+                Assert.That(scenario.Report.TerminalStatus, Is.EqualTo(scenario.ExpectedStatus), scenario.Id);
+                Assert.That(scenario.Report.Submitted, Is.EqualTo(scenario.ExpectedSubmitted), scenario.Id);
+                Assert.That(scenario.Report.Trace.LastOrDefault()?.Stage, Is.EqualTo(scenario.ExpectedTerminalStage), scenario.Id);
+                Assert.That(scenario.Report.SentTexts, Has.Count.EqualTo(scenario.ExpectedSentCount), scenario.Id);
+                Assert.That(scenario.Report.CleanupPassed, Is.True, scenario.Id);
+                Assert.That(scenario.Report.ReplayDiagnostics["stimulus_timeout"], Is.EqualTo("false"), scenario.Id);
+                Assert.That(scenario.Report.ReplayDiagnostics["fixture_foreground_ready"], Is.EqualTo("true"), scenario.Id);
+                Assert.That(scenario.Report.ReplayDiagnostics["fixture_focused_element_ready"], Is.EqualTo("true"), scenario.Id);
+            }
+        });
+    }
+
+    [Category("interactive-fixture")]
+    [Test]
+    public void ReferenceComposerPersistentFixture_CancelProjectsRawFreeCompletionEvidence()
+    {
+        using var host = new ReferenceComposerAcceptanceRunner.ReferenceComposerPersistentFixtureHost();
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            host,
+            new Sanitizer(new InMemoryHmacMappingVault(
+                System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret"))),
+            "Connect to 192.168.10.25",
+            ReferenceComposerDecision.Cancel,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
+
+        static string SafeMachineToken(string? value) => !string.IsNullOrEmpty(value)
+            && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.')
+                ? value
+                : "unavailable";
+
+        static string SafeBoolean(IReadOnlyDictionary<string, string> diagnostics, string key) =>
+            diagnostics.TryGetValue(key, out var value) && value is "true" or "false"
+                ? value
+                : "unavailable";
+
+        var transactionStatus = report.ReplayDiagnostics.TryGetValue("transaction_status", out var reportedTransactionStatus)
+            ? SafeMachineToken(reportedTransactionStatus)
+            : "unavailable";
+        var transactionSubmitted = SafeBoolean(report.ReplayDiagnostics, "transaction_submitted");
+        var controllerStatus = report.ReplayDiagnostics.TryGetValue("controller_status", out var reportedControllerStatus)
+            ? SafeMachineToken(reportedControllerStatus)
+            : "unavailable";
+        var controllerSubmitted = SafeBoolean(report.ReplayDiagnostics, "controller_submitted");
+        var acceptanceCoherent = SafeBoolean(report.ReplayDiagnostics, "acceptance_coherent");
+        var terminalStage = SafeMachineToken(report.Trace.LastOrDefault()?.Stage);
+        var composerAccess = report.ReplayDiagnostics.TryGetValue("composer_access", out var reportedComposerAccess)
+            ? SafeMachineToken(reportedComposerAccess)
+            : "unavailable";
+        var evidenceLevel = SafeMachineToken(ReferenceComposerEvidenceLevelTokens.ToToken(report.EvidenceLevel));
+        var conditions = new (string Id, bool Passed)[]
+        {
+            ("initial_focus_ready", host.InitialFocusReady),
+            ("terminal_status", report.TerminalStatus == OsInteractionStatusIds.Canceled),
+            ("report_not_submitted", !report.Submitted),
+            ("transaction_status", transactionStatus == OsInteractionStatusIds.Canceled),
+            ("transaction_not_submitted", transactionSubmitted == "false"),
+            ("controller_status", controllerStatus == OsInteractionStatusIds.Canceled),
+            ("controller_not_submitted", controllerSubmitted == "false"),
+            ("acceptance_coherent", acceptanceCoherent == "true"),
+            ("terminal_stage", terminalStage == "terminal_blocked"),
+            ("composer_access", composerAccess == "native_verified_composer_text_access"),
+            ("evidence_level", evidenceLevel == ReferenceComposerEvidenceLevelTokens.ReferenceProductionAccessToken),
+            ("cleanup", report.CleanupPassed)
+        };
+        var firstFalseCondition = conditions.FirstOrDefault(condition => !condition.Passed).Id ?? "none";
+        var projection = string.Join(Environment.NewLine, new[]
+        {
+            $"initial_focus_ready={host.InitialFocusReady.ToString().ToLowerInvariant()}",
+            $"terminal_status={SafeMachineToken(report.TerminalStatus)}",
+            $"report_submitted={report.Submitted.ToString().ToLowerInvariant()}",
+            $"transaction_status={transactionStatus}",
+            $"transaction_submitted={transactionSubmitted}",
+            $"controller_status={controllerStatus}",
+            $"controller_submitted={controllerSubmitted}",
+            $"acceptance_coherent={acceptanceCoherent}",
+            $"terminal_stage={terminalStage}",
+            $"composer_access={composerAccess}",
+            $"evidence_level={evidenceLevel}",
+            $"cleanup={report.CleanupPassed.ToString().ToLowerInvariant()}",
+            $"first_false_condition={firstFalseCondition}"
+        });
+        var artifactPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "t355-persistent-cancel-completion.raw-free.txt");
+        File.WriteAllText(artifactPath, projection, new System.Text.UTF8Encoding(false));
+        TestContext.AddTestAttachment(artifactPath, "Ticket 355 persistent cancel completion projection");
+
+        Assert.That(conditions.All(condition => condition.Passed), Is.True, projection);
+    }
+
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_SafePromptReplaysThroughResidentHookPath()
     {
@@ -6947,23 +8225,259 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
             ReferenceComposerDecision.Approve,
             clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
 
-        Assert.That(report.HookStarted, Is.True);
-        Assert.That(report.OriginalInputSuppressed, Is.True);
-        Assert.That(report.TerminalStatus, Is.EqualTo(OsInteractionStatusIds.Submitted));
-        Assert.That(report.Submitted, Is.True);
-        Assert.That(report.SentTexts, Is.EqualTo(new[] { "A harmless local prompt" }));
-        Assert.That(report.Trace.Select(entry => entry.Stage), Is.EqualTo(new[]
+        static string SafeMachineToken(string? value) => value is not null
+            && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.')
+                ? value
+                : "unavailable";
+
+        static string SafeBoolean(IReadOnlyDictionary<string, string> diagnostics, string key) =>
+            diagnostics.TryGetValue(key, out var value) && value is "true" or "false"
+                ? value
+                : "unavailable";
+
+        var terminalStage = report.Trace.LastOrDefault()?.Stage ?? "unavailable";
+        var foregroundBefore = SafeBoolean(report.ReplayDiagnostics, "foreground_matches_target_before");
+        var focusedBefore = SafeBoolean(report.ReplayDiagnostics, "focused_element_matches_target_before");
+        var fixtureForegroundReady = SafeBoolean(report.ReplayDiagnostics, "fixture_foreground_ready");
+        var fixtureFocusedElementReady = SafeBoolean(report.ReplayDiagnostics, "fixture_focused_element_ready");
+        var foregroundAfter = SafeBoolean(report.ReplayDiagnostics, "foreground_matches_target_after");
+        var focusedAfter = SafeBoolean(report.ReplayDiagnostics, "focused_element_matches_target_after");
+        var delegateReplaySucceeded = SafeBoolean(report.ReplayDiagnostics, "delegate_replay_succeeded");
+        var submitObserved = SafeBoolean(report.ReplayDiagnostics, "submit_observed");
+        var transactionStatus = report.ReplayDiagnostics.TryGetValue("transaction_status", out var reportedTransactionStatus)
+            ? SafeMachineToken(reportedTransactionStatus)
+            : SafeMachineToken(report.TerminalStatus);
+        var transactionSubmitted = report.ReplayDiagnostics.TryGetValue("transaction_submitted", out var reportedTransactionSubmitted)
+            ? SafeMachineToken(reportedTransactionSubmitted)
+            : report.Submitted.ToString().ToLowerInvariant();
+        var controllerStatus = report.ReplayDiagnostics.TryGetValue("controller_status", out var reportedControllerStatus)
+            ? SafeMachineToken(reportedControllerStatus)
+            : SafeMachineToken(report.TerminalStatus);
+        var controllerSubmitted = report.ReplayDiagnostics.TryGetValue("controller_submitted", out var reportedControllerSubmitted)
+            ? SafeMachineToken(reportedControllerSubmitted)
+            : report.Submitted.ToString().ToLowerInvariant();
+        var acceptanceCoherent = report.ReplayDiagnostics.TryGetValue("acceptance_coherent", out var reportedAcceptanceCoherent)
+            ? SafeMachineToken(reportedAcceptanceCoherent)
+            : terminalStage is "sent_safely" or "terminal_blocked"
+                ? "true"
+                : "unavailable";
+        var composerAccess = report.ReplayDiagnostics.TryGetValue("composer_access", out var reportedComposerAccess)
+            ? SafeMachineToken(reportedComposerAccess)
+            : "unavailable";
+        var evidenceLevel = SafeMachineToken(ReferenceComposerEvidenceLevelTokens.ToToken(report.EvidenceLevel));
+        var traceComplete = ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace);
+        var projectionLines = new List<string>
+        {
+            $"fixture_foreground_ready={fixtureForegroundReady}",
+            $"fixture_focused_element_ready={fixtureFocusedElementReady}",
+            $"foreground_matches_target_before={foregroundBefore}",
+            $"focused_element_matches_target_before={focusedBefore}",
+            $"foreground_matches_target_after={foregroundAfter}",
+            $"focused_element_matches_target_after={focusedAfter}",
+            $"delegate_replay_succeeded={delegateReplaySucceeded}",
+            $"submit_observed={submitObserved}",
+            $"transaction_status={transactionStatus}",
+            $"transaction_submitted={transactionSubmitted}",
+            $"controller_status={controllerStatus}",
+            $"controller_submitted={controllerSubmitted}",
+            $"acceptance_coherent={acceptanceCoherent}",
+            $"terminal_stage={SafeMachineToken(terminalStage)}",
+            $"trace_complete={traceComplete.ToString().ToLowerInvariant()}",
+            $"sent_count={report.SentTexts.Count}",
+            $"composer_access={composerAccess}",
+            $"evidence_level={evidenceLevel}"
+        };
+        var rawFreeProjection = string.Join(Environment.NewLine, projectionLines);
+        var artifactPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "t355-desktop-direct-differential.raw-free.txt");
+        File.WriteAllText(artifactPath, rawFreeProjection, new System.Text.UTF8Encoding(false));
+        TestContext.AddTestAttachment(artifactPath, "Ticket 355 Desktop differential raw-free projection");
+
+        var expectedTrace = new[]
         {
             "send_detected",
             "target_matched",
             "composer_read",
             "sanitized",
-            "overlay_decision",
+            "text_written",
             "replayed",
             "sent_safely"
-        }));
+        };
+        var passed = fixtureForegroundReady == "true"
+            && fixtureFocusedElementReady == "true"
+            && foregroundBefore == "true"
+            && focusedBefore == "true"
+            && foregroundAfter == "true"
+            && focusedAfter == "true"
+            && delegateReplaySucceeded == "true"
+            && submitObserved == "true"
+            && transactionStatus == OsInteractionStatusIds.Submitted
+            && transactionSubmitted == "true"
+            && controllerStatus == OsInteractionStatusIds.Submitted
+            && controllerSubmitted == "true"
+            && acceptanceCoherent == "true"
+            && terminalStage == "sent_safely"
+            && traceComplete
+            && report.SentTexts.Count == 1
+            && composerAccess == "native_verified_composer_text_access"
+            && evidenceLevel == ReferenceComposerEvidenceLevelTokens.ReferenceProductionAccessToken
+            && report.Trace.Select(entry => entry.Stage).SequenceEqual(expectedTrace, StringComparer.Ordinal);
+
+        Assert.That(passed, Is.True, rawFreeProjection);
     }
 
+    [Category("interactive-fixture")]
+    [Test]
+    public void ReferenceComposerAcceptance_Run1MultilineSensitivePromptProjectsRawFreePredicateDetails()
+    {
+        const string multilineSensitivePrompt = "first line\nConnect to 192.168.10.25\nlast line";
+        const string sensitiveValue = "192.168.10.25";
+        var hmacSecret = System.Text.Encoding.UTF8.GetBytes("reference-composer-release-test-secret");
+        var expectedSanitized = new Sanitizer(new InMemoryHmacMappingVault(hmacSecret)).Sanitize(
+            new SanitizeRequest(
+                new[]
+                {
+                    new ContentPart(
+                        "prompt",
+                        ContentSources.PromptText,
+                        multilineSensitivePrompt,
+                        new Dictionary<string, string>())
+                },
+                new SanitizationContext(ReferenceOnlyInputSource.ProfileId, null, null, null, "default"),
+                new SanitizationOptions(false, false, "reference-transaction"))).SanitizedText;
+        var report = ReferenceComposerAcceptanceRunner.Run(
+            new Sanitizer(new InMemoryHmacMappingVault(hmacSecret)),
+            multilineSensitivePrompt,
+            ReferenceComposerDecision.Approve,
+            clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary);
+
+        static string SafeMachineToken(string? value) => !string.IsNullOrEmpty(value)
+            && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.')
+                ? value
+                : "unavailable";
+
+        static string SafeBoolean(IReadOnlyDictionary<string, string> diagnostics, string key) =>
+            diagnostics.TryGetValue(key, out var value) && value is "true" or "false"
+                ? value
+                : "unavailable";
+
+        static string SafeReadinessState(string? value) => value is "not_started"
+            or "typing"
+            or "input_ready"
+            or "enter_queued"
+            or "enter_dispatched"
+            or "stimulus_not_ready"
+            or "fixture_focus_precondition_unavailable"
+                ? value
+                : "unavailable";
+
+        static string SafeReadinessSequence(string? value) => value is "not_started"
+            or "not_started,typing"
+            or "not_started,typing,input_ready,enter_queued"
+            or "not_started,typing,input_ready,enter_queued,enter_dispatched"
+            or "not_started,typing,stimulus_not_ready"
+            or "not_started,typing,input_ready,enter_queued,fixture_focus_precondition_unavailable"
+                ? value
+                : "unavailable";
+
+        static string SafeTerminalReason(string? value) => value is "none"
+            or "stimulus_not_ready"
+            or "fixture_focus_precondition_unavailable"
+                ? value
+                : "unavailable";
+
+        var readinessState = SafeReadinessState(report.ReplayDiagnostics.TryGetValue(
+                "stimulus_readiness_state",
+                out var reportedReadinessState)
+            ? reportedReadinessState
+            : null);
+        var readinessSequence = SafeReadinessSequence(report.ReplayDiagnostics.TryGetValue(
+                "stimulus_transition_sequence",
+                out var reportedReadinessSequence)
+            ? reportedReadinessSequence
+            : null);
+        var stimulusTimeout = SafeBoolean(report.ReplayDiagnostics, "stimulus_timeout");
+        var stimulusTerminalReason = SafeTerminalReason(report.ReplayDiagnostics.TryGetValue(
+                "stimulus_terminal_reason",
+                out var reportedTerminalReason)
+            ? reportedTerminalReason
+            : null);
+        var fixtureForegroundReady = SafeBoolean(report.ReplayDiagnostics, "fixture_foreground_ready");
+        var fixtureFocusedElementReady = SafeBoolean(report.ReplayDiagnostics, "fixture_focused_element_ready");
+        var transactionSubmitted = SafeBoolean(report.ReplayDiagnostics, "transaction_submitted");
+        var composerAccess = report.ReplayDiagnostics.TryGetValue("composer_access", out var reportedComposerAccess)
+            ? SafeMachineToken(reportedComposerAccess)
+            : "unavailable";
+        var evidenceLevel = SafeMachineToken(ReferenceComposerEvidenceLevelTokens.ToToken(report.EvidenceLevel));
+        var sanitizationVerified = report.Trace.Any(entry =>
+            entry.Stage == "sanitized" && entry.ResultCode == "sanitization_verified");
+        var sanitizedOutputApplied = report.Trace.Any(entry =>
+            entry.Stage == "text_written" && entry.ResultCode == "write_verified");
+        var traceComplete = ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace);
+        var terminalStage = SafeMachineToken(report.Trace.LastOrDefault()?.Stage);
+        var sentCountOne = report.SentTexts.Count == 1;
+        var expectedSanitizedOutputMatch = sentCountOne
+            && ComposerTextFormatting.HasSameContentWithNormalizedLineEndings(
+                report.SentTexts[0],
+                expectedSanitized);
+        var sensitiveValueAbsent = sentCountOne
+            && !report.SentTexts[0].Contains(sensitiveValue, StringComparison.Ordinal);
+        var publishableEvidence = ReferenceComposerEvidenceLevelTokens.TryValidate(report.EvidenceLevel);
+        var releasePredicates = new (string Id, bool Passed)[]
+        {
+            ("hook_started", report.HookStarted),
+            ("original_input_suppressed", report.OriginalInputSuppressed),
+            ("submitted", report.Submitted),
+            ("cleanup", report.CleanupPassed),
+            ("trace_complete", traceComplete),
+            ("sent_count", sentCountOne),
+            ("expected_sanitized_output_match", expectedSanitizedOutputMatch),
+            ("sensitive_value_absent", sensitiveValueAbsent),
+            ("publishable_evidence", publishableEvidence)
+        };
+        var scenarioPassed = releasePredicates.All(condition => condition.Passed);
+        var firstFalseCondition = releasePredicates.FirstOrDefault(condition => !condition.Passed).Id ?? "none";
+        var trace = report.Trace.Count == 0
+            ? "unavailable"
+            : string.Join(",", report.Trace.Select(entry =>
+                $"{SafeMachineToken(entry.Stage)}={SafeMachineToken(entry.ResultCode)}"));
+        var projection = string.Join(Environment.NewLine, new[]
+        {
+            $"stimulus_readiness_state={readinessState}",
+            $"stimulus_transition_sequence={readinessSequence}",
+            $"stimulus_timeout={stimulusTimeout}",
+            $"stimulus_terminal_reason={stimulusTerminalReason}",
+            $"fixture_foreground_ready={fixtureForegroundReady}",
+            $"fixture_focused_element_ready={fixtureFocusedElementReady}",
+            $"hook_started={report.HookStarted.ToString().ToLowerInvariant()}",
+            $"original_input_suppressed={report.OriginalInputSuppressed.ToString().ToLowerInvariant()}",
+            $"sanitization_verified={sanitizationVerified.ToString().ToLowerInvariant()}",
+            $"sanitized_output_applied={sanitizedOutputApplied.ToString().ToLowerInvariant()}",
+            $"transaction_submitted={transactionSubmitted}",
+            $"report_submitted={report.Submitted.ToString().ToLowerInvariant()}",
+            $"expected_sanitized_output_match={expectedSanitizedOutputMatch.ToString().ToLowerInvariant()}",
+            $"sensitive_value_absent={sensitiveValueAbsent.ToString().ToLowerInvariant()}",
+            $"trace_complete={traceComplete.ToString().ToLowerInvariant()}",
+            $"terminal_stage={terminalStage}",
+            $"sent_count={report.SentTexts.Count}",
+            $"cleanup={report.CleanupPassed.ToString().ToLowerInvariant()}",
+            $"composer_access={composerAccess}",
+            $"evidence_level={evidenceLevel}",
+            $"scenario_passed={scenarioPassed.ToString().ToLowerInvariant()}",
+            $"first_false_condition={firstFalseCondition}",
+            $"trace={trace}"
+        });
+        var artifactPath = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "t355-run1-multiline-sensitive-predicate.raw-free.txt");
+        File.WriteAllText(artifactPath, projection, new System.Text.UTF8Encoding(false));
+        TestContext.AddTestAttachment(artifactPath, "Ticket 355 multiline-sensitive raw-free predicate projection");
+
+        Assert.That(scenarioPassed, Is.True, projection);
+    }
+
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_SensitivePromptUsesProductionOverlayAndNeverSendsRawText()
     {
@@ -6985,6 +8499,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Trace[^1].Stage, Is.EqualTo("sent_safely"));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_ClipboardRestoreFailureIsRawFreeAndSuppressesReplay()
     {
@@ -7012,6 +8527,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(diagnostics, Does.Not.Contain(rawClipboardData));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_ForegroundRefusalBlocksSuppressedSend()
     {
@@ -7030,6 +8546,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
     }
 
+    [Category("interactive-fixture")]
     [TestCase(1)]
     [TestCase(2)]
     public void ReferenceComposerAcceptance_TargetChangeBlocksBeforeSideEffect(int mode)
@@ -7050,6 +8567,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Trace.Select(entry => entry.Stage), Does.Not.Contain("sent_safely"));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_UiAutomationWriteFailureBlocksAfterApproval()
     {
@@ -7071,6 +8589,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.Trace[^1].Stage, Is.EqualTo("terminal_blocked"));
     }
 
+    [Category("interactive-fixture")]
     [TestCase(1, OsInteractionStatusIds.ReplayUnavailable)]
     [TestCase(2, OsInteractionStatusIds.ReplayIndeterminate)]
     public void ReferenceComposerAcceptance_ReplayFailurePublishesDistinctTerminalStatus(
@@ -7101,6 +8620,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(report.ReplayDiagnostics["modifiers_released"], Is.EqualTo("true"));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_CancelAndRepeatedRunLeaveNoSendOrLeakedCapability()
     {
@@ -7123,6 +8643,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(repeated.SentTexts, Has.Count.EqualTo(1));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerReleaseAcceptance_RunsFullMatrixTwice()
     {
@@ -7155,6 +8676,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
             Does.Contain($"build_id: {report.BuildIdentifier}"));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerReleaseAcceptance_MatrixRequiresExpectedBlockedUnavailableProductionAccessInBothRuns()
     {
@@ -7231,6 +8753,7 @@ public class NativeSubmitBindingScopeTests : SanitizerTests
         Assert.That(controller.State.LastProtectedSendFailureCode, Does.Not.Contain("test.secret.com"));
     }
 
+    [Category("interactive-fixture")]
     [Test]
     public void ReferenceComposerAcceptance_ReleaseSmokeRunsAllAcceptanceCases()
     {

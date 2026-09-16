@@ -36,6 +36,22 @@ public partial class SanitizerTests
     }
 
     [Test]
+    public void ComposerTextFormatting_ExactComparisonNormalizesOnlyLineEndingKinds()
+    {
+        var lf = "first\nPLACEHOLDER\nlast";
+        var crlf = "first\r\nPLACEHOLDER\r\nlast";
+
+        Assert.That(
+            ComposerTextFormatting.HasSameContentWithNormalizedLineEndings(lf, crlf),
+            Is.True);
+        Assert.That(
+            ComposerTextFormatting.HasSameContentWithNormalizedLineEndings(
+                lf,
+                "first\r\nDIFFERENT\r\nlast"),
+            Is.False);
+    }
+
+    [Test]
     public void ComposerTextFormatting_DiagnosticsAreRawFreeAndExposeFormattingShape()
     {
         var raw = "first\nsecond";

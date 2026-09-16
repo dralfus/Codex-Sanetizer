@@ -373,7 +373,7 @@ public sealed class ChatGptProtectedClaimTests
             new ProtectedSendTraceEntry(1, 1, fingerprint, "target_matched", "target_verified", 1),
             new ProtectedSendTraceEntry(1, 1, fingerprint, "composer_read", "capture_verified", 1),
             new ProtectedSendTraceEntry(1, 1, fingerprint, "sanitized", "sanitization_verified", 1),
-            new ProtectedSendTraceEntry(1, 1, fingerprint, "send_injected", "submit_requested", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "replayed", "submit_requested", 1),
             new ProtectedSendTraceEntry(1, 1, fingerprint, "sent_safely", "submitted", 1)
         };
 
@@ -492,7 +492,7 @@ public sealed class ChatGptProtectedClaimTests
             new ProtectedSendTraceEntry(1, 1, fingerprint, "target_matched", "target_verified", 1),
             new ProtectedSendTraceEntry(1, 1, fingerprint, "composer_read", "capture_verified", 1),
             new ProtectedSendTraceEntry(1, 1, fingerprint, "sanitized", "sanitization_verified", 1),
-            new ProtectedSendTraceEntry(1, 1, fingerprint, "send_injected", "submit_requested", 1),
+            new ProtectedSendTraceEntry(1, 1, fingerprint, "replayed", "submit_requested", 1),
             new ProtectedSendTraceEntry(1, 1, fingerprint, "sent_safely", "submitted", 1)
         };
     }

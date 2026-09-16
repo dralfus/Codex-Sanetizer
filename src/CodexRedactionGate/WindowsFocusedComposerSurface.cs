@@ -1228,26 +1228,46 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
                     var target = _targetOperations.Reacquire(surface);
                     if (target is null)
                     {
-                        return new TextCaptureResult(false, OsInteractionStatusIds.NotComposer, null, new Dictionary<string, string>());
+                        return new TextCaptureResult(
+                            false,
+                            OsInteractionStatusIds.NotComposer,
+                            null,
+                            NativeCaptureDiagnostics("target_reacquire_failed", "unavailable"));
                     }
 
                     var read = _targetOperations.ReadText(target, surface);
-                    if (!read.Succeeded || string.IsNullOrEmpty(read.Text))
+                    if (!read.Succeeded)
                     {
                         return new TextCaptureResult(
                             false,
                             OsInteractionStatusIds.CaptureFailed,
                             null,
-                            read.Diagnostics);
+                            NativeCaptureDiagnostics("read_failed", NormalizeCaptureStrategy(read)));
+                    }
+
+                    if (string.IsNullOrEmpty(read.Text))
+                    {
+                        return new TextCaptureResult(
+                            false,
+                            OsInteractionStatusIds.CaptureFailed,
+                            null,
+                            NativeCaptureDiagnostics("empty_text", NormalizeCaptureStrategy(read)));
                     }
 
                     var normalizedText = ComposerTextFormatting.NormalizeLineEndings(read.Text);
+                    var diagnostics = new Dictionary<string, string>(
+                        ComposerTextFormatting.Diagnostics(read.Text, normalizedText, read.CaptureStrategy),
+                        StringComparer.Ordinal)
+                    {
+                        ["native_capture_failure_kind"] = "none",
+                        ["native_capture_strategy"] = NormalizeCaptureStrategy(read)
+                    };
 
                     return new TextCaptureResult(
                         true,
                         "captured",
                         normalizedText,
-                        ComposerTextFormatting.Diagnostics(read.Text, normalizedText, read.CaptureStrategy));
+                        diagnostics);
                 },
                 ClipboardCaptureFailure));
             return execution.Succeeded
@@ -1256,19 +1276,19 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         }
         catch (InvalidOperationException)
         {
-            return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
+            return NativeExceptionCaptureFailure();
         }
         catch (COMException)
         {
-            return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
+            return NativeExceptionCaptureFailure();
         }
         catch (System.ComponentModel.Win32Exception)
         {
-            return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
+            return NativeExceptionCaptureFailure();
         }
         catch (ExternalException)
         {
-            return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, new Dictionary<string, string>());
+            return NativeExceptionCaptureFailure();
         }
     }
 
@@ -1410,8 +1430,60 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
         return false;
     }
 
-    private static TextCaptureResult ClipboardCaptureFailure(string stage) =>
-        new(false, OsInteractionStatusIds.CaptureFailed, null, ClipboardFailureDiagnostics(stage));
+    private static TextCaptureResult ClipboardCaptureFailure(string stage)
+    {
+        var diagnostics = new Dictionary<string, string>(ClipboardFailureDiagnostics(stage), StringComparer.Ordinal)
+        {
+            ["native_capture_failure_kind"] = "clipboard_failed",
+            ["native_capture_strategy"] = "unavailable"
+        };
+        return new TextCaptureResult(false, OsInteractionStatusIds.CaptureFailed, null, diagnostics);
+    }
+
+    private static TextCaptureResult StaCaptureFailure(StaFailureKind failureKind) =>
+        new(
+            false,
+            OsInteractionStatusIds.CaptureFailed,
+            null,
+            new Dictionary<string, string>(StaFailureDiagnostics(failureKind), StringComparer.Ordinal)
+            {
+                ["native_capture_failure_kind"] = "sta_failed",
+                ["native_capture_strategy"] = "unavailable"
+            });
+
+    private static TextCaptureResult NativeExceptionCaptureFailure() =>
+        new(
+            false,
+            OsInteractionStatusIds.CaptureFailed,
+            null,
+            NativeCaptureDiagnostics("native_exception", "unavailable"));
+
+    private static IReadOnlyDictionary<string, string> NativeCaptureDiagnostics(
+        string failureKind,
+        string strategy) =>
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["native_capture_failure_kind"] = failureKind,
+            ["native_capture_strategy"] = strategy
+        };
+
+    private static string NormalizeCaptureStrategy(NativeComposerTextReadAttempt read)
+    {
+        var strategy = read.CaptureStrategy;
+        if (strategy == "unavailable"
+            && read.Diagnostics.TryGetValue("capture_strategy", out var diagnosticStrategy))
+        {
+            strategy = diagnosticStrategy;
+        }
+
+        return strategy switch
+        {
+            "value-pattern" => "value_pattern",
+            "text-pattern" => "text_pattern",
+            "verified-keyboard-copy" => "keyboard_fallback",
+            _ => "unavailable"
+        };
+    }
 
     private static TextReplacementResult ClipboardWriteFailure(string stage) =>
         new(false, OsInteractionStatusIds.WriteFailed, ClipboardFailureDiagnostics(stage));
@@ -1544,7 +1616,7 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
             var pattern = GetValuePattern(element);
             var text = pattern?.Current.Value;
             var captureStrategy = "value-pattern";
-            if (text is null)
+            if (string.IsNullOrEmpty(text))
             {
                 var textPattern = GetTextPattern(element);
                 if (textPattern is null)
@@ -1780,9 +1852,6 @@ public sealed class NativeVerifiedComposerTextAccess : IVerifiedComposerTextAcce
 
         return false;
     }
-
-    private static TextCaptureResult StaCaptureFailure(StaFailureKind failureKind) =>
-        new(false, OsInteractionStatusIds.CaptureFailed, null, StaFailureDiagnostics(failureKind));
 
     private static TextReplacementResult StaWriteFailure(StaFailureKind failureKind) =>
         new(false, OsInteractionStatusIds.WriteFailed, StaFailureDiagnostics(failureKind));

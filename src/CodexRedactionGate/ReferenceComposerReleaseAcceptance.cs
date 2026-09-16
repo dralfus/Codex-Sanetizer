@@ -97,14 +97,32 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
         }
 
         var scenarios = new List<ReferenceComposerReleaseScenarioResult>();
-        var firstRun = RunMatrix(hmacSecret, "run1");
-        var secondRun = RunMatrix(hmacSecret, "run2");
-        scenarios.AddRange(firstRun);
-        scenarios.AddRange(secondRun);
+        var host = new ReferenceComposerAcceptanceRunner.ReferenceComposerPersistentFixtureHost();
+        if (!host.InitialFocusReady)
+        {
+            host.Dispose();
+            return new ReferenceComposerReleaseAcceptanceReport(
+                "failed_closed",
+                InteractiveDesktopAvailable: true,
+                Array.Empty<ReferenceComposerReleaseScenarioResult>(),
+                CleanupPassed: host.FinalCleanupPassed,
+                CurrentBuildIdentifier());
+        }
+
+        try
+        {
+            scenarios.AddRange(RunMatrix(host, hmacSecret, "run1"));
+            scenarios.AddRange(RunMatrix(host, hmacSecret, "run2"));
+        }
+        finally
+        {
+            host.Dispose();
+        }
 
         var releaseScenariosPassed = HasPassedReleaseScenarios(scenarios);
         var cleanupPassed = releaseScenariosPassed
-            && scenarios.All(scenario => scenario.CleanupPassed);
+            && scenarios.All(scenario => scenario.CleanupPassed)
+            && host.FinalCleanupPassed;
         return new ReferenceComposerReleaseAcceptanceReport(
             releaseScenariosPassed && cleanupPassed
                 ? "passed"
@@ -153,13 +171,14 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
     }
 
     private static IReadOnlyList<ReferenceComposerReleaseScenarioResult> RunMatrix(
+        ReferenceComposerAcceptanceRunner.ReferenceComposerPersistentFixtureHost host,
         byte[] hmacSecret,
         string runId)
     {
         var expectedMultilineSanitized = SanitizeForReference(hmacSecret, MultilineSensitivePrompt);
         return new[]
         {
-            RunScenario($"{runId}.safe_prompt", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.safe_prompt", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 "A harmless local prompt",
                 ReferenceComposerDecision.Approve,
@@ -170,13 +189,13 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                     && report.CleanupPassed
                     && ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace)
                     && report.SentTexts.Count == 1),
-            RunExpectedBlockedScenario($"{runId}.production_access_unavailable", () => ReferenceComposerAcceptanceRunner.Run(
+            RunExpectedBlockedScenario($"{runId}.production_access_unavailable", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,
                 clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary,
                 composerAccessMode: ReferenceComposerAccessMode.Unavailable)),
-            RunScenario($"{runId}.sensitive_prompt", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.sensitive_prompt", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,
@@ -189,7 +208,7 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                     && report.Trace.Any(entry => entry.Stage == "overlay_foreground_confirmed")
                     && report.SentTexts.Count == 1
                     && !report.SentTexts[0].Contains("192.168.10.25", StringComparison.Ordinal)),
-            RunScenario($"{runId}.multiline_sensitive_prompt", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.multiline_sensitive_prompt", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 MultilineSensitivePrompt,
                 ReferenceComposerDecision.Approve,
@@ -200,12 +219,11 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                     && report.CleanupPassed
                     && ProtectedSendTrace.IsCompleteSafeSendTrace(report.Trace)
                     && report.SentTexts.Count == 1
-                    && string.Equals(
-                        ComposerTextFormatting.NormalizeLineEndings(report.SentTexts[0]),
-                        expectedMultilineSanitized,
-                        StringComparison.Ordinal)
+                    && ComposerTextFormatting.HasSameContentWithNormalizedLineEndings(
+                        report.SentTexts[0],
+                        expectedMultilineSanitized)
                     && !report.SentTexts[0].Contains("192.168.10.25", StringComparison.Ordinal)),
-            RunScenario($"{runId}.cancel", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.cancel", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Cancel,
@@ -216,28 +234,28 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                     && report.CleanupPassed
                     && report.SentTexts.Count == 0
                     && IsCompleteCancellationTrace(report.Trace)),
-            RunScenario($"{runId}.foreground_refusal", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.foreground_refusal", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,
                 ReferenceComposerForegroundMode.Refused,
                 clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary),
                 BlockedScenario),
-            RunScenario($"{runId}.target_change_before_write", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.target_change_before_write", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,
                 targetChangeMode: ReferenceComposerTargetChangeMode.BeforeWrite,
                 clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary),
                 BlockedScenario),
-            RunScenario($"{runId}.target_change_before_replay", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.target_change_before_replay", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,
                 targetChangeMode: ReferenceComposerTargetChangeMode.BeforeReplay,
                 clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary),
                 BlockedScenario),
-            RunScenario($"{runId}.uia_write_failure", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.uia_write_failure", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,
@@ -245,14 +263,14 @@ internal static class ReferenceComposerReleaseAcceptanceRunner
                 clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary),
                 report => BlockedScenario(report)
                     && report.Trace.All(entry => entry.Stage != "text_written")),
-            RunScenario($"{runId}.replay_unavailable", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.replay_unavailable", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,
                 replayMode: ReferenceComposerReplayMode.Unavailable,
                 clipboardBoundaryFactory: ReferenceComposerAcceptanceRunner.CreateFixtureClipboardBoundary),
                 report => ReplayFailureScenario(report, OsInteractionStatusIds.ReplayUnavailable)),
-            RunScenario($"{runId}.replay_partial", () => ReferenceComposerAcceptanceRunner.Run(
+            RunScenario($"{runId}.replay_partial", () => ReferenceComposerAcceptanceRunner.Run(host,
                 CreateSanitizer(hmacSecret),
                 SensitivePrompt,
                 ReferenceComposerDecision.Approve,

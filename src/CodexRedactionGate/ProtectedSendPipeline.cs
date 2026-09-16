@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace CodexRedactionGate;
 
@@ -17,7 +18,9 @@ internal interface IProtectedSendPipelineHost
         string stage,
         string resultCode,
         string? attemptStatus = null,
-        string? attemptAction = null);
+        string? attemptAction = null,
+        bool? terminalApplied = null,
+        bool? terminalSubmitted = null);
 
     ProtectionSnapshot? PublishTraceUnavailable(ProtectionSnapshot snapshot, string? profileId);
 
@@ -165,21 +168,54 @@ internal sealed class ProtectedSendPipeline
                 "sent_safely",
                 result.Status,
                 disposition.Status,
-                disposition.Action)
+                disposition.Action,
+                result.Applied,
+                result.Submitted)
             : _host.PublishProtectedSendTrace(
                 snapshot,
                 operation,
                 "terminal_blocked",
                 result.Status,
                 disposition.Status,
-                disposition.Action);
+                disposition.Action,
+                result.Applied,
+                result.Submitted);
         if (terminalTrace is null)
         {
-            _host.PublishTraceUnavailable(eventSnapshot, runtime.Profile.ProfileId);
+            var fallback = _host.PublishTraceUnavailable(eventSnapshot, runtime.Profile.ProfileId);
+            if (result.Submitted
+                && result.Status == OsInteractionStatusIds.Submitted
+                && IsMatchingSubmittedTerminalFallback(fallback, operation))
+            {
+                return result;
+            }
+
             return FailedClosedNativeSubmitResult();
         }
 
         return result;
+    }
+
+    private static bool IsMatchingSubmittedTerminalFallback(
+        ProtectionSnapshot? snapshot,
+        ResidentProtectedSendOperation operation)
+    {
+        var trace = snapshot?.State.ProtectedSendAttemptTrace;
+        return snapshot is not null
+            && snapshot.Generation == operation.Snapshot.Generation
+            && ReferenceEquals(snapshot.RuntimeSet, operation.RuntimeSet)
+            && snapshot.State.ProtectedSendAttemptId == operation.AttemptId
+            && snapshot.State.LastStatus == OsInteractionStatusIds.Submitted
+            && snapshot.State.LastSubmitted
+            && snapshot.State.ProtectedSendAttemptStatus == "sent_safely"
+            && trace is { Count: > 0 }
+            && trace[^1].Stage == "sent_safely"
+            && trace[^1].ResultCode == OsInteractionStatusIds.Submitted
+            && trace.All(entry =>
+                entry.AttemptId == operation.AttemptId
+                && entry.SnapshotGeneration == operation.Snapshot.Generation
+                && entry.TargetFingerprint == operation.TargetFingerprint)
+            && ProtectedSendTrace.IsCompleteSafeSendTrace(trace!);
     }
 
     private static NativeSubmitInterceptionResult WithContinuityStatus(

@@ -262,6 +262,12 @@ claim live verification from this ticket.
 
 ## 355. Route reference acceptance through the production composer access path
 
+**Status:** DONE (2026-09-16). Evidence bundle: independent final review
+`SPEC PASS` / `CODE_QUALITY PASS`; local non-interactive receipt `1974/1974`;
+and current-build local interactive release matrix `1/1`. The historical
+Windows Sandbox infrastructure blocker is not used as a requirement for this
+approved local evidence channel.
+
 **What to build:** Migrate reference-composer acceptance to
 `ProtectedSendTransaction` and `ProtectedComposerSession`, using production
 `NativeVerifiedComposerTextAccess` for Windows access behavior. Direct
@@ -322,12 +328,12 @@ only through the Windows Sandbox worker described in
 on the user's primary desktop. Inspect the per-job JSON and log before claiming
 verification.
 
-- [ ] Remove direct fixture TextBox writes from acceptance evidence.
-- [ ] Use the production access adapter through the session contract.
-- [ ] Preserve physical exclusion from OpenAI Desktop targets.
-- [ ] Publish the evidence level honestly as reference production-access proof,
+- [x] Remove direct fixture TextBox writes from acceptance evidence.
+- [x] Use the production access adapter through the session contract.
+- [x] Preserve physical exclusion from OpenAI Desktop targets.
+- [x] Publish the evidence level honestly as reference production-access proof,
       not installed ChatGPT proof.
-- [ ] Add the bounded edit-loop follow-up to the transaction owner or an
+- [x] Add the bounded edit-loop follow-up to the transaction owner or an
       explicitly linked ticket; do not silently defer it to production routing.
       Linked follow-up: ticket 356 (migrate production keyboard Send to
       `ProtectedSendTransaction`); see the TODO in `ReferenceComposerProductionAccess`.

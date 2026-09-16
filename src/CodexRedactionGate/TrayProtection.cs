@@ -112,6 +112,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
     private readonly Func<IntPtr, string?> _selectedWindowProfileResolver;
     private readonly Action<string>? _protectedSendStageObserver;
     private readonly Action? _beforeProtectedSendTracePublishForTesting;
+    private readonly Func<string, bool>? _protectedSendTraceResultAvailableForTesting;
     private readonly INativeSubmitInputAdapter _nativeSubmitInputAdapter;
     private Action<ProtectedSendTraceEntry>? _protectedSendTracePublishedForTesting;
     private IDisposable? _residentRuntimeOwner;
@@ -153,7 +154,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         IDisposable? nativeSubmitRuntimeOwner = null,
         Action? beforeProtectedSendTracePublishForTesting = null,
         INativeSubmitInputAdapter? nativeSubmitInputAdapter = null,
-        ResidentCanaryRunDelegate? residentCanaryRunner = null)
+        ResidentCanaryRunDelegate? residentCanaryRunner = null,
+        Func<string, bool>? protectedSendTraceResultAvailableForTesting = null)
     {
         _hotkeyHost = hotkeyHost ?? throw new ArgumentNullException(nameof(hotkeyHost));
         _applyOnlyRunner = applyOnlyRunner ?? throw new ArgumentNullException(nameof(applyOnlyRunner));
@@ -165,6 +167,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         _selectedWindowProfileResolver = selectedWindowProfileResolver ?? WindowsSendControlDiscovery.TryGetSelectedProfileId;
         _protectedSendStageObserver = protectedSendStageObserver;
         _beforeProtectedSendTracePublishForTesting = beforeProtectedSendTracePublishForTesting;
+        _protectedSendTraceResultAvailableForTesting = protectedSendTraceResultAvailableForTesting;
         _nativeSubmitInputAdapter = nativeSubmitInputAdapter ?? NativeSubmitInputAdapter.Instance;
         _residentCanaryRunner = residentCanaryRunner;
         _residentRuntimeOwner = residentRuntimeOwner;
@@ -199,13 +202,17 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         string stage,
         string resultCode,
         string? attemptStatus,
-        string? attemptAction) => PublishProtectedSendTrace(
+        string? attemptAction,
+        bool? terminalApplied,
+        bool? terminalSubmitted) => PublishProtectedSendTrace(
             snapshot,
             operation,
             stage,
             resultCode,
             attemptStatus,
-            attemptAction);
+            attemptAction,
+            terminalApplied,
+            terminalSubmitted);
 
     ProtectionSnapshot? IProtectedSendPipelineHost.PublishTraceUnavailable(
         ProtectionSnapshot snapshot,
@@ -266,7 +273,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         IDisposable? residentRuntimeOwner = null,
         IDisposable? nativeSubmitRuntimeOwner = null,
         Action? beforeProtectedSendTracePublishForTesting = null,
-        ResidentCanaryRunDelegate? residentCanaryRunner = null)
+        ResidentCanaryRunDelegate? residentCanaryRunner = null,
+        Func<string, bool>? protectedSendTraceResultAvailableForTesting = null)
     {
         storageLayout ??= CreateIsolatedTestStorageLayout();
         return new TrayProtectionController(
@@ -285,7 +293,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             residentRuntimeOwner,
             nativeSubmitRuntimeOwner,
             beforeProtectedSendTracePublishForTesting,
-            residentCanaryRunner: residentCanaryRunner);
+            residentCanaryRunner: residentCanaryRunner,
+            protectedSendTraceResultAvailableForTesting: protectedSendTraceResultAvailableForTesting);
     }
 
     // Explicit test seam for controller tests that do not construct the Windows orchestrator.
@@ -305,7 +314,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         IDisposable? residentRuntimeOwner = null,
         IDisposable? nativeSubmitRuntimeOwner = null,
         Action? beforeProtectedSendTracePublishForTesting = null,
-        ResidentCanaryRunDelegate? residentCanaryRunner = null)
+        ResidentCanaryRunDelegate? residentCanaryRunner = null,
+        Func<string, bool>? protectedSendTraceResultAvailableForTesting = null)
     {
         ArgumentNullException.ThrowIfNull(nativeSubmitHookHost);
         ArgumentNullException.ThrowIfNull(nativeSubmitController);
@@ -334,7 +344,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             residentRuntimeOwner,
             nativeSubmitRuntimeOwner,
             beforeProtectedSendTracePublishForTesting,
-            residentCanaryRunner: residentCanaryRunner);
+            residentCanaryRunner: residentCanaryRunner,
+            protectedSendTraceResultAvailableForTesting: protectedSendTraceResultAvailableForTesting);
     }
 
     private static DefaultStorageLayout CreateIsolatedTestStorageLayout()
@@ -2053,11 +2064,24 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         string stage,
         string resultCode,
         string? attemptStatus = null,
-        string? attemptAction = null)
+        string? attemptAction = null,
+        bool? terminalApplied = null,
+        bool? terminalSubmitted = null)
     {
-        return ProtectedSendTraceTransition.TryCreate(stage, resultCode, out var transition)
-            ? PublishProtectedSendTrace(snapshot, operation, transition, attemptStatus, attemptAction)
+        var published = ProtectedSendTraceTransition.TryCreate(stage, resultCode, out var transition)
+            ? PublishProtectedSendTrace(
+                snapshot,
+                operation,
+                transition,
+                attemptStatus,
+                attemptAction,
+                terminalApplied,
+                terminalSubmitted)
             : null;
+        return published is not null
+            && (_protectedSendTraceResultAvailableForTesting?.Invoke(stage) ?? true)
+                ? published
+                : null;
     }
 
     private ProtectionSnapshot? PublishProtectedSendTrace(
@@ -2065,7 +2089,9 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         ResidentProtectedSendOperation operation,
         ProtectedSendTraceTransition transition,
         string? attemptStatus = null,
-        string? attemptAction = null)
+        string? attemptAction = null,
+        bool? terminalApplied = null,
+        bool? terminalSubmitted = null)
     {
         if (transition.Stage == ProtectedSendTraceStage.SentSafely)
         {
@@ -2074,7 +2100,9 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 operation,
                 transition,
                 attemptStatus ?? "sent_safely",
-                attemptAction ?? "none");
+                attemptAction ?? "none",
+                terminalApplied,
+                terminalSubmitted);
         }
 
         return PublishOperationTraceTransaction(
@@ -2083,6 +2111,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             attemptStatus,
             attemptAction,
             allowCancelledOperation: false,
+            terminalApplied,
+            terminalSubmitted,
             tryPublish => operation.TryAppendTraceTransaction(
                 transition.StageToken,
                 transition.ResultCode.Value,
@@ -2096,20 +2126,25 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         ResidentProtectedSendOperation operation,
         ProtectedSendTraceTransition transition,
         string attemptStatus,
-        string attemptAction)
+        string attemptAction,
+        bool? terminalApplied,
+        bool? terminalSubmitted)
     {
-        if (!operation.TryCommitSubmittedTerminalTrace(
+        ProtectionSnapshot? published = null;
+        if (!operation.TryCommitSubmittedTerminalTraceTransaction(
                 transition.ResultCode.Value,
                 DurationSince(operation.StartedAtTimestamp),
-                out var trace)
-            || !TryPublishOperationTraceSnapshot(
-                snapshot,
-                operation,
-                trace,
-                attemptStatus,
-                attemptAction,
-                allowCancelledOperation: false,
-                out var published))
+                trace => TryPublishOperationTraceSnapshot(
+                    snapshot,
+                    operation,
+                    trace,
+                    attemptStatus,
+                    attemptAction,
+                    allowCancelledOperation: true,
+                    terminalApplied,
+                    terminalSubmitted,
+                    out published),
+                out _))
         {
             return null;
         }
@@ -2137,6 +2172,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             "trace_unavailable",
             "retry_protection",
             allowCancelledOperation: true,
+            terminalApplied: null,
+            terminalSubmitted: null,
             tryPublish => operation.TryEnsureTerminalBlockedTraceTransaction(tryPublish, out _));
     }
 
@@ -2146,6 +2183,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         string? attemptStatus,
         string? attemptAction,
         bool allowCancelledOperation,
+        bool? terminalApplied,
+        bool? terminalSubmitted,
         Func<Func<IReadOnlyList<ProtectedSendTraceEntry>, bool>, bool> commit)
     {
         ProtectionSnapshot? published = null;
@@ -2156,6 +2195,8 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 attemptStatus,
                 attemptAction,
                 allowCancelledOperation,
+                terminalApplied,
+                terminalSubmitted,
                 out published)))
         {
             return null;
@@ -2172,11 +2213,26 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         string? attemptStatus,
         string? attemptAction,
         bool allowCancelledOperation,
+        bool? terminalApplied,
+        bool? terminalSubmitted,
         out ProtectionSnapshot? published)
     {
         published = null;
-        var mustPublishSubmittedTerminal = attemptStatus == "sent_safely";
-        using var publicationLease = mustPublishSubmittedTerminal
+        var terminalEntry = trace.Count > 0 ? trace[^1] : null;
+        var mustPublishTerminalState = terminalApplied.HasValue
+            && terminalSubmitted.HasValue
+            && terminalEntry?.Stage is "sent_safely" or "terminal_blocked";
+        if (mustPublishTerminalState
+            && (terminalSubmitted!.Value
+                ? terminalEntry!.Stage != "sent_safely"
+                    || terminalEntry.ResultCode != OsInteractionStatusIds.Submitted
+                : terminalEntry!.Stage != "terminal_blocked"))
+        {
+            return false;
+        }
+
+        var mustPublishSubmittedTerminal = mustPublishTerminalState && terminalSubmitted!.Value;
+        using var publicationLease = mustPublishTerminalState
             ? MonitorLease.Acquire(_snapshotPublicationGate)
             : null;
         for (var attempt = 0; attempt < 2; attempt++)
@@ -2187,11 +2243,9 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             }
 
             var current = ReadSnapshot();
-            if (!CanContinueWithRuntime(current, source)
-                && !(mustPublishSubmittedTerminal
-                    && current.State.Enabled
-                    && current.HookReady
-                    && ReferenceEquals(current.RuntimeSet, operation.RuntimeSet)))
+            if (mustPublishTerminalState
+                ? !IsCurrentTerminalPublication(current, source, operation)
+                : !CanContinueWithRuntime(current, source))
             {
                 return false;
             }
@@ -2205,7 +2259,27 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 ProtectedSendAttemptAction = attemptAction ?? current.State.ProtectedSendAttemptAction,
                 LastProtectedSendInterruption = null
             };
-            if (attemptStatus == "trace_unavailable")
+            if (mustPublishTerminalState)
+            {
+                state = state with
+                {
+                    LastStatus = terminalEntry!.ResultCode,
+                    LastProfileId = operation.Target?.ProfileId
+                        ?? current.State.LastProfileId
+                        ?? current.State.ConfiguredProfileId,
+                    LastApplied = terminalApplied!.Value,
+                    LastSubmitted = terminalSubmitted!.Value
+                };
+                if (mustPublishSubmittedTerminal)
+                {
+                    state = state with
+                    {
+                        LastProtectedSendTraceStatus = "none",
+                        LastProtectedSendFailureCode = "none"
+                    };
+                }
+            }
+            else if (attemptStatus == "trace_unavailable")
             {
                 var enabled = current.State.Enabled;
                 state = state with
@@ -2287,6 +2361,29 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         return false;
     }
 
+    internal static bool IsCurrentTerminalPublication(
+        ProtectionSnapshot current,
+        ProtectionSnapshot source,
+        ResidentProtectedSendOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(operation);
+
+        return current.Generation == operation.Snapshot.Generation
+            && source.Generation == operation.Snapshot.Generation
+            && ReferenceEquals(current.RuntimeSet, operation.RuntimeSet)
+            && ReferenceEquals(source.RuntimeSet, operation.RuntimeSet)
+            && current.State.ProtectedSendAttemptId == operation.AttemptId
+            && source.State.ProtectedSendAttemptId == operation.AttemptId;
+    }
+
+    internal static bool IsCurrentSubmittedTerminalPublication(
+        ProtectionSnapshot current,
+        ProtectionSnapshot source,
+        ResidentProtectedSendOperation operation) =>
+        IsCurrentTerminalPublication(current, source, operation);
+
     private void PublishChatGptProtectedClaim(string profileId)
     {
         while (true)
@@ -2331,6 +2428,17 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             return null;
         }
 
+        var activeOperation = Volatile.Read(ref _activeProtectedSendOperation);
+        if (activeOperation is not null
+            && IsMatchingCurrentSubmittedTerminalFallback(
+                current,
+                source,
+                activeOperation,
+                profileId))
+        {
+            return current;
+        }
+
         PublishNativeSubmitState(
             current,
             OsInteractionStatusIds.TraceUnavailable,
@@ -2339,6 +2447,38 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             applied: false,
             submitted: false);
         return ReadSnapshot();
+    }
+
+    private static bool IsMatchingCurrentSubmittedTerminalFallback(
+        ProtectionSnapshot current,
+        ProtectionSnapshot source,
+        ResidentProtectedSendOperation operation,
+        string? profileId)
+    {
+        var trace = current.State.ProtectedSendAttemptTrace;
+        var operationProfileId = operation.Target?.ProfileId
+            ?? current.State.LastProfileId
+            ?? current.State.ConfiguredProfileId;
+        return !operation.IsCompleted
+            && ReferenceEquals(source, operation.Snapshot)
+            && current.State.Enabled
+            && current.HookReady
+            && IsLocalProtectionReady(current)
+            && current.Generation == operation.Snapshot.Generation
+            && ReferenceEquals(current.RuntimeSet, operation.RuntimeSet)
+            && current.State.ProtectedSendAttemptId == operation.AttemptId
+            && current.State.LastStatus == OsInteractionStatusIds.Submitted
+            && current.State.LastSubmitted
+            && current.State.ProtectedSendAttemptStatus == "sent_safely"
+            && string.Equals(operationProfileId, profileId, StringComparison.Ordinal)
+            && trace is { Count: > 0 }
+            && trace[^1].Stage == "sent_safely"
+            && trace[^1].ResultCode == OsInteractionStatusIds.Submitted
+            && trace.All(entry =>
+                entry.AttemptId == operation.AttemptId
+                && entry.SnapshotGeneration == operation.Snapshot.Generation
+                && entry.TargetFingerprint == operation.TargetFingerprint)
+            && ProtectedSendTrace.IsCompleteSafeSendTrace(trace);
     }
 
     private void PublishStaleCapturedAttempt(
