@@ -1020,3 +1020,12 @@ matrix с 20 normal `passed/raw_free/cleanup` scenarios и двумя required
 Status: `DONE`. Последующие изменения production keyboard Send остаются в
 отдельном ticket 356; никаких новых test/Sandbox/review действий для closure
 не выполнялось.
+
+### Retention cleanup (2026-09-16)
+
+После closure удалены ignored промежуточные T355 build, RED и diagnostic
+artifacts, а также `.sandbox-jobs` runtime state. Сохранены только два final
+receipt-набора, перечисленные в FINAL/DONE bundle: non-interactive TRX
+`20260916174849359` и current-build interactive release-matrix evidence
+`20260916205731420`. Более ранние пути в исторических записях checkpoint
+являются provenance-notes и больше не обозначают локально сохранённые файлы.

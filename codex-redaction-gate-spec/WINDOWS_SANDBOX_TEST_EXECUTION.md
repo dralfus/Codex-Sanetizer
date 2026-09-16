@@ -10,9 +10,12 @@ The normal repository remains:
 
 `S:\6. DevSecOps\Codex security`
 
-Ticket 355 uses its own writable worktree:
+Завершённый Ticket 355 использовал собственный writable worktree:
 
 `C:\SandboxWorkspaces\CodexRedactionGate-355`
+
+Это исторический путь 355, а не текущий completion gate. Для новых
+UI-sensitive задач создавайте отдельный worktree и новый evidence contract.
 
 Do not copy the repository with `robocopy` for routine test runs and do not run
 the full UI-sensitive suite on the main desktop.
@@ -147,8 +150,9 @@ It excludes only NUnit tests marked `interactive-fixture`: those methods
 instantiate the reference-composer WinForms fixture, persistent fixture host,
 or interactive release runner. The script writes a timestamped TRX result under
 `artifacts\non-interactive`, fails when the TRX is absent, and fails when its
-reported total is zero. It is not Sandbox acceptance, release-matrix evidence,
-or Ticket 355 completion evidence.
+reported total is zero. It is development feedback, а не generic
+interactive/release evidence. Ticket 355 закрыт отдельным сохранённым local
+non-interactive receipt и current-build interactive release-matrix receipt.
 
 ## Network and NuGet
 

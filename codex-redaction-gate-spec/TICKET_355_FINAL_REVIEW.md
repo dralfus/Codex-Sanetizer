@@ -68,3 +68,14 @@ filter `ReferenceComposerReleaseAcceptance_RunsFullMatrixTwice`, `ExitCode=0`,
 `InteractiveHostForegroundReady=true`, lease был consumed до запуска `dotnet`.
 Лог сообщает `1 passed, 0 failed`. Это focused Sandbox GREEN evidence, но оно
 не устраняет High lease-session defect выше и не делает Ticket 355 DONE.
+
+## Closure note (2026-09-16)
+
+Этот документ сохраняет scoped review от 2026-09-14 как исторический record.
+Позднее coordinator принял Ticket 355 по отдельному complete evidence bundle:
+independent final review `SPEC PASS` / `CODE_QUALITY PASS`, local
+non-interactive receipt `1974/1974` и current-build local interactive
+release-matrix receipt `1/1`. Исторический Sandbox defect не является
+completion requirement для одобренного local interactive channel. Авторитетный
+статус и exact identities находятся в `TICKET_355_CHECKPOINT.md` и
+`tickets.md`.

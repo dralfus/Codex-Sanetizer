@@ -49,7 +49,8 @@ production access (or its session operation) is unavailable. It must produce
 one raw-free blocked terminal outcome, no write, no replay, and no passed
 release scenario.
 
-All reference scenarios run twice in Windows Sandbox and prove cleanup,
+All reference scenarios run twice in an authorized interactive acceptance
+channel and prove cleanup,
 multiline formatting, sanitized confirmation writes, cancellation,
 target-change blocking, and terminal replay failures.
 
@@ -72,7 +73,9 @@ statuses:
 write, no replay, and no publishable release scenario. The suite may succeed
 only when every normal scenario is `passed` and both negative-control runs are
 `expected_blocked`; evidence publication includes only proof-eligible normal
-scenarios.
+scenarios. The final Ticket 355 run used the approved local interactive
+ReferenceComposer channel; the Sandbox worker remains a separate historical
+execution channel.
 
 ## Related edit-loop and delivery rules
 

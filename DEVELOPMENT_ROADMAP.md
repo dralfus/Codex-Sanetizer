@@ -1,6 +1,6 @@
 # Ближайший план разработки Code Sanitizer
 
-**Актуально на:** 2026-08-27
+**Актуально на:** 2026-09-16
 **Назначение:** сохранить историю построенного prompt-защитного пути и показать
 текущий путь к доказуемой, устойчивой архитектуре до расширения защиты файлов.
 
@@ -35,7 +35,7 @@ write/replay показали, что внутренняя реализация 
 
 ## Текущий источник истины
 
-Задачи **351**, **352**, **353**, **361** и **363** закрыты на требуемом для них уровне evidence. Для 352
+Задачи **351**, **352**, **353**, **354**, **355**, **361** и **363** закрыты на требуемом для них уровне evidence. Для 352
 установленный кандидат `0.1.20260826.t1633+f7dd69d` сохранил raw-free
 `reproduced_red`: одно нажатие `Ctrl+Enter` было подавлено, canary дошёл до
 `send_observed` и `transaction_started`, а затем завершился fail-closed без
@@ -49,6 +49,11 @@ Reviewer вернул `SPEC: PASS` и `CODE_QUALITY: PASS`, Verifier — `ACCEPT
 full suite `1933/1933`. Live/installed OpenAI Desktop в 353 не проверялся и
 production-keyboard claim не делается. Safety-gates **361** и **363** закрыты;
 следующая задача — **354**.
+
+**355 завершён:** reference acceptance прошёл независимый final review
+(`SPEC PASS`, `CODE_QUALITY PASS`), local non-interactive receipt `1974/1974`
+и current-build local interactive release matrix `1/1`. Reference proof не
+выдаётся за installed/live OpenAI Desktop proof.
 
 **348 не является следующей задачей:** это итоговый umbrella-тикет, который
 можно закрыть только после convergence-цепочки и всех корректирующих gates.
@@ -90,8 +95,8 @@ flowchart TD
     S353["[x] 353\nProtectedComposerSession\nlocally_verified"]
     C363["[x] 363\nПолный clipboard snapshot/restore"]
     T354["[x] 354\nProtectedSendTransaction\nрядом с legacy"]
-    R355["[>] 355\nReference через production UIA"]
-    P356["[ ] 356\nProduction keyboard migration"]
+    R355["[x] 355\nReference через production UIA"]
+    P356["[>] 356\nProduction keyboard migration"]
     G357["[ ] 357\nEvidence-gated installer/release"]
     X358["[ ] 358\nУдалить legacy и закрыть 348"]
     R314["[~] 314\nБезопасный первый mouse Send"]
@@ -218,8 +223,8 @@ candidate и проверяется тем же release gate.
 | 4 | **361** `[x]` | Immutable canary-admission token передаётся из callback classification в execution; stale token завершается fail-closed без перехода в normal Send. | 351; после 353 |
 | 5 | **363** `[x]` | Полный Windows clipboard сохраняется и восстанавливается через исправленный session/STA boundary, включая non-text formats и locked clipboard. | 353 |
 | 6 | **354** `[x]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. Долг: bounded edit-loop должен быть закрыт отдельным linked follow-up, не в 356 по умолчанию. | 353; safety-gates 361 и 363 закрыты |
-| 7 | **355** `[>]` | Reference composer использует production `NativeVerifiedComposerTextAccess`, а не прямую запись в fixture TextBox; typed evidence level исключает выдачу reference proof за installed/live proof. | 354 |
-| 8 | **356** `[ ]` | Production keyboard Send переведён на transaction; canary 352 становится зелёным без изменения исходного assertion. | 355 |
+| 7 | **355** `[x]` | Reference composer использует production `NativeVerifiedComposerTextAccess`, а не прямую запись в fixture TextBox; reference acceptance завершён независимым review, non-interactive `1974/1974` и interactive matrix `1/1`. | 354 |
+| 8 | **356** `[>]` | Production keyboard Send переведён на transaction; canary 352 становится зелёным без изменения исходного assertion. | 355 |
 | 9 | **357** `[ ]` | Installer и release claim принимают только совпадающее deterministic/reference/live evidence. | 356 |
 | 10 | **358** `[ ]` | Legacy state owners удалены; широкий host и дублирующая protected-Send машина исчезли; 348 повторно закрыт. | 351-357 |
 | 11 | **348** `[ ]` | Финально закрыть umbrella-тикет только со ссылками на все доказательства 351-358 и корректирующие gates. | 352-358, 361, 363 |
@@ -260,7 +265,8 @@ production state machine.
 | 2026-08-31 | **361** | Immutable `ResidentCanaryAdmission` передаётся из реальной callback classification через execution context и protected-send pipeline; stale admission завершает gesture raw-free без normal runner. | `[x]` RED reproduction normal runner `1` до исправления; Reviewer `SPEC/CODE_QUALITY: PASS`; focused `1/1`, canary `24/24`, full suite `1934/1934`; Verifier `ACCEPTED`; live Windows hook `NOT_RUN` |
 | 2026-08-31 | **363** | Bounded composer-access operation сохраняет полный `IDataObject`; общая production-shaped keyboard fallback ветка восстанавливает clipboard с двумя попытками и typed raw-free failure. Reference composer явно injects fixture boundary, не меняя production default. | `[x]` RED format/exception/reference-fixture reproductions; Reviewer `SPEC/CODE_QUALITY: PASS`; clipboard/session `35/35`, reference integration `1/1`, reference matrix `11/11`, full suite `1946/1946`; Verifier `ACCEPTED`; live clipboard/STA `NOT_RUN` |
 | 2026-09-03 | **354** | Deterministic `ProtectedSendTransaction` принят как reference-only owner; production path остаётся legacy до 356. | `[x]` implementation `3c5e5682`, ticket checkpoint `8a6301e`; reported targeted `18/18`, full suite `1964/1964`. Bounded edit-loop остаётся явным follow-up. |
-| 2026-09-03 | **355** | Уточнён обязательный bridge: reference acceptance должен идти через `ProtectedComposerSession` и `NativeVerifiedComposerTextAccess`, а report обязан нести typed reference production-access evidence level. | `[>]` RED: writable fixture + unavailable production access must fail closed; тесты только через Windows Sandbox worker. |
+| 2026-09-03 | **355** | Уточнён обязательный bridge: reference acceptance должен идти через `ProtectedComposerSession` и `NativeVerifiedComposerTextAccess`, а report обязан нести typed reference production-access evidence level. | `[history]` исходный RED: writable fixture + unavailable production access must fail closed. |
+| 2026-09-16 | **355** | Bridge завершён: canonical transaction trace owner, production-shaped reference access и fail-closed replay observation. | `[x]` final review PASS; non-interactive `1974/1974`; current-build local interactive release matrix `1/1`. |
 
 Review-исправления 351 завершены в тех же границах задачи: live/released
 evidence теперь требует внешнего build/target binding, history защищается от
@@ -269,8 +275,8 @@ evidence теперь требует внешнего build/target binding, hist
 `artifacts/evidence/351.json`, публикуется только после сборки кандидата и
 сравнивается с exact source/build/executable/validator binding. Отсутствие,
 устаревание или рассогласование этой записи останавливает release.
-Задачи 353, 354, 361 и 363 закрыты на уровне `locally_verified`. Текущий кодовый
-шаг — 355, после него выполняются 356-358. Установленная
+Задачи 353, 354, 355, 361 и 363 закрыты на соответствующем уровне evidence. Текущий кодовый
+шаг — 356, после него выполняются 357-358. Установленная
 production-клавиатура по-прежнему не объявляется исправленной до canary-green
 в 356.
 
@@ -301,8 +307,8 @@ production-клавиатура по-прежнему не объявляетс�
 
 ## Что делать прямо сейчас
 
-**Текущий активный тикет — 355.** Выполнить **355-356** маленькими последовательными срезами; после каждого
-   запускать нижние уровни evidence через Windows Sandbox, а после 356 превратить canary 352 в зелёный
+**Текущий активный тикет — 356.** Выполнить production keyboard migration
+маленькими последовательными срезами; после 356 превратить canary 352 в зелёный
    на том же production seam.
 
 Далее выполнить **357-358**, собрать совпадающий installer и только затем повторно
