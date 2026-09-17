@@ -1,110 +1,43 @@
 # Ближайший план разработки Code Sanitizer
 
 **Актуально на:** 2026-09-16
-**Назначение:** сохранить историю построенного prompt-защитного пути и показать
-текущий путь к доказуемой, устойчивой архитектуре до расширения защиты файлов.
-
-## Как читать план
-
-| Метка | Значение |
-|---|---|
-| `[x]` | Работа завершена и является фундаментом для следующих шагов. |
-| `[>]` | Ближайшая выполняемая работа. |
-| `[~]` | Может идти после указанной зависимости, но не является текущим критическим путём. |
-| `[!]` | Внешняя блокировка: разработка не устранит её без подтверждённой точки интеграции. |
-
-## Что уже построено
-
-Основной prompt-защитный фундамент построен как единый вертикальный путь:
-
-- [x] Атомарные resident snapshots и fail-closed маршрутизация выбранных
-  профилей: 273, 274, 251, 253, 265–267, 277–278.
-- [x] Коррелированная операция protected Send, единый владелец overlay,
-  revalidation target и raw-free trace: 297, 301–306, 310–313, 315–322.
-- [x] Автоматический onboarding, operational lifecycle, журнал, readiness и
-  разделение resident admission от release/CI evidence: 325–340.
-- [x] Статус честно разделяет `composer_protected` и
-  `project_files_protected`; при отсутствии реальной точки ingress файлы
-  остаются `project_file_ingress_unsupported`.
-
-Ручные проверки подтвердили перехват и замену, но повторяющиеся регрессии
-write/replay показали, что внутренняя реализация пока не имеет одного глубокого
-владельца транзакции и production-эквивалентного красно-зелёного acceptance.
-Поэтому старые закрытые задачи остаются историей построенного фундамента, а 348
-архитектурно переоткрыт до завершения нового convergence-пути 351-358.
-
-## Текущий источник истины
-
-Задачи **351**, **352**, **353**, **354**, **355**, **361** и **363** закрыты на требуемом для них уровне evidence. Для 352
-установленный кандидат `0.1.20260826.t1633+f7dd69d` сохранил raw-free
-`reproduced_red`: одно нажатие `Ctrl+Enter` было подавлено, canary дошёл до
-`send_observed` и `transaction_started`, а затем завершился fail-closed без
-второго Send.
-
-Задача **353** получила `DONE` на уровне `locally_verified`: `AutomationElement`
-переполучается внутри каждой STA-операции, started action не может оставить
-поздний write/replay после terminal return, а `replay_unavailable` сохраняется
-отдельно от `replay_indeterminate` во всех локальных проекциях. Независимый
-Reviewer вернул `SPEC: PASS` и `CODE_QUALITY: PASS`, Verifier — `ACCEPTED` при
-full suite `1933/1933`. Live/installed OpenAI Desktop в 353 не проверялся и
-production-keyboard claim не делается. Safety-gates **361** и **363** закрыты;
-следующая задача — **354**.
-
-**355 завершён:** reference acceptance прошёл независимый final review
-(`SPEC PASS`, `CODE_QUALITY PASS`), local non-interactive receipt `1974/1974`
-и current-build local interactive release matrix `1/1`. Reference proof не
-выдаётся за installed/live OpenAI Desktop proof.
-
-**348 не является следующей задачей:** это итоговый umbrella-тикет, который
-можно закрыть только после convergence-цепочки и всех корректирующих gates.
-
-### Исправления инструментирования и canary (359-361)
-
-Три корректирующих тикета добавлены поверх истории и не меняют критический
-порядок основного convergence-пути:
-
-| Тикет | Статус | Результат | Связь с текущим gate |
-|---:|---|---|---|
-| **359** | `[x]` | Release build и restore используют один проверяемый resolver .NET 10 SDK; runtime-only `dotnet.exe` не принимается как SDK. | Независимый prerequisite для tooling |
-| **360** | `[x]` | Restore wrapper явно сообщает состояние NuGet/TLS и сохраняет включённую проверку подписей. | Не меняет 352; live restore зависит от сети |
-| **361** | `[x]` | Immutable typed canary-admission token передаётся из callback classification в execution; stale token завершается fail-closed без normal Send. | Закрыт после 353; safety-gate 363 также закрыт, текущая работа — 354 |
-
-`359-361` закрыты. Установленный `reproduced_red` для 352 уже получен и не
-подменяет корректирующие проверки 353, 361 и 363.
+**Назначение:** краткая карта работ до устойчивой keyboard prompt-защиты и
+последующего расширения на файлы. Подробная история, evidence и отчёты о review
+хранятся в `tickets.md`.
 
 ## Карта зависимостей
 
 ```mermaid
 flowchart TD
     Done["[x] Prompt-защитный фундамент\n273, 297-340"]
-    R341["[x] 341\nЕдиный глубокий resident runtime"]
-    R342["[x] 342\nTray = проекция resident state"]
-    R345["[x] 345\nResident workflow coordinator"]
-    R343["[x] 343\nРазделить profile и input adapters"]
-    T344["[x] 344\nИзолировать suite от установленного tray"]
-    R346["[x] 346\nImmutable admission evidence\nдо native callback"]
-    A347["[x] 347\nАтомарный resident workflow transaction"]
-    A348["[ ] 348 переоткрыт\nФинальное закрытие после 351-358"]
-    A349["[x] 349\nSetup/recovery race-матрица"]
-    A350["[x] 350\nЕдиная OpenAI Desktop identity\nstable compatibility / transient target"]
-    E351["[x] 351\nКонтракт уровней доказательств"]
-    C352["[x] 352\nResident live canary\ninstalled red evidence recorded"]
-    T359["[x] 359\nDeterministic .NET 10 SDK resolver"]
-    T360["[x] 360\nSafe NuGet restore diagnosis"]
-    T361["[x] 361\nImmutable canary admission\nclassification -> execution"]
-    S353["[x] 353\nProtectedComposerSession\nlocally_verified"]
-    C363["[x] 363\nПолный clipboard snapshot/restore"]
-    T354["[x] 354\nProtectedSendTransaction\nрядом с legacy"]
-    R355["[x] 355\nReference через production UIA"]
-    P356["[>] 356\nProduction keyboard migration"]
-    G357["[ ] 357\nEvidence-gated installer/release"]
-    X358["[ ] 358\nУдалить legacy и закрыть 348"]
-    R314["[~] 314\nБезопасный первый mouse Send"]
+    R341["[x] 341\nЕдиный глубокий resident runtime\nC: 78/100 ■■■■■■■■□□\nD: 70/100 ■■■■■■■□□□"]
+    R342["[x] 342\nTray = проекция resident state\nC: 54/100 ■■■■■□□□□□\nD: 45/100 ■■■■□□□□□□"]
+    R345["[x] 345\nResident workflow coordinator\nC: 76/100 ■■■■■■■■□□\nD: 70/100 ■■■■■■■□□□"]
+    R343["[x] 343\nРазделить profile и input adapters\nC: 71/100 ■■■■■■■□□□\nD: 65/100 ■■■■■■■□□□"]
+    T344["[x] 344\nИзолировать suite от установленного tray\nC: 42/100 ■■■■□□□□□□\nD: 35/100 ■■■■□□□□□□"]
+    R346["[x] 346\nImmutable admission evidence\nдо native callback\nC: 68/100 ■■■■■■■□□□\nD: 60/100 ■■■■■■□□□□"]
+    A347["[x] 347\nАтомарный resident workflow transaction\nC: 86/100 ■■■■■■■■■□\nD: 82/100 ■■■■■■■■□□"]
+    A348["[ ] 348\nФинальное acceptance-закрытие\nC: 60/100 ■■■■■■□□□□\nD: 72/100 ■■■■■■■□□□"]
+    A349["[x] 349\nSetup/recovery race-матрица\nC: 76/100 ■■■■■■■■□□\nD: 68/100 ■■■■■■■□□□"]
+    A350["[x] 350\nЕдиная OpenAI Desktop identity\nC: 72/100 ■■■■■■■□□□\nD: 66/100 ■■■■■■■□□□"]
+    E351["[x] 351\nКонтракт уровней доказательств\nC: 76/100 ■■■■■■■■□□\nD: 72/100 ■■■■■■■□□□"]
+    C352["[x] 352\nResident live canary\ninstalled red evidence\nC: 70/100 ■■■■■■■□□□\nD: 80/100 ■■■■■■■■□□"]
+    T359["[x] 359\nDeterministic .NET 10 SDK resolver\nC: 45/100 ■■■■■□□□□□\nD: 32/100 ■■■□□□□□□□"]
+    T360["[x] 360\nSafe NuGet restore diagnosis\nC: 41/100 ■■■■□□□□□□\nD: 30/100 ■■■□□□□□□□"]
+    T361["[x] 361\nImmutable canary admission\nclassification -> execution\nC: 73/100 ■■■■■■■□□□\nD: 67/100 ■■■■■■■□□□"]
+    S353["[x] 353\nProtectedComposerSession\nlocally_verified\nC: 83/100 ■■■■■■■■□□\nD: 78/100 ■■■■■■■■□□"]
+    C363["[x] 363\nПолный clipboard snapshot/restore\nC: 69/100 ■■■■■■■□□□\nD: 62/100 ■■■■■■□□□□"]
+    T354["[x] 354\nProtectedSendTransaction\nрядом с legacy\nC: 86/100 ■■■■■■■■■□\nD: 84/100 ■■■■■■■■□□"]
+    R355["[x] 355\nReference через production UIA\nC: 96/100 ■■■■■■■■■■\nD: 100/100 ■■■■■■■■■■"]
+    P356["[>] 356\nProduction keyboard migration\nC: 98/100 ■■■■■■■■■■\nD: 100/100 ■■■■■■■■■■"]
+    G357["[ ] 357\nEvidence-gated installer/release\nC: 82/100 ■■■■■■■■□□\nD: 75/100 ■■■■■■■■□□"]
+    X358["[ ] 358\nУдалить legacy и закрыть 348\nC: 88/100 ■■■■■■■■■□\nD: 90/100 ■■■■■■■■■□"]
+    R314["[~] 314\nБезопасный первый mouse Send\nC: 93/100 ■■■■■■■■■□\nD: 96/100 ■■■■■■■■■■"]
     Keyboard["Клавиатурная prompt-защита\nповторная release-приёмка"]
-    R323["[x] 323\nOpaque compatibility fingerprints"]
-    R324["[x] 324\nКанонический fixture discovery"]
-    Ingress["[!] 283\nПодтвердить реальный pre-cloud ingress\nдля проектных файлов"]
-    Files["[!] 286\nИсключение .env и других файлов\nиз cloud context"]
+    R323["[x] 323\nOpaque compatibility fingerprints\nC: 35/100 ■■■■□□□□□□\nD: 28/100 ■■■□□□□□□□"]
+    R324["[x] 324\nКанонический fixture discovery\nC: 45/100 ■■■■■□□□□□\nD: 38/100 ■■■■□□□□□□"]
+    Ingress["[!] 283\nПодтвердить pre-cloud ingress\nдля проектных файлов\nC: 100/100 ■■■■■■■■■■\nD: 100/100 ■■■■■■■■■■"]
+    Files["[!] 286\nИсключение .env и других файлов\nиз cloud context\nC: 78/100 ■■■■■■■■□□\nD: 75/100 ■■■■■■■■□□"]
 
     Done --> R341
     R341 --> R342
@@ -145,189 +78,73 @@ flowchart TD
     X358 -. "до расширения\nfile ingress" .-> Ingress
     R324 --> Ingress
     Ingress --> Files
-
-    A347 -. "history only: initial 348 path" .-> A348
-    A348 -. "history only: convergence umbrella" .-> E351
 ```
 
-Сплошные стрелки показывают текущие зависимости. Пунктирные стрелки
-сохранены только для истории и не означают порядок выполнения.
+Сплошные стрелки — текущие зависимости. Пунктирные — исторический либо
+не-критический путь.
+
+## Как читать план
+
+| Метка | Значение |
+|---|---|
+| `[x]` | Работа принята на указанном в ticket уровне evidence. |
+| `[>]` | Единственный текущий критический ticket. |
+| `[ ]` | Следующая работа после выполненных зависимостей. |
+| `[~]` | Отдельная ветка, не блокирующая основной путь. |
+| `[!]` | Внешняя блокировка: разработка не устранит её без подтверждённой точки интеграции. |
+
+Закрытая задача не равна production claim: уровень evidence в `tickets.md`
+определяет, доказан ли deterministic, reference или installed/live результат.
+
+## Сложность и затраченная мощность
+
+Карта показывает две независимые шкалы от `1` до `100`. Каждая полоса состоит
+из десяти квадратов и округляет значение для быстрого сравнения.
+
+| Шкала | Вопрос, на который отвечает |
+|---|---|
+| `C` — техническая сложность | Насколько трудны архитектура, изменения кода и число взаимодействующих границ? |
+| `D` — стоимость доставки | Сколько фактической мощности потребовала закрытая задача или, для открытой, вероятно потребует: исследования, fix/review-раунды, native/external зависимости, ручная приёмка и неопределённость среды? |
+
+Для закрытых ticket `D` — ретроспективный факт нагрузки по evidence, а не
+выдуманное число токенов. Для открытых `D` — прогноз. Точные исторические
+токены не отображаются: они не записывались единообразно и создали бы ложную
+точность.
+
+Шкала `1–20` означает локальную механическую работу; `21–40` — ограниченный
+компонент; `41–60` — несколько файлов и целевую проверку; `61–80` — сквозную
+интеграцию; `81–100` — native/Windows, security, ручную приёмку или внешнюю
+инфраструктуру.
+
+`P50` и `P90` ниже — прогноз числа пятичасовых рабочих лимит-циклов. `P50`
+означает обычный сценарий, `P90` — реалистичный плохой сценарий. Это бюджет
+мощности, а не календарное обещание: лимит, модель, доступность Sandbox и
+ручной evidence меняют длительность.
+
+Калибровка уже выполненных работ: 354 получила `C=86`, но `D=84`, потому что
+оставалась в детерминированном reference-контуре. 355 получила `C=96` и
+`D=100`: production-shaped UIA, native capture, interactive acceptance,
+Sandbox/receipt-инфраструктура и несколько независимых доказательных каналов
+сделали её значительно тяжелее в доставке, чем показывает одна шкала
+сложности.
 
 ## Рекомендуемая последовательность
 
-### Этап 1. Закрепить resident runtime
+| Порядок | Ticket | Цель | C | D | Бюджет лимит-циклов |
+|---:|---|---|---:|---:|---|
+| 1 | **356** `[>]` | Перевести production keyboard Send на `ProtectedSendTransaction`; сохранить исходный canary 352 и сделать его зелёным на том же seam. | 98 | 100 | `P50: 8–16`, `P90: 16–32`, высокая неопределённость |
+| 2 | **357** `[ ]` | Разрешать installer/release claim только при совпадающих deterministic, reference и installed evidence. | 82 | 75 | `P50: 3–6`, `P90: 7–12` |
+| 3 | **358** `[ ]` | Удалить legacy owner после миграции и доказать отсутствие второй active side-effect машины. | 88 | 90 | `P50: 5–10`, `P90: 12–20` |
+| 4 | **348** `[ ]` | Повторно закрыть umbrella-ticket ссылками на полный набор evidence. | 60 | 72 | `P50: 2–4`, `P90: 5–8` |
 
-| Очерёдность | Тикет | Результат | Зависимости |
-|---:|---|---|---|
-| 1 | **341** `[x]` | Tray использует компактный UI-порт и immutable snapshot; workflow coordinator использует внутренний workflow-порт. Тесты покрывают failed candidate, stale callback и parallel reload без mixed-state. | 340 завершён |
-| 2 | **345** `[x]` | Coordinator владеет setup, retry, local recovery и readiness; acceptance-матрица покрывает success, cancellation, stale candidate, rollback и recovery failure. | 341 |
-| 3 | **342** `[x]` | Tray хранит только UI-порт, отображает published state и отправляет явные intents. | 345 |
-| 4 | **343** `[x]` | Profile verification/storage отделены от low-level keyboard/pointer input adapter; status и live-contract arm собираются до запуска hook. | 341 |
-| параллельно | **344** `[x]` | Полный automated suite изолирован от установленного tray через уникальные per-test instance IDs; `1726/1726` прошли при запущенном installed tray. | Нет |
-| 5 | **346** `[x]` | Resident публикует immutable admission evidence до callback; callback не вызывает provider и не выполняет I/O. | 343 |
+Отдельные ветки не начинаются раньше своих зависимостей:
 
-**Контрольная точка после этапа 1:** автоматические проверки пройдены:
-`1759/1759`, `--self-test` и `--product-smoke`. Для ручной приёмки собран
-installer `0.1.20260822.t1325` из commit `3622ef22`; остаётся установить его и
-выполнить ограниченную проверку **клавиатурной** отправки в выбранном OpenAI
-Desktop composer.
+| Ticket | Условие старта | C | D | Бюджет лимит-циклов |
+|---|---|---:|---:|---|
+| **314** `[~]` | После устойчивой keyboard release-приёмки; mouse Send не включать в capability claim раньше. | 93 | 96 | `P50: 8–16`, `P90: 16–32` |
+| **283** `[!]` | Нужна подтверждённая supported pre-cloud точка ingress в Codex/ChatGPT Desktop. | 100 | 100 | Не прогнозируется до нахождения точки интеграции |
+| **286** `[!]` | Только после 283: enforcement для `.env` и произвольных файлов. | 78 | 75 | `P50: 4–8`, `P90: 10–16` после 283 |
 
-### Этап 1.5. Углубить уже построенный resident путь
-
-Этот этап не меняет модель защиты и не добавляет новый способ отправки. Он
-уменьшает количество мест, где могут появиться смешанные решения о состоянии,
-перед началом file-ingress работ.
-
-Таблица ниже сохранена как историческая запись этапа 1.5. Текущий порядок
-определяется картой и таблицей этапа 1.6; строка 348 здесь больше не является
-текущим acceptance gate.
-
-| Очерёдность | Тикет | Результат | Зависимости |
-|---:|---|---|---|
-| 1 | **347** `[x]` | Activation, profile commit и terminal publication линеаризованы; race-матрица 349 исключает mixed-state при cancellation/newer operation. Предыдущее завершение сохранено в `tickets.md` как история. | 341, 342, 345, 346 |
-| 2 | **348** `[history]` acceptance pending | Историческая запись первичного acceptance gate; финальное закрытие теперь выполняется только после цепочки 351-358. | 347, 323, 324, 346 |
-| 3 | **349** `[x]` | Детерминированно доказаны setup/recovery cancellation, newer operation и rollback failure; 347 повторно закрыт, а 348 ждёт installer-matched release proof. | 347 |
-| 4 | **350** `[x]` | Store-пакет `OpenAI.Codex` с `ChatGPT.exe` и окном Codex представлен одной стабильной identity; handle окна и UIA runtime ID отделены в transient target и не инвалидируют профиль после перезапуска. | 323, 324, 346, 349 |
-
-**Gate этапа 1.5:** до начала `283`/`286` и нового file-ingress кода должны быть
-зелёными полный automated suite, `--self-test`, `--product-smoke` и
-детерминированная reference-composer матрица. `314` остаётся отдельной задачей
-для mouse Send и не является условием запуска 347/348.
-
-**Текущее доказательство после 350:** follow-up identity hardening прошёл
-focused identity tests `30/30`, полный suite `1898/1898` и Release build без
-предупреждений и ошибок. Stable identity теперь требует trusted package family
-`OpenAI.Codex_2p2nqsd0c76g` и canonical OpenAI Desktop branding; transient
-target diagnostics не сохраняются. `codex-desktop` и `chatgpt-desktop` остаются
-раздельными operational selectors поверх общей stable identity. Installer
-`0.1.20260822.t1325` остаётся в истории как предыдущий candidate и не содержит
-ремонт 350; для 351 текущая evidence-запись публикуется после сборки
-candidate и проверяется тем же release gate.
-
-### Этап 1.6. Сделать protected Send доказуемым глубоким модулем
-
-Этот этап нужен для сходимости будущих исправлений. Сначала появляется средство,
-которое воспроизводит реальный установленный путь на текущей архитектуре. Только
-после этого меняется архитектура. Так мы не меняем одновременно измерительный
-прибор и сам механизм.
-
-Ниже находится текущая последовательность выполнения. `[>]` означает единственный
-активный gate; `[ ]` — следующая работа после успешного gate. 348 намеренно
-перенесён в конец как финальная проверка сходимости.
-
-| Очерёдность | Тикет | Результат | Зависимости |
-|---:|---|---|---|
-| 1 | **351** `[x]` | Единая шкала `proposed -> reproduced_red -> implemented -> locally_verified -> live_verified -> released`; machine-readable current evidence record и fail-closed release gate запрещают подменять реальное доказательство синтетическим smoke. | Нет |
-| 2 | **352** `[x]` | Resident-owned canary на установленном кандидате сохранил raw-free `reproduced_red` с точной installed build; одно нажатие было подавлено, terminal failure доказан. | 351 |
-| 3 | **353** `[x]` | `ProtectedComposerSession` переполучает UIA внутри каждой STA-операции, закрывает late-side-effect timeout и сохраняет typed replay distinction для reference/Windows boundaries. | 352 |
-| 4 | **361** `[x]` | Immutable canary-admission token передаётся из callback classification в execution; stale token завершается fail-closed без перехода в normal Send. | 351; после 353 |
-| 5 | **363** `[x]` | Полный Windows clipboard сохраняется и восстанавливается через исправленный session/STA boundary, включая non-text formats и locked clipboard. | 353 |
-| 6 | **354** `[x]` | `ProtectedSendTransaction` становится единственным владельцем admitted attempt, side effect и terminal publication; сначала рядом с legacy. Долг: bounded edit-loop должен быть закрыт отдельным linked follow-up, не в 356 по умолчанию. | 353; safety-gates 361 и 363 закрыты |
-| 7 | **355** `[x]` | Reference composer использует production `NativeVerifiedComposerTextAccess`, а не прямую запись в fixture TextBox; reference acceptance завершён независимым review, non-interactive `1974/1974` и interactive matrix `1/1`. | 354 |
-| 8 | **356** `[>]` | Production keyboard Send переведён на transaction; canary 352 становится зелёным без изменения исходного assertion. | 355 |
-| 9 | **357** `[ ]` | Installer и release claim принимают только совпадающее deterministic/reference/live evidence. | 356 |
-| 10 | **358** `[ ]` | Legacy state owners удалены; широкий host и дублирующая protected-Send машина исчезли; 348 повторно закрыт. | 351-357 |
-| 11 | **348** `[ ]` | Финально закрыть umbrella-тикет только со ссылками на все доказательства 351-358 и корректирующие gates. | 352-358, 361, 363 |
-
-**Gate этапа 1.6:** полный suite и smoke необходимы, но недостаточны. Для одной
-и той же сборки должны пройти transaction matrix, reference composer через
-production access adapter и installed resident canary. `sent_safely` означает
-локально проверенную sanitized-запись, успешную инъекцию replay и terminal
-publication; это не утверждение о получении сообщения облаком.
-
-До завершения 352 новые догадочные правки write/replay не выполняются. Если
-canary не умеет воспроизвести ошибку, исправляется canary или диагностика, а не
-production state machine.
-
-### Журнал выполнения этапа 1.6 (добавлено 2026-08-26)
-
-Этот журнал добавлен поверх исходной карты и не заменяет и не удаляет старые
-задачи, связи или исторические отметки.
-
-| Дата | Тикет | Добавлено в доказательство | Результат |
-|---|---:|---|---|
-| 2026-08-26 | **351** | Typed evidence-state contract, schema и transition history, raw-free сериализация, внешняя проверка artifact binding, отдельный validator smoke в release publish. | `[x]` `1909/1909`, contract CLI passed, release publish validator smoke passed |
-| 2026-08-26 | **352** | Следующий новый рабочий пункт: resident-owned canary должен сначала воспроизвести текущий установленный keyboard Send-путь на том же production seam. | `[ ]` реализация не начиналась |
-| 2026-08-26 | **352** | Resident-owned canary, lifecycle, target-generation guard, production UIA/write wiring, overlay trace, raw-free evidence и installer identity sidecar добавлены; ложный green replay запрещён. | `[>]` deterministic `1856/1856`, build и installer smoke прошли; installed red artifact и безопасный production replay ещё не доказаны |
-| 2026-08-26 | **352** | После финальной проверки commit `69a68046` содержит canary и remediation admission поверх `2d99fe2b`; deterministic suite проверен как `1857/1857`. | `[>]` следующая пользовательская операция: rebuilt installed canary с сохранением `reproduced_red`; 353 заблокирована до этого артефакта |
-| 2026-08-26 | **352** | Старый установленный кандидат `0.1.20260826.t1227` воспроизвёл красный дефект: marker прошёл в OpenAI Desktop без overlay. Commit `69a68046` добавляет canary admission до обычной classification и покрыт focused callback-тестами. | `[>]` установить rebuilt candidate из `69a68046` и повторить canary; до этого 352 и 353 остаются заблокированы |
-| 2026-08-26 | **359** | Общий resolver выбирает только host с .NET 10 SDK и используется build/restore entry points. | `[x]` PowerShell syntax, SDK 10.0.400 и release build verified |
-| 2026-08-26 | **360** | Restore wrapper отделяет SDK failure от NuGet/TLS failure и не ослабляет signature validation. | `[x]` `restore_status=passed` в текущей среде; сетевой failure path диагностически покрыт |
-| 2026-08-26 | **361** | Callback admission использует resident armed state; fixture содержит `window_handle`, а trace начинается с обязательных `composer_read` и `sanitized`. | `[x]` focused canary callback test passed; installed 352 acceptance остаётся pending |
-| 2026-08-26 | **352** | UX canary: resident marker автоматически копируется в Windows clipboard после стадии `armed`; при отказе показывается ручной fallback, marker не попадает в журнал или evidence. | `[x]` focused workflow tests `3/3`; installed `reproduced_red` acceptance остаётся pending |
-| 2026-08-26 | **352** | Исправлена потеря installer identity с `+commit` и добавлен raw-free `target_verification_failed` для отказа до capture; второй Send после terminal canary не считается частью той же попытки. | `[x]` exact installed red evidence для `0.1.20260826.t1633+f7dd69d`; следующий кодовый шаг — 353 |
-| 2026-08-27 | **351** | Current evidence record `artifacts/evidence/351.json` имеет machine-discovery contract, публикуется атомарно после сборки кандидата и внешнего verification artifact и проверяется по exact source/build/executable/validator/verification binding; synthetic smoke остаётся diagnostic-only. Bootstrap исправлен: gate проверяет опубликованный candidate, а не удалённый временный путь. | `[x]` focused `26/26`, full suite `1909/1909`, current-record gate passed |
-| 2026-08-27 | **352** | После review убран hidden release-identity gate из resident runtime; canary arm требует compatibility evidence, а неполная build/install identity при публикации сохраняется как raw-free non-advancing `failed/diagnostic` artifact. Complete-identity cancellation также сохраняется как diagnostic. | `[x]` focused canary/workflow `31/31`, full suite `1916/1916`; 352 code slice complete, installed/live green remains owned by 356 |
-| 2026-08-27 | **353** | Независимый review переоткрыл session boundary: durable `AutomationElement` пересекает отдельные STA threads, а доказательная матрица не разделяет STA creation/execution и replay unavailable/partial. | `[>]` текущий ticket; 354 заблокирован до исправления и независимой приёмки |
-| 2026-08-27 | **361** | Review обнаружил разрыв между callback classification и execution: suppressed canary gesture повторно читает mutable canary state и потенциально может перейти в обычный protected Send. | `[ ]` после 353; требуется immutable typed admission token и queued/repeated-Send race evidence |
-| 2026-08-27 | **363** | Полное сохранение Windows clipboard оформлено отдельным session-level safety gate. | `[ ]` после 353 и до production-access/transaction migration |
-| 2026-08-29 | **353** | Session boundary упрощён до реальных seams `IStaExecutionBoundary` и `INativeVerifiedComposerTargetOperations`; UIA target переполучается внутри STA action, pre-start timeout атомарно отменяет запуск, started action ожидается до завершения, а unavailable/indeterminate replay остаются раздельными. | `[x]` Reviewer `SPEC/CODE_QUALITY: PASS`; build clean; targeted `6/6`, `24/24`, `384/384`; full suite `1933/1933`; Verifier `ACCEPTED`; live/installed `NOT_RUN` |
-| 2026-08-31 | **361** | Immutable `ResidentCanaryAdmission` передаётся из реальной callback classification через execution context и protected-send pipeline; stale admission завершает gesture raw-free без normal runner. | `[x]` RED reproduction normal runner `1` до исправления; Reviewer `SPEC/CODE_QUALITY: PASS`; focused `1/1`, canary `24/24`, full suite `1934/1934`; Verifier `ACCEPTED`; live Windows hook `NOT_RUN` |
-| 2026-08-31 | **363** | Bounded composer-access operation сохраняет полный `IDataObject`; общая production-shaped keyboard fallback ветка восстанавливает clipboard с двумя попытками и typed raw-free failure. Reference composer явно injects fixture boundary, не меняя production default. | `[x]` RED format/exception/reference-fixture reproductions; Reviewer `SPEC/CODE_QUALITY: PASS`; clipboard/session `35/35`, reference integration `1/1`, reference matrix `11/11`, full suite `1946/1946`; Verifier `ACCEPTED`; live clipboard/STA `NOT_RUN` |
-| 2026-09-03 | **354** | Deterministic `ProtectedSendTransaction` принят как reference-only owner; production path остаётся legacy до 356. | `[x]` implementation `3c5e5682`, ticket checkpoint `8a6301e`; reported targeted `18/18`, full suite `1964/1964`. Bounded edit-loop остаётся явным follow-up. |
-| 2026-09-03 | **355** | Уточнён обязательный bridge: reference acceptance должен идти через `ProtectedComposerSession` и `NativeVerifiedComposerTextAccess`, а report обязан нести typed reference production-access evidence level. | `[history]` исходный RED: writable fixture + unavailable production access must fail closed. |
-| 2026-09-16 | **355** | Bridge завершён: canonical transaction trace owner, production-shaped reference access и fail-closed replay observation. | `[x]` final review PASS; non-interactive `1974/1974`; current-build local interactive release matrix `1/1`. |
-
-Review-исправления 351 завершены в тех же границах задачи: live/released
-evidence теперь требует внешнего build/target binding, history защищается от
-мутации, а синтетическая contract-проверка явно не считается release proof.
-Следующий слой 351 также закреплён: текущая запись находится в
-`artifacts/evidence/351.json`, публикуется только после сборки кандидата и
-сравнивается с exact source/build/executable/validator binding. Отсутствие,
-устаревание или рассогласование этой записи останавливает release.
-Задачи 353, 354, 355, 361 и 363 закрыты на соответствующем уровне evidence. Текущий кодовый
-шаг — 356, после него выполняются 357-358. Установленная
-production-клавиатура по-прежнему не объявляется исправленной до canary-green
-в 356.
-
-### Этап 2. Закрыть оставшиеся точечные риски prompt-защиты
-
-| Очерёдность | Тикет | Результат | Зависимости |
-|---:|---|---|---|
-| 6 | **314** `[~]` | Первый клик по Send безопасно решается из resident evidence до UIA; нет глобальной блокировки навигации. | Формально 297 и 309 завершены; архитектурно после 346, до keyboard release-приёмки |
-| 7 | **323** `[x]` | Compatibility evidence хранится и сравнивается как явно opaque fingerprint; значения не хешируются повторно. | После keyboard release-приёмки; 346 завершён |
-| 8 | **324** `[x]` | Один канонический fixture для verified ChatGPT discovery; тесты и product smoke используют одну схему evidence. | 323 |
-| 9 | **362** `[ ]` | Замена hostname внутри структурированного `host:/path/` сохраняет суффикс пути; неоднозначный путь блокируется без частичной записи. | 352 |
-
-**Правило до завершения 314:** пользовательский mouse Send не считается
-защищённым и не должен включаться в capability claim. Защищённым путём остаётся
-только проверенная клавиатурная комбинация.
-
-### Этап 3. Отдельная ветка: защита файлов
-
-| Статус | Тикет | Что требуется на самом деле |
-|---|---|---|
-| `[!]` | **283** | Не «дописать broker», а найти и подтвердить реальную supported pre-cloud точку, через которую Codex/ChatGPT Desktop получает project files, attachments и file-derived tool output. Альтернатива: согласованный локальный gateway, который действительно владеет этими операциями. |
-| `[!]` | **286** | После 283 добавить UI и enforcement для `.env` и произвольных файлов, исключаемых из cloud context. |
-
-`283` заблокирован не кодом проекта, а отсутствием подтверждённой интеграционной
-точки в Windows Codex/ChatGPT Desktop. До её появления сохраняется честный
-статус `project_file_ingress_unsupported`; локальный broker не следует выдавать
-за защиту реальных project reads.
-
-## Что делать прямо сейчас
-
-**Текущий активный тикет — 356.** Выполнить production keyboard migration
-маленькими последовательными срезами; после 356 превратить canary 352 в зелёный
-   на том же production seam.
-
-Далее выполнить **357-358**, собрать совпадающий installer и только затем повторно
-   закрыть 348 и возобновить расширение file ingress.
-
-## Границы, которые нельзя размывать
-
-- Tray не принимает решение, защищена ли отправка: он только отображает
-  published resident state.
-- Ошибка, неопределённость или устаревшее состояние выбранного target всегда
-  блокируют исходный Send; они не создают дополнительный pass-through путь.
-- Защита composer не равна защите файлов.
-- До реального ingress seam нельзя обещать, что Codex/ChatGPT Desktop не
-  отправит в облако содержимое файлов проекта.
-- Каждая новая задача должна определять владельца состояния, fail-closed
-  состояние, допустимые переходы и детерминированное доказательство.
-- `Implemented` не означает `fixed`: без красного воспроизведения и зелёного
-  результата на требуемом уровне изменение остаётся неподтверждённым.
-- Reference fixture не может подменять production adapter прямой записью в
-  control; такой тест не является доказательством UIA/write/replay пути.
-- State-machine и Windows UIA adapter меняются отдельными срезами, чтобы у
-  регрессии оставался один вероятный владелец.
+До завершения 356 production keyboard protection не получает новый claim
+`live_verified`; status и installer должны оставаться честными относительно
+фактического уровня evidence.
