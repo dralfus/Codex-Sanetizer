@@ -10,6 +10,34 @@ internal enum PointerTargetVerdict
 }
 
 /// <summary>
+/// Canonical window-handle key shared by publication and resolution so a
+/// non-padded handle and a padded handle address the same entry. The formatting
+/// matches <see cref="NativeSubmitTargetIdentity"/> ("X" of the window-handle
+/// Int64), which is how production identities carry the handle.
+/// </summary>
+internal static class PointerTargetEvidenceKey
+{
+    public static string FromHandle(IntPtr windowHandle) =>
+        windowHandle.ToInt64().ToString("X");
+
+    public static string FromHandle(string? windowHandle)
+    {
+        var trimmed = (windowHandle ?? string.Empty).Trim();
+        if (trimmed.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var digits = trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? trimmed[2..]
+            : trimmed;
+        return long.TryParse(digits, System.Globalization.NumberStyles.HexNumber, null, out var parsed)
+            ? parsed.ToString("X")
+            : trimmed.ToUpperInvariant();
+    }
+}
+
+/// <summary>
 /// Resident, precomputed pointer-target evidence (ticket 314). Published
 /// out-of-band when target discovery runs; the low-level callback resolves
 /// only by bounded lookup, so it never waits for live UI Automation.
@@ -30,38 +58,31 @@ internal sealed class PointerTargetEvidenceStore
             throw new ArgumentNullException(nameof(target));
         }
 
-        _entries[Normalize(target.WindowHandle)] = new Entry(target, verdict, generation);
+        _entries[PointerTargetEvidenceKey.FromHandle(target.WindowHandle)] = new Entry(target, verdict, generation);
     }
 
-    public bool TryResolve(IntPtr capturedTargetWindow, out Entry entry)
-    {
-        return _entries.TryGetValue(Normalize(capturedTargetWindow), out entry!);
-    }
+    public bool TryResolve(IntPtr capturedTargetWindow, out Entry entry) =>
+        _entries.TryGetValue(PointerTargetEvidenceKey.FromHandle(capturedTargetWindow), out entry!);
 
-    public void Invalidate(string windowHandle)
-    {
-        _entries.TryRemove(Normalize(windowHandle), out _);
-    }
+    public bool TryResolve(string? windowHandle, out Entry entry) =>
+        _entries.TryGetValue(PointerTargetEvidenceKey.FromHandle(windowHandle), out entry!);
 
-    public void Clear()
-    {
-        _entries.Clear();
-    }
+    public void Invalidate(IntPtr windowHandle) =>
+        _entries.TryRemove(PointerTargetEvidenceKey.FromHandle(windowHandle), out _);
 
-    private static string Normalize(IntPtr windowHandle) =>
-        windowHandle.ToInt64().ToString("X16");
+    public void Invalidate(string windowHandle) =>
+        _entries.TryRemove(PointerTargetEvidenceKey.FromHandle(windowHandle), out _);
 
-    private static string Normalize(string windowHandle) =>
-        long.TryParse(windowHandle, System.Globalization.NumberStyles.HexNumber, null, out var parsed)
-            ? parsed.ToString("X16")
-            : windowHandle.Trim().ToUpperInvariant();
+    public void Clear() => _entries.Clear();
 }
 
 /// <summary>
-/// One bounded pointer-target decision for the low-level callback. When fresh
-/// resident evidence exists it is the only source consulted; a selected-client
-/// Send without evidence fails closed as trace_unavailable. Live UI Automation
-/// is never invoked from this path.
+/// One bounded pointer-target decision for the low-level callback. Only resident
+/// snapshot state is consulted: the store and the selected profile carried by the
+/// current snapshot. No live window, process, or UI Automation lookup happens here,
+/// and a selected-client Send without fresh evidence fails closed as
+/// trace_unavailable. Evidence whose snapshot generation no longer matches the
+/// current resident snapshot is stale and also fails closed.
 /// </summary>
 internal sealed record ResidentPointerTargetDecision(
     PointerTargetVerdict Verdict,
@@ -70,54 +91,63 @@ internal sealed record ResidentPointerTargetDecision(
     NativeSubmitTargetIdentity Target,
     long EvidenceGeneration)
 {
-    public static ResidentPointerTargetDecision? TryDecide(
+    public static ResidentPointerTargetDecision TryDecide(
         PointerTargetEvidenceStore store,
-        ISendControlDiscovery unusedDiscovery,
         NativePointerGesture gesture,
-        Func<IntPtr, string?>? selectedProfileIdResolver = null)
+        ProtectionSnapshot snapshot)
     {
+        var selectedProfileId = snapshot.State.ConfiguredProfileId;
+        var selected = !string.IsNullOrWhiteSpace(selectedProfileId)
+            && string.Equals(
+                snapshot.State.LastProfileId,
+                selectedProfileId,
+                StringComparison.Ordinal);
+
         if (store.TryResolve(gesture.TargetWindow, out var entry))
         {
-            if (entry.Verdict == PointerTargetVerdict.SelectedSend)
+            var fresh = entry.Target.SnapshotGeneration == snapshot.Generation
+                && entry.EvidenceGeneration <= snapshot.Generation;
+            if (!fresh)
             {
-                return new ResidentPointerTargetDecision(
+                return Stale(selectedProfileId, gesture.TargetWindow);
+            }
+
+            return entry.Verdict == PointerTargetVerdict.SelectedSend
+                ? new ResidentPointerTargetDecision(
                     PointerTargetVerdict.SelectedSend,
                     Suppressed: true,
                     Status: OsInteractionStatusIds.NativeSubmitGuarded,
                     Target: entry.Target,
+                    EvidenceGeneration: entry.EvidenceGeneration)
+                : new ResidentPointerTargetDecision(
+                    PointerTargetVerdict.Unrelated,
+                    Suppressed: false,
+                    Status: OsInteractionStatusIds.NativeSubmitPassThrough,
+                    Target: entry.Target,
                     EvidenceGeneration: entry.EvidenceGeneration);
-            }
-
-            return new ResidentPointerTargetDecision(
-                PointerTargetVerdict.Unrelated,
-                Suppressed: false,
-                Status: OsInteractionStatusIds.NativeSubmitPassThrough,
-                Target: entry.Target,
-                EvidenceGeneration: entry.EvidenceGeneration);
         }
 
-        var profileId = selectedProfileIdResolver?.Invoke(gesture.TargetWindow);
-        if (string.IsNullOrWhiteSpace(profileId))
-        {
-            return new ResidentPointerTargetDecision(
+        return selected
+            ? Stale(selectedProfileId!, gesture.TargetWindow)
+            : new ResidentPointerTargetDecision(
                 PointerTargetVerdict.Unrelated,
                 Suppressed: false,
                 Status: OsInteractionStatusIds.NativeSubmitPassThrough,
                 Target: new NativeSubmitTargetIdentity(
-                    SnapshotGeneration: 0,
+                    SnapshotGeneration: snapshot.Generation,
                     ProfileId: string.Empty,
-                    WindowHandle: gesture.TargetWindow.ToInt64().ToString("X16")),
+                    WindowHandle: PointerTargetEvidenceKey.FromHandle(gesture.TargetWindow)),
                 EvidenceGeneration: 0);
-        }
+    }
 
-        return new ResidentPointerTargetDecision(
+    private static ResidentPointerTargetDecision Stale(string profileId, IntPtr targetWindow) =>
+        new(
             PointerTargetVerdict.SelectedSend,
             Suppressed: true,
             Status: OsInteractionStatusIds.TraceUnavailable,
             Target: new NativeSubmitTargetIdentity(
                 SnapshotGeneration: 0,
                 ProfileId: profileId,
-                WindowHandle: gesture.TargetWindow.ToInt64().ToString("X16")),
+                WindowHandle: PointerTargetEvidenceKey.FromHandle(targetWindow)),
             EvidenceGeneration: 0);
-    }
 }
