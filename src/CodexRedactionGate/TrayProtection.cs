@@ -21,12 +21,7 @@ internal sealed record ProtectionSnapshot(
     bool HookReady,
     ISendControlDiscovery? SendControlDiscovery,
     Func<TextSurfaceDiscoveryResult> ActiveSurfaceDiscovery,
-    NativeSubmitResidentEvidence? ResidentEvidence = null,
-    // Ticket 314 adds the resident pointer-evidence seam; ticket 356 attaches the
-    // controller store to published snapshots together with focus-change and
-    // runtime-replacement invalidation, so the resident branch stays inactive
-    // (legacy live path remains the production default) until that migration.
-    PointerTargetEvidenceStore? PointerTargetEvidence = null);
+    NativeSubmitResidentEvidence? ResidentEvidence = null);
 
 internal sealed record NativeSubmitExecutionContext(
     ProtectionSnapshot Snapshot,
@@ -1521,7 +1516,12 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
         NativeSubmitRuntimeSet runtimeSet,
         NativePointerGesture gesture)
     {
-        return ClassifySendControl(ReadSnapshot(), runtimeSet, gesture);
+        // Production classifies through the resident store: the live-discovery
+        // verdict is published for the gesture's exact (window, process) pair and
+        // the next gesture in that window is decided by bounded lookup only.
+        // Full activation with focus/runtime-replacement invalidation and TTL is
+        // the ticket 356 migration contract.
+        return ClassifySendControl(ReadSnapshot(), runtimeSet, gesture, _pointerTargetEvidence);
     }
 
     // Explicit test seam for the resident pointer-evidence path (ticket 314):
@@ -1530,32 +1530,47 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
     internal NativeSubmitInterceptionResult ClassifyPointerSendForTesting(
         ProtectionSnapshot snapshot,
         NativePointerGesture gesture) =>
-        ClassifySendControl(snapshot, runtimeSet: null, gesture);
+        ClassifySendControl(snapshot, runtimeSet: null, gesture, _pointerTargetEvidence);
+
+    // Explicit test seam exposing the controller's resident pointer-evidence
+    // store so a fixture can publish evidence out-of-band the way ticket 356
+    // activation will (focus events, live-discovery publication).
+    internal PointerTargetEvidenceStore PointerTargetEvidenceForTesting() => _pointerTargetEvidence;
 
     private NativeSubmitInterceptionResult ClassifySendControl(
         ProtectionSnapshot snapshot,
         NativeSubmitRuntimeSet? runtimeSet,
-        NativePointerGesture gesture)
+        NativePointerGesture gesture,
+        PointerTargetEvidenceStore? store)
     {
-        var store = snapshot.PointerTargetEvidence;
+        // Ticket 314: the low-level callback resolves only resident evidence when
+        // the controller store is active. Live UI Automation is never consulted
+        // here, so a slow or unavailable UIA cannot pass a selected-client Send or
+        // consume an unrelated click. The store is a mutable resident owner and is
+        // deliberately NOT part of the immutable snapshot (one snapshot per event
+        // per SPEC); ticket 356 activates it in production together with
+        // focus/runtime-replacement invalidation.
         if (store is not null)
         {
-            // Ticket 314: the low-level callback resolves only resident evidence.
-            // Live UI Automation is never consulted here, so a slow or unavailable
-            // UIA cannot pass a selected-client Send or consume an unrelated click.
             var resident = ResidentPointerTargetDecision.TryDecide(store, gesture, snapshot);
-            if (resident.Verdict == PointerTargetVerdict.SelectedSend)
+            if (!ReferenceEquals(resident, ResidentPointerTargetDecision.Unresolved))
             {
-                var residentResult = string.Equals(
-                    resident.Status,
-                    OsInteractionStatusIds.NativeSubmitGuarded,
-                    StringComparison.Ordinal)
-                    ? GuardedPointerSubmitFromEvidence(resident)
-                    : TraceUnavailablePointerSubmit(resident);
-                return RememberSnapshot(snapshot, runtimeSet, residentResult, resident.Target);
+                if (resident.Verdict == PointerTargetVerdict.SelectedSend)
+                {
+                    var residentResult = string.Equals(
+                        resident.Status,
+                        OsInteractionStatusIds.NativeSubmitGuarded,
+                        StringComparison.Ordinal)
+                        ? GuardedPointerSubmitFromEvidence(resident)
+                        : TraceUnavailablePointerSubmit(resident);
+                    return RememberSnapshot(snapshot, runtimeSet, residentResult, resident.Target);
+                }
+
+                return RememberSnapshot(snapshot, runtimeSet, PassThroughPointer(), target: null);
             }
 
-            return RememberSnapshot(snapshot, runtimeSet, PassThroughPointer(), target: null);
+            // No entry for this window and a live adapter exists: keep the legacy
+            // live-discovery classification below and publish its verdict.
         }
 
         if (snapshot.SendControlDiscovery is null)
@@ -1573,6 +1588,9 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             gesture.TargetWindow);
         var result = discovery.Classification switch
         {
+            // Without an owner-verified target identity the callback cannot
+            // attribute the gesture to a window, so it fails closed instead of
+            // publishing nothing and letting the next gesture repeat the guess.
             SendControlClassification.IdentifiedSend when runtime is not null
                 => target is null
                     ? TraceUnavailablePointerSubmit(runtime.Profile.ProfileId)
@@ -1585,18 +1603,35 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 => SuppressUncertainSelectedSend(SelectedClientProfileId(discovery.ComposerDiscovery, runtime)),
             _ => PassThroughPointer()
         };
-        PublishPointerTargetEvidence(snapshot, store, target, result);
+        // A suppression without an owner-verified identity (uncertain, or an
+        // identified Send whose surface carries no window handle) is still
+        // attributed to the captured window so the resident store can publish it.
+        var publishTarget = target is null
+            && result.SuppressOriginalInput
+            && gesture.TargetWindow != IntPtr.Zero
+            ? new NativeSubmitTargetIdentity(
+                SnapshotGeneration: snapshot.Generation,
+                ProfileId: result.Diagnostics.TryGetValue("profile_id", out var diagnosticProfileId)
+                    ? diagnosticProfileId
+                    : string.Empty,
+                WindowHandle: PointerTargetEvidenceKey.FromHandle(gesture.TargetWindow))
+            : target;
+        PublishPointerTargetEvidence(snapshot, store, publishTarget, gesture, result);
         return RememberSnapshot(snapshot, runtimeSet, result, target);
     }
 
     /// <summary>
     /// Publishes the verdict of live pointer discovery into the resident store so a
     /// later pointer gesture in the callback is decided by bounded lookup only.
+    /// Only the gesture's own (window, process) pair is attributed: a verdict is
+    /// never carried over to a different window, and a click in another window of
+    /// the same client cannot inherit the selected-client decision.
     /// </summary>
     private static void PublishPointerTargetEvidence(
         ProtectionSnapshot snapshot,
         PointerTargetEvidenceStore? store,
         NativeSubmitTargetIdentity? target,
+        NativePointerGesture gesture,
         NativeSubmitInterceptionResult result)
     {
         if (store is null || target is null)
@@ -1608,11 +1643,11 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
             or OsInteractionStatusIds.TraceUnavailable
             or OsInteractionStatusIds.SurfaceUnverified)
         {
-            store.Publish(target, PointerTargetVerdict.SelectedSend, snapshot.Generation);
+            store.Publish(target, gesture.TargetProcessId, PointerTargetVerdict.SelectedSend, snapshot.Generation);
         }
         else if (result.Status == OsInteractionStatusIds.NativeSubmitPassThrough)
         {
-            store.Publish(target, PointerTargetVerdict.Unrelated, snapshot.Generation);
+            store.Publish(target, gesture.TargetProcessId, PointerTargetVerdict.Unrelated, snapshot.Generation);
         }
     }
 

@@ -46,19 +46,25 @@ internal sealed class PointerTargetEvidenceStore
 {
     internal sealed record Entry(
         NativeSubmitTargetIdentity Target,
+        uint TargetProcessId,
         PointerTargetVerdict Verdict,
         long EvidenceGeneration);
 
     private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.Ordinal);
 
-    public void Publish(NativeSubmitTargetIdentity target, PointerTargetVerdict verdict, long generation)
+    public void Publish(
+        NativeSubmitTargetIdentity target,
+        uint targetProcessId,
+        PointerTargetVerdict verdict,
+        long generation)
     {
         if (target is null)
         {
             throw new ArgumentNullException(nameof(target));
         }
 
-        _entries[PointerTargetEvidenceKey.FromHandle(target.WindowHandle)] = new Entry(target, verdict, generation);
+        _entries[PointerTargetEvidenceKey.FromHandle(target.WindowHandle)] =
+            new Entry(target, targetProcessId, verdict, generation);
     }
 
     public bool TryResolve(IntPtr capturedTargetWindow, out Entry entry) =>
@@ -107,7 +113,12 @@ internal sealed record ResidentPointerTargetDecision(
         {
             var fresh = entry.Target.SnapshotGeneration == snapshot.Generation
                 && entry.EvidenceGeneration <= snapshot.Generation;
-            if (!fresh)
+            // The entry was published for one exact (window, process) pair; a
+            // gesture from a different process is not the same target.
+            var sameOwner = entry.TargetProcessId != 0
+                && gesture.TargetProcessId != 0
+                && entry.TargetProcessId == gesture.TargetProcessId;
+            if (!fresh || !sameOwner)
             {
                 return Stale(selectedProfileId ?? string.Empty, gesture.TargetWindow, snapshot.Generation);
             }
@@ -127,18 +138,49 @@ internal sealed record ResidentPointerTargetDecision(
                     EvidenceGeneration: entry.EvidenceGeneration);
         }
 
-        return selected
-            ? Stale(selectedProfileId!, gesture.TargetWindow, snapshot.Generation)
-            : new ResidentPointerTargetDecision(
-                PointerTargetVerdict.Unrelated,
-                Suppressed: false,
-                Status: OsInteractionStatusIds.NativeSubmitPassThrough,
-                Target: new NativeSubmitTargetIdentity(
-                    SnapshotGeneration: snapshot.Generation,
-                    ProfileId: string.Empty,
-                    WindowHandle: PointerTargetEvidenceKey.FromHandle(gesture.TargetWindow)),
-                EvidenceGeneration: 0);
+        // No evidence for this exact window. Attribution to the selected client
+        // requires the owner-verified (window, process) pair published by the live
+        // discovery path; profile-name equality alone cannot tell a Send target
+        // from navigation in another window of the same client. Without any live
+        // adapter, a selected-client gesture fails closed as trace_unavailable
+        // instead of passing a Send through unchecked, while an unattributed
+        // gesture stays pass-through.
+        if (snapshot.SendControlDiscovery is null)
+        {
+            return selected
+                ? Stale(selectedProfileId!, gesture.TargetWindow, snapshot.Generation)
+                : Unrelated(snapshot, gesture);
+        }
+
+        // A live adapter exists: the caller keeps the legacy live-discovery
+        // classification for this gesture and publishes its verdict into the store.
+        return Unresolved;
     }
+
+    // Returned when the store has no entry for the gesture's window and a live
+    // UIA adapter can decide; the caller must not treat it as a resident verdict.
+    public static readonly ResidentPointerTargetDecision Unresolved = new(
+        PointerTargetVerdict.Unrelated,
+        Suppressed: false,
+        Status: null,
+        Target: new NativeSubmitTargetIdentity(
+            SnapshotGeneration: 0,
+            ProfileId: string.Empty,
+            WindowHandle: string.Empty),
+        EvidenceGeneration: -1);
+
+    private static ResidentPointerTargetDecision Unrelated(
+        ProtectionSnapshot snapshot,
+        NativePointerGesture gesture) =>
+        new(
+            PointerTargetVerdict.Unrelated,
+            Suppressed: false,
+            Status: OsInteractionStatusIds.NativeSubmitPassThrough,
+            Target: new NativeSubmitTargetIdentity(
+                SnapshotGeneration: snapshot.Generation,
+                ProfileId: string.Empty,
+                WindowHandle: PointerTargetEvidenceKey.FromHandle(gesture.TargetWindow)),
+            EvidenceGeneration: 0);
 
     private static ResidentPointerTargetDecision Stale(
         string profileId, IntPtr targetWindow, long snapshotGeneration) =>
