@@ -109,7 +109,7 @@ internal sealed record ResidentPointerTargetDecision(
                 && entry.EvidenceGeneration <= snapshot.Generation;
             if (!fresh)
             {
-                return Stale(selectedProfileId, gesture.TargetWindow, snapshot.Generation);
+                return Stale(selectedProfileId ?? string.Empty, gesture.TargetWindow, snapshot.Generation);
             }
 
             return entry.Verdict == PointerTargetVerdict.SelectedSend

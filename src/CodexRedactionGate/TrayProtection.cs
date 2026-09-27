@@ -3497,14 +3497,14 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
 
     private NativeSubmitInterceptionResult RememberSnapshot(
         ProtectionSnapshot snapshot,
-        NativeSubmitRuntimeSet runtimeSet,
+        NativeSubmitRuntimeSet? runtimeSet,
         NativeSubmitInterceptionResult classification,
         NativeSubmitTargetIdentity? target = null,
         ResidentCanaryAdmission? canaryAdmission = null)
     {
         _classificationSnapshots.Add(
             classification,
-            new NativeSubmitExecutionContext(snapshot, runtimeSet, target, canaryAdmission));
+            new NativeSubmitExecutionContext(snapshot, runtimeSet!, target, canaryAdmission));
         return classification;
     }
 
