@@ -120,6 +120,11 @@ public class PointerTargetEvidenceTests
             new NativePointerGesture(10, 10, "left", SelectedWindow));
         Assert.That(selected.SuppressOriginalInput, Is.True);
         Assert.That(selected.Status, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
+        // Ticket 314 AC3: the fail-closed outcome stays investigable — it carries
+        // the resident target identity and generations, not a bare status.
+        Assert.That(selected.Diagnostics["profile_id"], Is.EqualTo(SelectedProfileId));
+        Assert.That(selected.Diagnostics["pointer_target_identity"], Is.EqualTo("resident_evidence"));
+        Assert.That(selected.Diagnostics["snapshot_generation"], Is.EqualTo("7"));
 
         // Unrelated click with fresh Unrelated evidence: pass-through, not consumed.
         store.Publish(Identity(7, UnrelatedWindow), PointerTargetVerdict.Unrelated, generation: 7);

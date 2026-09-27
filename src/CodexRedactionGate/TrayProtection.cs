@@ -22,6 +22,10 @@ internal sealed record ProtectionSnapshot(
     ISendControlDiscovery? SendControlDiscovery,
     Func<TextSurfaceDiscoveryResult> ActiveSurfaceDiscovery,
     NativeSubmitResidentEvidence? ResidentEvidence = null,
+    // Ticket 314 adds the resident pointer-evidence seam; ticket 356 attaches the
+    // controller store to published snapshots together with focus-change and
+    // runtime-replacement invalidation, so the resident branch stays inactive
+    // (legacy live path remains the production default) until that migration.
     PointerTargetEvidenceStore? PointerTargetEvidence = null);
 
 internal sealed record NativeSubmitExecutionContext(
@@ -1547,7 +1551,7 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                     OsInteractionStatusIds.NativeSubmitGuarded,
                     StringComparison.Ordinal)
                     ? GuardedPointerSubmitFromEvidence(resident)
-                    : TraceUnavailablePointerSubmit(resident.Target.ProfileId);
+                    : TraceUnavailablePointerSubmit(resident);
                 return RememberSnapshot(snapshot, runtimeSet, residentResult, resident.Target);
             }
 
@@ -1844,6 +1848,28 @@ internal sealed class TrayProtectionController : IProtectedSendPipelineHost
                 ["profile_id"] = profileId,
                 ["trace_status"] = "trace_unavailable",
                 ["pointer_target_identity"] = "unavailable"
+            });
+    }
+
+    // Ticket 314: keeps the resident target identity and generations in the raw-free
+    // trace_unavailable diagnostics so a suppression stays investigable.
+    private static NativeSubmitInterceptionResult TraceUnavailablePointerSubmit(
+        ResidentPointerTargetDecision decision)
+    {
+        return new NativeSubmitInterceptionResult(
+            OsInteractionStatusIds.TraceUnavailable,
+            SuppressOriginalInput: true,
+            Applied: false,
+            Submitted: false,
+            Diagnostics: new Dictionary<string, string>
+            {
+                ["profile_id"] = decision.Target.ProfileId,
+                ["trace_status"] = "trace_unavailable",
+                ["pointer_target_identity"] = "resident_evidence",
+                ["evidence_generation"] = decision.EvidenceGeneration
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["snapshot_generation"] = decision.Target.SnapshotGeneration
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture)
             });
     }
 

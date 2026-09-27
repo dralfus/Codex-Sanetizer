@@ -109,7 +109,7 @@ internal sealed record ResidentPointerTargetDecision(
                 && entry.EvidenceGeneration <= snapshot.Generation;
             if (!fresh)
             {
-                return Stale(selectedProfileId, gesture.TargetWindow);
+                return Stale(selectedProfileId, gesture.TargetWindow, snapshot.Generation);
             }
 
             return entry.Verdict == PointerTargetVerdict.SelectedSend
@@ -128,7 +128,7 @@ internal sealed record ResidentPointerTargetDecision(
         }
 
         return selected
-            ? Stale(selectedProfileId!, gesture.TargetWindow)
+            ? Stale(selectedProfileId!, gesture.TargetWindow, snapshot.Generation)
             : new ResidentPointerTargetDecision(
                 PointerTargetVerdict.Unrelated,
                 Suppressed: false,
@@ -140,13 +140,14 @@ internal sealed record ResidentPointerTargetDecision(
                 EvidenceGeneration: 0);
     }
 
-    private static ResidentPointerTargetDecision Stale(string profileId, IntPtr targetWindow) =>
+    private static ResidentPointerTargetDecision Stale(
+        string profileId, IntPtr targetWindow, long snapshotGeneration) =>
         new(
             PointerTargetVerdict.SelectedSend,
             Suppressed: true,
             Status: OsInteractionStatusIds.TraceUnavailable,
             Target: new NativeSubmitTargetIdentity(
-                SnapshotGeneration: 0,
+                SnapshotGeneration: snapshotGeneration,
                 ProfileId: profileId,
                 WindowHandle: PointerTargetEvidenceKey.FromHandle(targetWindow)),
             EvidenceGeneration: 0);
