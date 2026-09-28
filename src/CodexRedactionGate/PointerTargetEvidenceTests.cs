@@ -6,11 +6,10 @@ using CodexRedactionGate;
 
 // Ticket 314: the first pointer Send is decided from resident, precomputed
 // target evidence WITHOUT live UI Automation inside the low-level callback.
-// Most tests drive the production pointer classification
-// (TrayProtectionController.ClassifySendControl) through the explicit resident
-// test seam with a caller-owned ProtectionSnapshot and store; the last test
-// drives the actual protected pointer operation through the registered native
-// hook callback. Deterministic: no timers, no real UIA, no cloud, no raw prompts.
+// The production callback (ClassifySendControl) performs bounded lookup only;
+// the reference-composer path (ClassifyPointerSendViaDiscoveryForTesting)
+// exercises live UIA outside the callback and publishes owner-verified evidence.
+// Deterministic: no timers, no real UIA, no cloud, no raw prompts.
 [TestFixture]
 public class PointerTargetEvidenceTests : SanitizerTests
 {
@@ -19,8 +18,8 @@ public class PointerTargetEvidenceTests : SanitizerTests
     private static readonly IntPtr SelectedWindow = new(0x2A1F3C);
     private static readonly IntPtr UnrelatedWindow = new(0xB00BEE);
 
-    // Records every live-UIA call so tests can assert the resident decision
-    // path never consults it.
+    // Records every live-UIA call so tests can assert the callback path never
+    // consults it.
     private sealed class CountingSendControlDiscovery : ISendControlDiscovery
     {
         public int CallCount { get; private set; }
@@ -63,9 +62,19 @@ public class PointerTargetEvidenceTests : SanitizerTests
 
         public FixedPointerDiscovery(SendControlDiscoveryResult result) => _result = result;
 
-        public SendControlDiscoveryResult Discover(NativePointerGesture gesture) => _result;
+        public int CallCount { get; private set; }
 
-        public SendControlDiscoveryResult DiscoverFocusedControl(IntPtr capturedTargetWindow) => _result;
+        public SendControlDiscoveryResult Discover(NativePointerGesture gesture)
+        {
+            CallCount++;
+            return _result;
+        }
+
+        public SendControlDiscoveryResult DiscoverFocusedControl(IntPtr capturedTargetWindow)
+        {
+            CallCount++;
+            return _result;
+        }
     }
 
     private static TrayProtectionController CreatePointerTray(
@@ -107,11 +116,9 @@ public class PointerTargetEvidenceTests : SanitizerTests
         };
     }
 
-    // The resident seam classifies against the controller's own store, so tests
-    // publish their evidence into it before driving a classification.
     private static TrayProtectionController CreateController()
     {
-        var controller = TrayProtectionController.CreateTest(
+        return TrayProtectionController.CreateTest(
             new NoOpTrayHotkeyHost(),
             () => new OsInteractionResult(
                 OsInteractionStatusIds.NotConfigured,
@@ -121,10 +128,6 @@ public class PointerTargetEvidenceTests : SanitizerTests
                 Applied: false,
                 Submitted: false,
                 Diagnostics: new Dictionary<string, string>()));
-        // The live-discovery path publishes into the store; tests that want a
-        // pre-populated store publish explicitly after creation.
-        controller.PointerTargetEvidenceForTesting().Clear();
-        return controller;
     }
 
     private static ProtectionSnapshot MakeSnapshot(
@@ -156,6 +159,8 @@ public class PointerTargetEvidenceTests : SanitizerTests
         var store = controller.PointerTargetEvidenceForTesting();
         store.Publish(Identity(7, SelectedWindow), SelectedProcessId, PointerTargetVerdict.SelectedSend, generation: 7);
 
+        // The very first callback gesture is decided from precomputed evidence:
+        // guarded, with zero live UIA calls.
         var result = controller.ClassifyPointerSendForTesting(
             MakeSnapshot(controller, uia, generation: 7),
             new NativePointerGesture(10, 10, "left", SelectedWindow, SelectedProcessId));
@@ -164,7 +169,7 @@ public class PointerTargetEvidenceTests : SanitizerTests
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
         Assert.That(result.Diagnostics["pointer_target_identity"], Is.EqualTo("resident_evidence"));
         Assert.That(uia.CallCount, Is.Zero,
-            "Resident pointer decision must not invoke live UIA inside the low-level callback.");
+            "The callback must never invoke live UIA inside classification.");
     }
 
     [Test]
@@ -174,63 +179,41 @@ public class PointerTargetEvidenceTests : SanitizerTests
         var controller = CreateController();
         var store = controller.PointerTargetEvidenceForTesting();
 
-        // An unrelated click with fresh Unrelated evidence passes through from
-        // resident state — never suppressed, never consuming live UIA.
-        store.Publish(Identity(7, UnrelatedWindow), 0x9999, PointerTargetVerdict.Unrelated, generation: 7);
-        var unrelated = controller.ClassifyPointerSendForTesting(
-            MakeSnapshot(controller, uia, generation: 7),
-            new NativePointerGesture(10, 10, "left", UnrelatedWindow, 0x9999));
-        Assert.That(unrelated.SuppressOriginalInput, Is.False);
-        Assert.That(unrelated.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
-        Assert.That(uia.CallCount, Is.Zero);
-
-        // Selected client with NO resident evidence: the callback must not
-        // suppress on profile-name equality alone; the gesture keeps the
-        // live-discovery classification (here: uncertain suppression), never a
-        // silent pass-through of a selected-client Send.
+        // Selected client with fresh Send evidence: suppressed from resident
+        // state even though UIA is slow/unavailable — never passed through.
+        store.Publish(Identity(7, SelectedWindow), SelectedProcessId, PointerTargetVerdict.SelectedSend, generation: 7);
         var selected = controller.ClassifyPointerSendForTesting(
             MakeSnapshot(controller, uia, generation: 7),
             new NativePointerGesture(10, 10, "left", SelectedWindow, SelectedProcessId));
         Assert.That(selected.SuppressOriginalInput, Is.True);
-        Assert.That(selected.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
+        Assert.That(selected.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
 
-        // The uncertain live verdict is published for the gesture's exact
-        // (window, process) pair, so the next callback decides by bounded lookup
-        // only.
-        Assert.That(store.TryResolve(SelectedWindow, out var entry), Is.True);
-        Assert.That(entry.TargetProcessId, Is.EqualTo(SelectedProcessId));
-        Assert.That(entry.Verdict, Is.EqualTo(PointerTargetVerdict.SelectedSend));
-        // Ticket 314 AC3: the fail-closed outcome stays investigable — it carries
-        // the resident target identity and generations, not a bare status.
-        var stale = controller.ClassifyPointerSendForTesting(
-            MakeSnapshot(controller, uia, generation: 8),
-            new NativePointerGesture(10, 10, "left", SelectedWindow, SelectedProcessId));
-        Assert.That(stale.Status, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
-        Assert.That(stale.Diagnostics["profile_id"], Is.EqualTo(SelectedProfileId));
-        Assert.That(stale.Diagnostics["pointer_target_identity"], Is.EqualTo("resident_evidence"));
-        Assert.That(stale.Diagnostics["snapshot_generation"], Is.EqualTo("8"));
-
-        Assert.That(uia.CallCount, Is.EqualTo(1),
-            "Only the first gesture may consult live UIA; resident evidence decides the rest.");
-    }
-
-    [Test]
-    public void FreshUnrelatedEvidencePassesThroughWithoutLiveUia()
-    {
-        var uia = new CountingSendControlDiscovery();
-        var controller = CreateController();
-        var store = controller.PointerTargetEvidenceForTesting();
-
-        // A published Unrelated verdict resolves as pass-through from resident
-        // evidence, consuming no click and calling no live UIA.
+        // Unrelated click with fresh Unrelated evidence: pass-through, not consumed.
         store.Publish(Identity(7, UnrelatedWindow), 0x9999, PointerTargetVerdict.Unrelated, generation: 7);
         var unrelated = controller.ClassifyPointerSendForTesting(
             MakeSnapshot(controller, uia, generation: 7),
             new NativePointerGesture(10, 10, "left", UnrelatedWindow, 0x9999));
-
         Assert.That(unrelated.SuppressOriginalInput, Is.False);
         Assert.That(unrelated.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
-        Assert.That(uia.CallCount, Is.Zero);
+
+        Assert.That(uia.CallCount, Is.Zero,
+            "Neither fail-closed suppression nor unrelated pass-through may call live UIA.");
+    }
+
+    [Test]
+    public void UnidentifiedClickWithoutEvidenceAlwaysPassesThrough()
+    {
+        var controller = CreateController();
+
+        // No entry at all: the callback cannot identify the control, so the
+        // click is never classified or suppressed — SPEC keeps ordinary clicks,
+        // copy/paste, navigation, and non-Send controls at normal behavior.
+        var result = controller.ClassifyPointerSendForTesting(
+            MakeSnapshot(controller, discovery: null, generation: 7),
+            new NativePointerGesture(10, 10, "left", UnrelatedWindow, 0x9999));
+
+        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
     }
 
     [Test]
@@ -249,6 +232,29 @@ public class PointerTargetEvidenceTests : SanitizerTests
         Assert.That(result.SuppressOriginalInput, Is.True);
         Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
         Assert.That(uia.CallCount, Is.Zero);
+    }
+
+    [Test]
+    public void StaleEvidenceForUnrelatedWindowPassesThrough()
+    {
+        var uia = new CountingSendControlDiscovery();
+        var controller = CreateController();
+        var store = controller.PointerTargetEvidenceForTesting();
+        // A fresh Unrelated entry published for a different (window, process)
+        // pair resolves as pass-through; the callback consumes nothing it did
+        // not verify.
+        store.Publish(
+            new NativeSubmitTargetIdentity(7, "other-client", UnrelatedWindow.ToInt64().ToString("X")),
+            0x9999,
+            PointerTargetVerdict.Unrelated,
+            generation: 7);
+
+        var result = controller.ClassifyPointerSendForTesting(
+            MakeSnapshot(controller, uia, generation: 7),
+            new NativePointerGesture(10, 10, "left", UnrelatedWindow, 0x9999));
+
+        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(result.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitPassThrough));
     }
 
     [Test]
@@ -278,8 +284,9 @@ public class PointerTargetEvidenceTests : SanitizerTests
         var store = controller.PointerTargetEvidenceForTesting();
         store.Publish(Identity(7, SelectedWindow), SelectedProcessId, PointerTargetVerdict.SelectedSend, generation: 7);
 
-        // Runtime replacement clears the resident store. The next gesture is
-        // decided by the live path again — never by the removed entry.
+        // Runtime replacement clears the resident store. The next gesture has no
+        // evidence, so it is decided by the live path again — never by the
+        // removed verdict.
         store.Clear();
         var result = controller.ClassifyPointerSendForTesting(
             MakeSnapshot(controller, uia, generation: 7),
@@ -336,74 +343,78 @@ public class PointerTargetEvidenceTests : SanitizerTests
     }
 
     [Test]
-    public void MissingLiveAdapterSuppressesEveryGestureFailClosed()
+    public void UnverifiedDiscoveryPublishesNoEvidence()
     {
         var controller = CreateController();
+        var store = controller.PointerTargetEvidenceForTesting();
 
-        // UIA unavailable (no adapter) and no evidence: the callback cannot tell
-        // a Send target from navigation, so nothing is allowed through — both a
-        // selected-client gesture and an unattributed one are suppressed.
-        var selected = controller.ClassifyPointerSendForTesting(
-            MakeSnapshot(controller, discovery: null, generation: 7),
+        // Reference-composer discovery says "uncertain" (SurfaceUnverified):
+        // no owner-verified identity exists, so nothing may become Send evidence.
+        var result = controller.ClassifyPointerSendViaDiscoveryForTesting(
+            MakeSnapshot(controller, new CountingSendControlDiscovery(), generation: 7),
             new NativePointerGesture(10, 10, "left", SelectedWindow, SelectedProcessId));
-        Assert.That(selected.SuppressOriginalInput, Is.True);
-        Assert.That(selected.Status, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
-        Assert.That(selected.Diagnostics["pointer_target_identity"], Is.EqualTo("resident_evidence"));
 
-        var unattributed = controller.ClassifyPointerSendForTesting(
-            MakeSnapshot(controller, discovery: null, generation: 7),
-            new NativePointerGesture(10, 10, "left", UnrelatedWindow, 0x9999));
-        Assert.That(unattributed.SuppressOriginalInput, Is.True);
-        Assert.That(unattributed.Status, Is.EqualTo(OsInteractionStatusIds.TraceUnavailable));
+        Assert.That(result.SuppressOriginalInput, Is.True, "Uncertain still suppresses this gesture.");
+        Assert.That(store.TryResolve(SelectedWindow, out _), Is.False,
+            "SurfaceUnverified must never be upgraded to resident Send evidence.");
     }
 
     [Test]
-    public void ResidentEvidenceExecutesTheActualProtectedPointerOperationOnce()
+    public void VerifiedNonSendControlPublishesUnrelatedEvidence()
     {
-        // Drives the real low-level callback path: the hook host's pointer
-        // classifier is the controller's production ClassifySendControl and the
-        // suppressed gesture invokes RunNativeSendControlOnce, so a decision made
-        // entirely from resident evidence drives the actual protected pointer
-        // operation exactly once.
+        var controller = CreateController();
+        var store = controller.PointerTargetEvidenceForTesting();
+
+        // Reference-composer discovery verifies a NON-Send control: the verdict
+        // is published as Unrelated, so the next gesture passes through.
+        var result = controller.ClassifyPointerSendViaDiscoveryForTesting(
+            MakeSnapshot(controller, new FixedPointerDiscovery(new SendControlDiscoveryResult(
+                SendControlClassification.NonSendControl,
+                ChatGptDiscoveryFixture.CreateVerified(
+                    CreateSurfaceWithWindowHandle(SelectedProfileId, "2A1F3C")))), generation: 7),
+            new NativePointerGesture(10, 10, "left", SelectedWindow, SelectedProcessId));
+
+        Assert.That(result.SuppressOriginalInput, Is.False);
+        Assert.That(store.TryResolve(SelectedWindow, out var entry), Is.True);
+        Assert.That(entry.Verdict, Is.EqualTo(PointerTargetVerdict.Unrelated));
+    }
+
+    [Test]
+    public void VerifiedSendEvidenceFromReferenceComposerDrivesFirstCallbackSend()
+    {
+        // The reference composer verifies the Send control out-of-band (live UIA
+        // outside the callback); the FIRST production callback gesture in that
+        // window is then decided from resident evidence with zero live UIA.
         var hook = new FakeNativeSubmitHookHost();
         var profile = CreateProtectedProfile();
         var submitCalls = 0;
-        var tray = CreatePointerTray(
-            hook,
-            new FixedPointerDiscovery(new SendControlDiscoveryResult(
-                SendControlClassification.SelectedClientUncertain,
-                TestSurfaceFactory.CreateNativeSubmitDiscovery("codex-desktop"))),
-            profile,
-            () => submitCalls++);
+        var uia = new FixedPointerDiscovery(new SendControlDiscoveryResult(
+            SendControlClassification.IdentifiedSend,
+            ChatGptDiscoveryFixture.CreateVerified(
+                CreateSurfaceWithWindowHandle("codex-desktop", "2A1F3C"))));
+        var tray = CreatePointerTray(hook, uia, profile, () => submitCalls++);
 
         Assert.That(tray.Start(), Is.True);
+        var snapshot = tray.ReadSnapshotForTesting();
 
-        // The first gesture is decided by live discovery: the uncertain verdict
-        // suppresses the click fail-closed without executing the submit, and is
-        // published into the resident store for the gesture's own
-        // (window, process) pair.
-        hook.TriggerPointer(new NativePointerGesture(10, 10, "left", SelectedWindow, SelectedProcessId));
-        Assert.That(hook.LastPointerClassification?.Status, Is.EqualTo(OsInteractionStatusIds.SurfaceUnverified));
-        Assert.That(hook.LastPointerClassification?.SuppressOriginalInput, Is.True);
-        Assert.That(submitCalls, Is.Zero);
-        var store = tray.PointerTargetEvidenceForTesting();
-        Assert.That(store.TryResolve(SelectedWindow, out var entry), Is.True);
-        Assert.That(entry.TargetProcessId, Is.EqualTo(SelectedProcessId));
+        // Out-of-band verification publishes owner-verified Send evidence.
+        tray.ClassifyPointerSendViaDiscoveryForTesting(
+            snapshot,
+            new NativePointerGesture(10, 10, "left", SelectedWindow, SelectedProcessId));
+        var uiaCallsAfterPublish = uia.CallCount;
+        Assert.That(tray.PointerTargetEvidenceForTesting().TryResolve(SelectedWindow, out var entry), Is.True);
         Assert.That(entry.Verdict, Is.EqualTo(PointerTargetVerdict.SelectedSend));
+        Assert.That(entry.TargetProcessId, Is.EqualTo(SelectedProcessId));
 
-        // The next gesture in the same window is decided from resident evidence
-        // before the callback returns — no second live UIA call — and its
-        // verdict drives the actual protected pointer operation
-        // (RunNativeSendControlOnce -> protected send pipeline).
+        // The first callback gesture: guarded from evidence, no new UIA call.
         hook.TriggerPointer(new NativePointerGesture(30, 30, "left", SelectedWindow, SelectedProcessId));
 
         Assert.That(hook.LastPointerClassification?.Status, Is.EqualTo(OsInteractionStatusIds.NativeSubmitGuarded));
         Assert.That(hook.LastPointerClassification?.Diagnostics["pointer_target_identity"],
             Is.EqualTo("resident_evidence"));
         Assert.That(submitCalls, Is.EqualTo(1),
-            "Resident evidence must drive the protected pointer operation, not only classification.");
-        Assert.That(tray.State.ProtectedSendAttemptStatus, Is.EqualTo("sent_safely"),
-            "The resident verdict must drive the protected send pipeline to its terminal outcome.");
-        Assert.That(tray.State.ProtectedSendAttemptTrace!.Select(entry => entry.Stage), Does.Contain("send_detected"));
+            "Resident evidence must drive the protected pointer operation exactly once.");
+        Assert.That(uia.CallCount, Is.EqualTo(uiaCallsAfterPublish),
+            "The callback gesture must not consult live UIA.");
     }
 }

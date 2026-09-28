@@ -120,7 +120,12 @@ internal sealed record ResidentPointerTargetDecision(
                 && entry.TargetProcessId == gesture.TargetProcessId;
             if (!fresh || !sameOwner)
             {
-                return Stale(selectedProfileId ?? string.Empty, gesture.TargetWindow, snapshot.Generation);
+                // SPEC: uncertainty about target validity blocks the submission
+                // with a raw-free status — a stale or owner-mismatched entry for
+                // a selected-client gesture fails closed as trace_unavailable.
+                return selected
+                    ? Stale(selectedProfileId!, gesture.TargetWindow, snapshot.Generation)
+                    : Unrelated(snapshot, gesture);
             }
 
             return entry.Verdict == PointerTargetVerdict.SelectedSend
@@ -138,36 +143,13 @@ internal sealed record ResidentPointerTargetDecision(
                     EvidenceGeneration: entry.EvidenceGeneration);
         }
 
-        // No evidence for this exact window. Attribution to the selected client
-        // requires the owner-verified (window, process) pair published by the live
-        // discovery path; profile-name equality alone cannot tell a Send target
-        // from navigation in another window of the same client. Without any live
-        // adapter, a selected-client gesture fails closed as trace_unavailable
-        // instead of passing a Send through unchecked, while an unattributed
-        // gesture stays pass-through.
-        if (snapshot.SendControlDiscovery is null)
-        {
-            return selected
-                ? Stale(selectedProfileId!, gesture.TargetWindow, snapshot.Generation)
-                : Unrelated(snapshot, gesture);
-        }
-
-        // A live adapter exists: the caller keeps the legacy live-discovery
-        // classification for this gesture and publishes its verdict into the store.
-        return Unresolved;
+        // No evidence for this exact control. SPEC: input the callback cannot
+        // identify stays outside the protected boundary — ordinary clicks,
+        // copy/paste, navigation, and non-Send controls retain normal behavior.
+        // The callback never classifies or suppresses an unidentified click, so
+        // an unrelated gesture can never be consumed for lacking evidence.
+        return Unrelated(snapshot, gesture);
     }
-
-    // Returned when the store has no entry for the gesture's window and a live
-    // UIA adapter can decide; the caller must not treat it as a resident verdict.
-    public static readonly ResidentPointerTargetDecision Unresolved = new(
-        PointerTargetVerdict.Unrelated,
-        Suppressed: false,
-        Status: null,
-        Target: new NativeSubmitTargetIdentity(
-            SnapshotGeneration: 0,
-            ProfileId: string.Empty,
-            WindowHandle: string.Empty),
-        EvidenceGeneration: -1);
 
     private static ResidentPointerTargetDecision Unrelated(
         ProtectionSnapshot snapshot,
