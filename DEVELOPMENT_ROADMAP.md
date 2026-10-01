@@ -1,9 +1,38 @@
 # Ближайший план разработки Code Sanitizer
 
-**Актуально на:** 2026-09-21
+**Актуально на:** 2026-10-01
 **Назначение:** краткая карта работ до устойчивой keyboard prompt-защиты и
 последующего расширения на файлы. Актуальные тела задач находятся в
 `.scratch/codex-redaction-gate/issues/`.
+
+## Текущее состояние
+
+- **314 завершена в scoped-контуре и слита в `master`.** После исправлений
+  независимые ревью дали Standards PASS и Spec SCOPED_PASS. Доказаны bounded
+  resident admission и первый reference Send через captured-target
+  sanitize/confirm/write/verify/replay. Production mouse Send остаётся отключён:
+  exact-point fixture evidence не доказывает геометрию и актуальность реального
+  Send control. Publication, TTL и автоматическая lifecycle invalidation
+  остаются migration work 356.
+- **355 сохраняет статус принятой задачи.** Перепроверка исходников не выявила
+  дефектов. Свежий interactive прогон 2026-10-01 остановился до Send/transaction:
+  Windows отказала reference fixture в foreground activation. Приёмка от
+  2026-09-16 остаётся историческим evidence; текущего interactive GREEN нет.
+  Для нового candidate/build reference matrix нужно повторить на активном
+  Windows desktop с подтверждённым фокусом.
+- **Проверки maintenance-изменений:** focused pointer tests 23/23, full
+  non-interactive suite 1997/1997, tray build без warnings/errors. Удалены 365
+  повторных запусков унаследованных тестов; старые totals напрямую не сравнивать
+  с новым числом тестов.
+- **Ветки консолидированы:** локально и на GitHub остался `master`.
+  Исходная история сохранена в локальном ignored bundle
+  `artifacts/branch-cleanup-20261001/before-cleanup.bundle`.
+
+Подробный [maintenance review](.scratch/codex-redaction-gate/checkpoints/maintenance-review-20261001.md)
+и [checkpoint 314](.scratch/codex-redaction-gate/checkpoints/314-checkpoint-20260927.md)
+фиксируют замечания, исправления, receipts и границы доказанного результата.
+Новые фичи в этом maintenance-цикле не разрабатывались. Следующая задача
+критического пути — 356; она ещё не реализована.
 
 ## Карта зависимостей
 
@@ -32,7 +61,7 @@ flowchart TD
     P356["[>] 356\nProduction keyboard migration\nC: 98/100 ■■■■■■■■■■\nD: 100/100 ■■■■■■■■■■"]
     G357["[ ] 357\nEvidence-gated installer/release\nC: 82/100 ■■■■■■■■□□\nD: 75/100 ■■■■■■■■□□"]
     X358["[ ] 358\nУдалить legacy и закрыть 348\nC: 88/100 ■■■■■■■■■□\nD: 90/100 ■■■■■■■■■□"]
-    R314["[~] 314\nБезопасный первый mouse Send\nC: 93/100 ■■■■■■■■■□\nD: 96/100 ■■■■■■■■■■"]
+    R314["[x] 314\nResident pointer proof\nlocally_verified, scoped\nC: 93/100 ■■■■■■■■■□\nD: 96/100 ■■■■■■■■■■"]
     Keyboard["Клавиатурная prompt-защита\nповторная release-приёмка"]
     R323["[x] 323\nOpaque compatibility fingerprints\nC: 35/100 ■■■■□□□□□□\nD: 28/100 ■■■□□□□□□□"]
     R324["[x] 324\nКанонический fixture discovery\nC: 45/100 ■■■■■□□□□□\nD: 38/100 ■■■■□□□□□□"]
@@ -72,7 +101,7 @@ flowchart TD
     T344 -. "нужен для честной\nполной проверки" .-> Keyboard
     R342 --> Keyboard
     R346 --> Keyboard
-    R314 -. "mouse Send остаётся отключён\nдо завершения" .-> Keyboard
+    R314 -. "production publication/invalidation\nmouse Send пока отключён" .-> P356
     Keyboard --> R323
     R323 --> R324
     X358 -. "до расширения\nfile ingress" .-> Ingress
@@ -83,18 +112,18 @@ flowchart TD
 Сплошные стрелки — текущие зависимости. Пунктирные — исторический либо
 не-критический путь.
 
-Карта зависимостей выше сохранена как историческая карта исходных задач и
-оценок. После миграции на `to-tickets` актуальное соответствие исходных номеров
-задач и локальных issue-файлов такое:
+Карта сохраняет исторический контекст исходных задач и оценок; статусы 314 и
+355 следует читать с указанными выше границами evidence. Актуальное
+соответствие исходных номеров задач и локальных issue-файлов:
 
 | Ticket | Scratch issue | Статус |
 |---:|---|---|
 | **283** | [283 — supported live ingress](.scratch/codex-redaction-gate/issues/283-prove-supported-live-ingress-boundary.md) | `blocked` |
 | **286** | [286 — exclude selected files](.scratch/codex-redaction-gate/issues/286-exclude-selected-files-from-cloud-context.md) | `blocked` |
-| **314** | [314 — first pointer Send](.scratch/codex-redaction-gate/issues/314-prove-first-pointer-send-before-uia.md) | `ready-for-agent` |
-| **348** | [348 — protected Send core](.scratch/codex-redaction-gate/issues/348-extract-protected-send-core.md) | `ready-for-agent` |
+| **314** | [314 — first pointer Send](.scratch/codex-redaction-gate/issues/314-prove-first-pointer-send-before-uia.md) | `done (scoped)`, integrated into master |
+| **348** | [348 — protected Send core](.scratch/codex-redaction-gate/issues/348-extract-protected-send-core.md) | `ready-for-agent`; финальное закрытие после 358 |
 | **354** | [354 — ProtectedSendTransaction](.scratch/codex-redaction-gate/issues/354-introduce-protected-send-transaction.md) | `done` |
-| **355** | [355 — reference production composer](.scratch/codex-redaction-gate/issues/355-route-reference-acceptance-through-production-composer.md) | `done` |
+| **355** | [355 — reference production composer](.scratch/codex-redaction-gate/issues/355-route-reference-acceptance-through-production-composer.md) | `done`; fresh interactive recheck blocked by fixture focus |
 | **356** | [356 — production keyboard Send](.scratch/codex-redaction-gate/issues/356-migrate-production-keyboard-send.md) | `ready-for-agent` |
 | **357** | [357 — installer/release evidence gate](.scratch/codex-redaction-gate/issues/357-evidence-gate-installer-and-release.md) | `blocked` |
 | **358** | [358 — legacy contraction and 348 reclose](.scratch/codex-redaction-gate/issues/358-contract-legacy-orchestration-and-reclose-348.md) | `blocked` |
@@ -105,9 +134,8 @@ flowchart TD
 | Метка | Значение |
 |---|---|
 | `[x]` | Работа принята на указанном в ticket уровне evidence. |
-| `[>]` | Единственный текущий критический ticket. |
+| `[>]` | Следующий ticket критического пути; метка не означает начатую реализацию. |
 | `[ ]` | Следующая работа после выполненных зависимостей. |
-| `[~]` | Отдельная ветка, не блокирующая основной путь. |
 | `[!]` | Внешняя блокировка: разработка не устранит её без подтверждённой точки интеграции. |
 
 Закрытая задача не равна production claim: уровень evidence в соответствующем
@@ -155,13 +183,16 @@ Sandbox/receipt-инфраструктура и несколько незави�
 | 3 | **358** `[ ]` | Удалить legacy owner после миграции и доказать отсутствие второй active side-effect машины. | 88 | 90 | `P50: 5–10`, `P90: 12–20` |
 | 4 | **348** `[ ]` | Повторно закрыть umbrella-ticket ссылками на полный набор evidence. | 60 | 72 | `P50: 2–4`, `P90: 5–8` |
 
-Отдельные ветки не начинаются раньше своих зависимостей:
+Дополнительные направления не начинаются раньше своих зависимостей:
 
 | Ticket | Условие старта | C | D | Бюджет лимит-циклов |
 |---|---|---:|---:|---|
-| **314** `[~]` | После устойчивой keyboard release-приёмки; mouse Send не включать в capability claim раньше. | 93 | 96 | `P50: 8–16`, `P90: 16–32` |
 | **283** `[!]` | Нужна подтверждённая supported pre-cloud точка ingress в Codex/ChatGPT Desktop. | 100 | 100 | Не прогнозируется до нахождения точки интеграции |
 | **286** `[!]` | Только после 283: enforcement для `.env` и произвольных файлов. | 78 | 75 | `P50: 4–8`, `P90: 10–16` после 283 |
+
+314 больше не является открытой отдельной задачей. Production pointer follow-up
+остаётся в migration contract 356 и не входит в scoped closure 314. Mouse Send
+нельзя включать в capability claim на основании одного reference proof.
 
 До завершения 356 production keyboard protection не получает новый claim
 `live_verified`; status и installer должны оставаться честными относительно
