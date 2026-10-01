@@ -3,7 +3,7 @@
 ## Scope and state ownership
 
 This document records the agreed design for ticket 355 before implementation.
-It supplements `tickets.md`; when a requirement conflicts, the ticket's
+It supplements the scratch issue for ticket 355; when a requirement conflicts, the ticket's
 fail-closed and evidence requirements prevail.
 
 `ProtectedSendTransaction` is the sole state owner for one admitted reference

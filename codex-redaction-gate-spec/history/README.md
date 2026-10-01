@@ -11,4 +11,5 @@ material, not the current implementation frontier.
 - [`research/`](research/) — early solution and interception research.
 
 For current work, begin with [`../../DEVELOPMENT_ROADMAP.md`](../../DEVELOPMENT_ROADMAP.md)
-and [`../../tickets.md`](../../tickets.md).
+and the issue files under
+[`../../.scratch/codex-redaction-gate/issues/`](../../.scratch/codex-redaction-gate/issues/).

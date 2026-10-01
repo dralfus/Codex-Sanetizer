@@ -1,9 +1,9 @@
 # Ближайший план разработки Code Sanitizer
 
-**Актуально на:** 2026-09-16
+**Актуально на:** 2026-09-21
 **Назначение:** краткая карта работ до устойчивой keyboard prompt-защиты и
-последующего расширения на файлы. Подробная история, evidence и отчёты о review
-хранятся в `tickets.md`.
+последующего расширения на файлы. Актуальные тела задач находятся в
+`.scratch/codex-redaction-gate/issues/`.
 
 ## Карта зависимостей
 
@@ -83,6 +83,23 @@ flowchart TD
 Сплошные стрелки — текущие зависимости. Пунктирные — исторический либо
 не-критический путь.
 
+Карта зависимостей выше сохранена как историческая карта исходных задач и
+оценок. После миграции на `to-tickets` актуальное соответствие исходных номеров
+задач и локальных issue-файлов такое:
+
+| Ticket | Scratch issue | Статус |
+|---:|---|---|
+| **283** | [283 — supported live ingress](.scratch/codex-redaction-gate/issues/283-prove-supported-live-ingress-boundary.md) | `blocked` |
+| **286** | [286 — exclude selected files](.scratch/codex-redaction-gate/issues/286-exclude-selected-files-from-cloud-context.md) | `blocked` |
+| **314** | [314 — first pointer Send](.scratch/codex-redaction-gate/issues/314-prove-first-pointer-send-before-uia.md) | `ready-for-agent` |
+| **348** | [348 — protected Send core](.scratch/codex-redaction-gate/issues/348-extract-protected-send-core.md) | `ready-for-agent` |
+| **354** | [354 — ProtectedSendTransaction](.scratch/codex-redaction-gate/issues/354-introduce-protected-send-transaction.md) | `done` |
+| **355** | [355 — reference production composer](.scratch/codex-redaction-gate/issues/355-route-reference-acceptance-through-production-composer.md) | `done` |
+| **356** | [356 — production keyboard Send](.scratch/codex-redaction-gate/issues/356-migrate-production-keyboard-send.md) | `ready-for-agent` |
+| **357** | [357 — installer/release evidence gate](.scratch/codex-redaction-gate/issues/357-evidence-gate-installer-and-release.md) | `blocked` |
+| **358** | [358 — legacy contraction and 348 reclose](.scratch/codex-redaction-gate/issues/358-contract-legacy-orchestration-and-reclose-348.md) | `blocked` |
+| **362** | [362 — structural path suffixes](.scratch/codex-redaction-gate/issues/362-preserve-structural-path-suffixes.md) | `ready-for-agent` |
+
 ## Как читать план
 
 | Метка | Значение |
@@ -93,8 +110,9 @@ flowchart TD
 | `[~]` | Отдельная ветка, не блокирующая основной путь. |
 | `[!]` | Внешняя блокировка: разработка не устранит её без подтверждённой точки интеграции. |
 
-Закрытая задача не равна production claim: уровень evidence в `tickets.md`
-определяет, доказан ли deterministic, reference или installed/live результат.
+Закрытая задача не равна production claim: уровень evidence в соответствующем
+issue-файле определяет, доказан ли deterministic, reference или installed/live
+результат.
 
 ## Сложность и затраченная мощность
 

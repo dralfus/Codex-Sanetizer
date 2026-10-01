@@ -78,4 +78,4 @@ non-interactive receipt `1974/1974` и current-build local interactive
 release-matrix receipt `1/1`. Исторический Sandbox defect не является
 completion requirement для одобренного local interactive channel. Авторитетный
 статус и exact identities находятся в `TICKET_355_CHECKPOINT.md` и
-`tickets.md`.
+в scratch issue 355.

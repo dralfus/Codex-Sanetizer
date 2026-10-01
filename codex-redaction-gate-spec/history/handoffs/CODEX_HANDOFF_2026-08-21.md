@@ -30,7 +30,7 @@ remaining deterministic setup/recovery proof is complete.
 
 ## Immediate next task
 
-Implement **ticket 349** from `tickets.md`: the deterministic setup/recovery
+Implement **ticket 349** from `ARCHIVE_TICKETS.md`: the deterministic setup/recovery
 workflow race matrix.
 
 Required slices, in order:

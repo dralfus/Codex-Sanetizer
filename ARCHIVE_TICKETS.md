@@ -1,8 +1,10 @@
 # Archived tickets: Codex Redaction Gate
 
 This file preserves every closed ticket and its historical evidence. The
-authoritative active backlog is [tickets.md](tickets.md); the user-facing
-execution sequence is [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md).
+authoritative active backlog is the local issue set under
+[`.scratch/codex-redaction-gate/issues/`](.scratch/codex-redaction-gate/issues/);
+the user-facing execution sequence is
+[DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md).
 
 ## 273. Publish atomic resident protection snapshots
 

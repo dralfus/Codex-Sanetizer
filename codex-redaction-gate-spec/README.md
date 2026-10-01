@@ -4,8 +4,8 @@
 
 - [`../DEVELOPMENT_ROADMAP.md`](../DEVELOPMENT_ROADMAP.md) — user-facing
   development sequence and current frontier.
-- [`../tickets.md`](../tickets.md) — authoritative active/reopened backlog for
-  agent work.
+- [`../.scratch/codex-redaction-gate/issues/`](../.scratch/codex-redaction-gate/issues/)
+  — authoritative active/reopened backlog, one issue file per ticket.
 - [`SPEC.md`](SPEC.md), [`REQUIREMENTS.md`](REQUIREMENTS.md),
   [`ARCHITECTURE.md`](ARCHITECTURE.md), [`THREAT_MODEL.md`](THREAT_MODEL.md),
   and [`GLOSSARY.md`](GLOSSARY.md) — product constraints and vocabulary.

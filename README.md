@@ -22,7 +22,7 @@ src/CodexRedactionGate.Tray/     WinExe tray entrypoint
 scripts/                         Release, install, uninstall, and installer build helpers
 packaging/windows/               Inno Setup manifest
 codex-redaction-gate-spec/       Product specs, architecture, threat model, ADRs, and spike notes
-tickets.md                       Local implementation tracker
+.scratch/codex-redaction-gate/   Local implementation tracker (one issue per file)
 ```
 
 ## Requirements
@@ -228,7 +228,7 @@ If the status is `not_configured`, `binding_unknown`, `surface_unverified`, or `
 
 ### ChatGPT Desktop Release Gate
 
-Use the current release-evidence gates in [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) and [tickets.md](tickets.md) when validating an installed build. The previous ticket-308 checklist is preserved in the historical release-candidate archive.
+Use the current release-evidence gates in [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) and the local issue files under `.scratch/codex-redaction-gate/issues/` when validating an installed build. The previous ticket-308 checklist is preserved in the historical release-candidate archive.
 
 For ChatGPT Desktop, a verified binding is not the final release claim. The
 resident app reports `protected` only after the current build and pinned
@@ -375,7 +375,7 @@ Start with:
 - `codex-redaction-gate-spec/ARCHITECTURE.md`
 - `codex-redaction-gate-spec/VERIFIED_DEVELOPMENT_MODEL.md`
 - `DEVELOPMENT_ROADMAP.md`
-- `tickets.md` — active/reopened implementation backlog.
+- `.scratch/codex-redaction-gate/issues/` — active/reopened implementation backlog, one file per ticket.
 - `codex-redaction-gate-spec/WINDOWS_SANDBOX_TEST_EXECUTION.md` — agent-run
   UI-sensitive tests without taking focus from the main desktop.
 - `codex-redaction-gate-spec/SANITIZER_DESIGN.md`
