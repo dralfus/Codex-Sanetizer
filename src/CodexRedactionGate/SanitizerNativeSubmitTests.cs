@@ -34,7 +34,7 @@ public partial class SanitizerTests
         return TestSurfaceFactory.CreateNativeSubmitDiscovery(profileId);
     }
 
-    protected static OsInteractionResult CreateSubmittedResult(string profileId)
+    internal static OsInteractionResult CreateSubmittedResult(string profileId)
     {
         return new OsInteractionResult(
             OsInteractionStatusIds.Submitted,

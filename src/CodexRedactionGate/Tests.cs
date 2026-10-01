@@ -5057,7 +5057,7 @@ public partial class SanitizerTests
         }
     }
 
-    private static OsInteractionOrchestrator CreateProductFlowOrchestrator(
+    internal static OsInteractionOrchestrator CreateProductFlowOrchestrator(
         ProductFlowTextSurface surface,
         Func<ConfirmationUiModel, ConfirmationDecision> decisionFactory,
         IActiveTextSurfaceDiscovery? discovery = null)
@@ -5077,7 +5077,7 @@ public partial class SanitizerTests
         return File.ReadAllText(Path.Combine(projectDirectory, fileName));
     }
 
-    private sealed class ProductFlowTextSurface :
+    internal sealed class ProductFlowTextSurface :
         IActiveTextSurfaceDiscovery,
         ITextSurfaceReader,
         ITextSurfaceWriter,
@@ -5294,8 +5294,8 @@ public partial class SanitizerTests
         var current = Directory.GetCurrentDirectory();
         while (!string.IsNullOrWhiteSpace(current))
         {
-            if (File.Exists(Path.Combine(current, "tickets.md"))
-                && Directory.Exists(Path.Combine(current, "src", "CodexRedactionGate")))
+            if (File.Exists(Path.Combine(current, "src", "CodexRedactionGate", "CodexRedactionGate.csproj"))
+                && Directory.Exists(Path.Combine(current, "packaging", "windows")))
             {
                 return current;
             }

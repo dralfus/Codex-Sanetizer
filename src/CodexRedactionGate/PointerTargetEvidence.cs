@@ -50,11 +50,21 @@ internal sealed class PointerTargetEvidenceStore
         PointerTargetVerdict Verdict,
         long EvidenceGeneration);
 
-    private readonly ConcurrentDictionary<string, Entry> _entries = new(StringComparer.Ordinal);
+    private readonly record struct ControlKey(uint ProcessId, int X, int Y, string Button)
+    {
+        internal static ControlKey FromGesture(NativePointerGesture gesture) =>
+            new(gesture.TargetProcessId, gesture.X, gesture.Y, gesture.Button.ToUpperInvariant());
+    }
+
+    // A verified reference point is evidence for that point only. It cannot
+    // authorize another control in the same composer/root window. Production
+    // control geometry and layout invalidation remain part of ticket 356.
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<ControlKey, Entry>> _entries = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _residentWindows = new(StringComparer.Ordinal);
 
     public void Publish(
         NativeSubmitTargetIdentity target,
-        uint targetProcessId,
+        NativePointerGesture verifiedGesture,
         PointerTargetVerdict verdict,
         long generation)
     {
@@ -63,15 +73,28 @@ internal sealed class PointerTargetEvidenceStore
             throw new ArgumentNullException(nameof(target));
         }
 
-        _entries[PointerTargetEvidenceKey.FromHandle(target.WindowHandle)] =
-            new Entry(target, targetProcessId, verdict, generation);
+        if (verifiedGesture.TargetWindow == IntPtr.Zero || verifiedGesture.TargetProcessId == 0)
+        {
+            return;
+        }
+
+        var windowKey = PointerTargetEvidenceKey.FromHandle(verifiedGesture.TargetWindow);
+        _residentWindows[windowKey] = 0;
+        var controls = _entries.GetOrAdd(windowKey,
+            _ => new ConcurrentDictionary<ControlKey, Entry>());
+        controls[ControlKey.FromGesture(verifiedGesture)] =
+            new Entry(target, verifiedGesture.TargetProcessId, verdict, generation);
     }
 
-    public bool TryResolve(IntPtr capturedTargetWindow, out Entry entry) =>
-        _entries.TryGetValue(PointerTargetEvidenceKey.FromHandle(capturedTargetWindow), out entry!);
+    public bool HasWindowEvidence(IntPtr window) =>
+        _residentWindows.ContainsKey(PointerTargetEvidenceKey.FromHandle(window));
 
-    public bool TryResolve(string? windowHandle, out Entry entry) =>
-        _entries.TryGetValue(PointerTargetEvidenceKey.FromHandle(windowHandle), out entry!);
+    public bool TryResolve(NativePointerGesture gesture, out Entry entry)
+    {
+        entry = null!;
+        return _entries.TryGetValue(PointerTargetEvidenceKey.FromHandle(gesture.TargetWindow), out var controls)
+            && controls.TryGetValue(ControlKey.FromGesture(gesture), out entry!);
+    }
 
     public void Invalidate(IntPtr windowHandle) =>
         _entries.TryRemove(PointerTargetEvidenceKey.FromHandle(windowHandle), out _);
@@ -86,8 +109,8 @@ internal sealed class PointerTargetEvidenceStore
 /// One bounded pointer-target decision for the low-level callback. Only resident
 /// snapshot state is consulted: the store and the selected profile carried by the
 /// current snapshot. No live window, process, or UI Automation lookup happens here,
-/// and a selected-client Send without fresh evidence fails closed as
-/// trace_unavailable. Evidence whose snapshot generation no longer matches the
+/// and a previously identified selected-client Send with stale evidence fails closed as
+/// trace_unavailable. Unknown points pass through. Evidence whose snapshot generation no longer matches the
 /// current resident snapshot is stale and also fails closed.
 /// </summary>
 internal sealed record ResidentPointerTargetDecision(
@@ -102,30 +125,22 @@ internal sealed record ResidentPointerTargetDecision(
         NativePointerGesture gesture,
         ProtectionSnapshot snapshot)
     {
-        var selectedProfileId = snapshot.State.ConfiguredProfileId;
-        var selected = !string.IsNullOrWhiteSpace(selectedProfileId)
-            && string.Equals(
-                snapshot.State.LastProfileId,
-                selectedProfileId,
-                StringComparison.Ordinal);
-
-        if (store.TryResolve(gesture.TargetWindow, out var entry))
+        if (store.TryResolve(gesture, out var entry))
         {
-            var fresh = entry.Target.SnapshotGeneration == snapshot.Generation
-                && entry.EvidenceGeneration <= snapshot.Generation;
-            // The entry was published for one exact (window, process) pair; a
-            // gesture from a different process is not the same target.
-            var sameOwner = entry.TargetProcessId != 0
-                && gesture.TargetProcessId != 0
-                && entry.TargetProcessId == gesture.TargetProcessId;
-            if (!fresh || !sameOwner)
+            var selected = snapshot.RuntimeSet is { } runtimes
+                ? System.Linq.Enumerable.Any(runtimes.Runtimes, runtime =>
+                    string.Equals(runtime.Profile.ProfileId, entry.Target.ProfileId, StringComparison.Ordinal))
+                : string.Equals(snapshot.State.ConfiguredProfileId, entry.Target.ProfileId, StringComparison.Ordinal);
+            if (!selected || entry.Verdict == PointerTargetVerdict.Unrelated)
             {
-                // SPEC: uncertainty about target validity blocks the submission
-                // with a raw-free status — a stale or owner-mismatched entry for
-                // a selected-client gesture fails closed as trace_unavailable.
-                return selected
-                    ? Stale(selectedProfileId!, gesture.TargetWindow, snapshot.Generation)
-                    : Unrelated(snapshot, gesture);
+                return Unrelated(snapshot, gesture);
+            }
+
+            var fresh = entry.Target.SnapshotGeneration == snapshot.Generation
+                && entry.EvidenceGeneration == snapshot.Generation;
+            if (!fresh)
+            {
+                return Stale(entry.Target.ProfileId, gesture.TargetWindow, snapshot.Generation);
             }
 
             return entry.Verdict == PointerTargetVerdict.SelectedSend

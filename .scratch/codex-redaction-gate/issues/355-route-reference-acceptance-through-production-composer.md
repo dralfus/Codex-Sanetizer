@@ -24,6 +24,8 @@
 
 **Current evidence:** Independent final review `SPEC PASS` / `CODE_QUALITY PASS`, local non-interactive receipt `1974/1974`, and current-build local interactive release matrix `1/1`. The historical Sandbox infrastructure blocker is not required for this approved local evidence channel.
 
+**Recheck (2026-10-01):** Accepted implementation is present in master. Source review confirms transaction/session routing through production native composer access, observed access/evidence publication, the two required unavailable-access negative controls, and reference-only target exclusion. Current full non-interactive suite: 1997/1997, exit 0. Fresh interactive revalidation is **BLOCKED BY FIXTURE FOREGROUND READINESS**: both the matrix and unavailable-access test stop before Send admission; the existing startup diagnostic observes `set_foreground_request_succeeded=false`, foreground/focused target mismatch, and successful cleanup. Receipts: `artifacts/review-355-20261001/355.trx` and `artifacts/review-355-20261001/focus/355-focus.trx`. This does not revoke the historical acceptance or establish a transaction defect, and is not current interactive GREEN. Repeat the existing release matrix from an active foreground-capable Windows desktop; no acceptance checks were weakened.
+
 - [x] Direct fixture writes are removed from acceptance evidence.
 - [x] The production access adapter is used through the session contract.
 - [x] Physical exclusion from OpenAI Desktop targets is preserved.
