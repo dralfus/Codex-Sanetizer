@@ -58,3 +58,5 @@ Before mutation, fetched/pruned origin and created/verified a complete local Git
 - `backup/blocked-history-master`: historical pre-clean-publish repository snapshot, with 72 commits absent from current master ancestry. Archived in full; intentionally not merged into the clean-publish history.
 
 Remote removal is performed only after the corrective master is published, using an atomic deletion push with an expected-tip lease for each audited branch. Final branch inventory is checked against origin after deletion.
+
+Completed: corrective commit `70e11a4cc639119c63755c6a1de54c9df6d9e2f9` published; all 11 audited remote branches deleted atomically and the merged local `codex/ticket-355-astra-design` branch deleted with `branch -d`. Fresh fetch/prune and server `ls-remote --heads` confirm only `master`. Local branches also contain only `master`; `origin/HEAD -> origin/master` is the usual default-branch alias. Worktree was clean after publication/deletion.
